@@ -719,6 +719,42 @@ app.get('/api/schema', wrap(async (req, res) => {
   res.json({ database: currentDb().database, tables });
 }));
 
+/* ---- read-only SQL console ----
+   Writes are deliberately refused here: the ONLY write path in this tool is
+   executeApprovedChange(). Use a rule + approval for changes.               */
+const SQL_CONSOLE_MAX_ROWS = 200;
+app.post('/api/sql', wrap(async (req, res) => {
+  let sql = String(req.body?.sql || '').trim();
+  if (!sql) throw httpError(400, 'Empty query');
+  sql = sql.replace(/;\s*$/, '');
+  if (sql.includes(';')) throw httpError(400, 'Only a single statement is allowed');
+  const kw = (sql.match(/^[\s(]*([a-zA-Z]+)/) || [])[1]?.toUpperCase();
+  if (!['SELECT', 'SHOW', 'DESCRIBE', 'DESC', 'EXPLAIN', 'WITH'].includes(kw)) {
+    throw httpError(400, `This console is read-only (SELECT / SHOW / DESCRIBE / EXPLAIN): "${kw || '?'}" is not allowed. Writes go through rules and per-row approval.`);
+  }
+  const pool = await getPool();
+  const started = Date.now();
+  let rows, fields;
+  if (kw === 'SELECT' || kw === 'WITH') {
+    // wrap to enforce the row cap inside MySQL; fall back to the raw query when
+    // the wrapper is not applicable (e.g. locking clauses)
+    try {
+      [rows, fields] = await pool.query({ sql: `SELECT * FROM (${sql}) AS _console_q LIMIT ${SQL_CONSOLE_MAX_ROWS + 1}`, timeout: 30000 });
+    } catch {
+      [rows, fields] = await pool.query({ sql, timeout: 30000 });
+    }
+  } else {
+    [rows, fields] = await pool.query({ sql, timeout: 30000 });
+  }
+  const ms = Date.now() - started;
+  const truncated = rows.length > SQL_CONSOLE_MAX_ROWS;
+  const out = rows.slice(0, SQL_CONSOLE_MAX_ROWS).map((r) =>
+    Object.fromEntries(Object.entries(r).map(([k, v]) => [k, Buffer.isBuffer(v) ? '0x' + v.toString('hex').slice(0, 400) : v]))
+  );
+  logEvent('info', `Console query (${ms}ms, ${out.length}${truncated ? '+' : ''} rows): ${sql.slice(0, 160)}`);
+  res.json({ columns: (fields || []).map((f) => f.name), rows: out, rowCount: out.length, truncated, ms });
+}));
+
 /* ---- schema graph: tables, columns, and relations for the visual map ---- */
 app.get('/api/schema/graph', wrap(async (req, res) => {
   const pool = await getPool();

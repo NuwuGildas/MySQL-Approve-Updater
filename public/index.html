@@ -194,6 +194,35 @@
     <div id="log"></div>
   </section>
 </main>
+<div id="sqlConsole">
+  <div id="sqlBar">
+    <b style="font-size:.78rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)">SQL console</b>
+    <span class="hint" style="margin:0">read-only: SELECT / SHOW / DESCRIBE / EXPLAIN · Ctrl+Enter runs · results capped at 200 rows</span>
+    <span class="spacer"></span>
+    <span class="hint" id="sqlMeta" style="margin:0"></span>
+    <button id="btnSqlToggle">Open</button>
+  </div>
+  <div class="body">
+    <div style="display:flex;flex-direction:column;gap:.5rem;min-height:0">
+      <textarea id="sqlInput" spellcheck="false" placeholder="SELECT id, page_url FROM jeuxcom_site WHERE maintext LIKE '%font-family%' LIMIT 20"></textarea>
+      <div style="display:flex;gap:.5rem;align-items:center">
+        <button id="btnSqlRun" class="primary">Run</button>
+        <select id="sqlHistory" style="max-width:320px"><option value="">history…</option></select>
+      </div>
+    </div>
+    <div id="sqlResults"><div class="empty" style="padding:.8rem">No query run yet.</div></div>
+  </div>
+</div>
+
+<dialog id="confirmModal">
+  <h2 id="confirmTitle" style="margin:0 0 .6rem;font-size:.85rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)"></h2>
+  <div id="confirmMsg"></div>
+  <div style="display:flex;gap:.5rem;margin-top:1rem;justify-content:flex-end">
+    <button id="btnConfirmCancel">Cancel</button>
+    <button id="btnConfirmOk" class="primary">Confirm</button>
+  </div>
+</dialog>
+
 <div id="toast"></div>
 
 <script>
@@ -217,6 +246,32 @@ function toast(msg) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => t.style.display = 'none', 4500);
 }
+
+/* ---------- confirm modal (replaces window.confirm) ---------- */
+let confirmResolve = null;
+function confirmDialog({ title = 'Please confirm', message = '', okLabel = 'Confirm', okClass = 'primary', cancelLabel = 'Cancel' } = {}) {
+  if (confirmResolve) { confirmResolve(false); confirmResolve = null; } // settle any dangling ask
+  return new Promise((resolve) => {
+    confirmResolve = resolve;
+    $('confirmTitle').textContent = title;
+    $('confirmMsg').innerHTML = message; // messages are app-authored; dynamic parts must be esc()-ed by callers
+    const ok = $('btnConfirmOk');
+    ok.textContent = okLabel;
+    ok.className = okClass;
+    $('btnConfirmCancel').textContent = cancelLabel;
+    $('confirmModal').showModal();
+    ok.focus();
+  });
+}
+function settleConfirm(v) {
+  const r = confirmResolve;
+  confirmResolve = null;
+  if ($('confirmModal').open) $('confirmModal').close();
+  if (r) r(v);
+}
+$('btnConfirmOk').addEventListener('click', () => settleConfirm(true));
+$('btnConfirmCancel').addEventListener('click', () => settleConfirm(false));
+$('confirmModal').addEventListener('close', () => settleConfirm(false)); // Esc or backdrop = cancel
 
 /* ---------- Transform editor ---------- */
 const PARAM_FIELDS = {
@@ -322,7 +377,12 @@ async function loadRules() {
           a.click();
           URL.revokeObjectURL(a.href);
         } else if (act === 'delete') {
-          if (confirm(`Delete rule "${r.name}"?`)) { await api(`/api/rules/${r.id}`, { method: 'DELETE' }); loadRules(); }
+          const ok = await confirmDialog({
+            title: 'Delete rule',
+            message: `Delete the rule <b>${esc(r.name)}</b>?<br>This only removes the rule definition; nothing in the database is touched.`,
+            okLabel: 'Delete rule', okClass: 'reject',
+          });
+          if (ok) { await api(`/api/rules/${r.id}`, { method: 'DELETE' }); loadRules(); }
         }
       } catch (err) { toast(err.message); }
       finally { if (act === 'preview') { e.target.disabled = false; e.target.textContent = 'Run preview'; } }
@@ -581,14 +641,16 @@ function updateToolbar() {
 
 /* One backup nag per session: confirm the first approval made without a downloaded backup */
 let backupWarnedFor = null;
-function confirmNoBackup(extra) {
+async function confirmNoBackup(extra) {
   const s = state.session;
   if (!s || s.backupDownloaded || backupWarnedFor === s.id) return true;
-  const ok = confirm(
-    `⚠ You have not downloaded a backup for this session.\n` +
-    `A restore script was auto-saved on the server (${s.backupFile || 'backups/'}), ` +
-    `but you have no local copy — use the "Backup .sql" button to get one.\n\n${extra}`
-  );
+  const ok = await confirmDialog({
+    title: 'No backup downloaded',
+    message: `A restore script was auto-saved on the server (<code>${esc(s.backupFile || 'backups/')}</code>), but you have no local copy.<br>` +
+      `Use the <b>Backup .sql</b> button in the queue toolbar to download one first.<br><br>${esc(extra)}`,
+    okLabel: 'Proceed without backup', okClass: 'warn',
+    cancelLabel: 'Go back',
+  });
   if (ok) backupWarnedFor = s.id;
   return ok;
 }
@@ -818,7 +880,8 @@ $('cardModal').addEventListener('close', () => { modalChangeId = null; });
 let deciding = false;
 async function decide(changeId, action) {
   if (deciding) return;
-  if (action === 'approve' && !confirmNoBackup('Approve this row anyway?')) return;
+  if (action === 'approve' && !(await confirmNoBackup('Approve this row anyway?'))) return;
+  if (deciding) return; // re-check: another decision may have started while the dialog was open
   deciding = true;
   try { await api('/api/session/decision', { method: 'POST', body: JSON.stringify({ changeId, action }) }); }
   catch (err) { toast(err.message); }
@@ -864,11 +927,17 @@ let batching = false;
 async function batch(action) {
   if (batching || !selected.size) return;
   const n = selected.size;
-  if (action === 'approve' && !confirmNoBackup(`Continue to the batch confirmation for ${n} row(s)?`)) return;
-  const msg = action === 'approve'
-    ? `Approve ${n} selected row(s)? Each row is written individually and still verified against its preview value — externally-modified rows are flagged stale, never overwritten.`
-    : `${action === 'reject' ? 'Reject' : 'Skip'} ${n} selected row(s)? Nothing will be written.`;
-  if (!confirm(msg)) return;
+  if (action === 'approve' && !(await confirmNoBackup(`Continue to the batch confirmation for ${n} row(s)?`))) return;
+  const verb = action === 'approve' ? 'Approve' : action === 'reject' ? 'Reject' : 'Skip';
+  const ok = await confirmDialog({
+    title: `${verb} selected rows`,
+    message: action === 'approve'
+      ? `You are about to approve <b>${n}</b> selected row(s).<br>Each row is written individually with its own guarded UPDATE, verified against its preview value; rows modified externally in the meantime are flagged stale and never overwritten.`
+      : `${verb} <b>${n}</b> selected row(s)?<br>Nothing will be written to the database.`,
+    okLabel: `${verb} ${n} row(s)`,
+    okClass: action === 'approve' ? 'approve' : action === 'reject' ? 'reject' : 'primary',
+  });
+  if (!ok) return;
   batching = true;
   try {
     const r = await api('/api/session/batch', { method: 'POST', body: JSON.stringify({ changeIds: [...selected], action }) });
@@ -926,7 +995,12 @@ async function loadConns() {
         } else if (act === 'edit') {
           fillConnForm(p);
         } else if (act === 'delete') {
-          if (confirm(`Delete connection "${p.name}"?`)) { await api(`/api/connections/${p.id}`, { method: 'DELETE' }); loadConns(); }
+          const ok = await confirmDialog({
+            title: 'Delete connection',
+            message: `Delete the connection profile <b>${esc(p.name)}</b>?<br>Its stored credentials are removed from connections.json.`,
+            okLabel: 'Delete connection', okClass: 'reject',
+          });
+          if (ok) { await api(`/api/connections/${p.id}`, { method: 'DELETE' }); loadConns(); }
         }
       } catch (err) { toast(err.message); }
       finally { if (act === 'test') { e.target.disabled = false; e.target.textContent = 'Test'; } }
@@ -1303,9 +1377,14 @@ $('btnCloseSchema').addEventListener('click', () => $('schemaModal').close());
 /* ---------- Session controls ---------- */
 $('btnPause').addEventListener('click', () => api('/api/session/pause', {method:'POST'}).catch((e)=>toast(e.message)));
 $('btnResume').addEventListener('click', () => api('/api/session/resume', {method:'POST'}).catch((e)=>toast(e.message)));
-$('btnAbort').addEventListener('click', () => {
-  if (confirm('Abort session? All remaining pending changes are discarded (nothing is written).'))
-    api('/api/session/abort', {method:'POST'}).catch((e)=>toast(e.message));
+$('btnAbort').addEventListener('click', async () => {
+  const pending = state.session?.counts?.pending ?? 0;
+  const ok = await confirmDialog({
+    title: 'Abort session',
+    message: `Abort the current session?<br><b>${pending}</b> pending change(s) will be discarded and <b>nothing</b> is written to the database. Rows you already approved stay committed.`,
+    okLabel: 'Abort session', okClass: 'warn',
+  });
+  if (ok) api('/api/session/abort', { method: 'POST' }).catch((e) => toast(e.message));
 });
 
 /* ---------- SSE ---------- */
@@ -1332,6 +1411,57 @@ function connectSSE() {
   });
   es.addEventListener('log', (e) => appendLog(JSON.parse(e.data)));
 }
+
+/* ---------- SQL console drawer ---------- */
+const SQL_HIST_KEY = 'mau-sql-history';
+const sqlHistLoad = () => { try { return JSON.parse(localStorage.getItem(SQL_HIST_KEY)) || []; } catch { return []; } };
+function sqlHistSave(q) {
+  localStorage.setItem(SQL_HIST_KEY, JSON.stringify([q, ...sqlHistLoad().filter((x) => x !== q)].slice(0, 20)));
+  renderSqlHistory();
+}
+function renderSqlHistory() {
+  $('sqlHistory').innerHTML = '<option value="">history…</option>' +
+    sqlHistLoad().map((q) => `<option value="${esc(q)}">${esc(q.length > 60 ? q.slice(0, 60) + '…' : q)}</option>`).join('');
+}
+$('sqlHistory').addEventListener('change', () => {
+  if ($('sqlHistory').value) { $('sqlInput').value = $('sqlHistory').value; $('sqlHistory').value = ''; $('sqlInput').focus(); }
+});
+
+function toggleSqlConsole() {
+  const open = $('sqlConsole').classList.toggle('open');
+  $('btnSqlToggle').textContent = open ? 'Close' : 'Open';
+  if (open) $('sqlInput').focus();
+}
+$('sqlBar').addEventListener('click', (e) => { if (e.target.tagName !== 'BUTTON') toggleSqlConsole(); });
+$('btnSqlToggle').addEventListener('click', toggleSqlConsole);
+
+async function runSql() {
+  const sql = $('sqlInput').value.trim();
+  if (!sql) return;
+  $('btnSqlRun').disabled = true;
+  $('sqlResults').innerHTML = '<div class="empty" style="padding:.8rem">Running…</div>';
+  $('sqlMeta').textContent = '';
+  try {
+    const r = await api('/api/sql', { method: 'POST', body: JSON.stringify({ sql }) });
+    sqlHistSave(sql);
+    $('sqlMeta').textContent = `${r.rowCount} row(s)${r.truncated ? ' (capped)' : ''} in ${r.ms} ms`;
+    if (!r.rows.length) { $('sqlResults').innerHTML = '<div class="empty" style="padding:.8rem">Query OK — 0 rows.</div>'; return; }
+    const cell = (v) => (v === null || v === undefined)
+      ? '<span class="nullv">NULL</span>'
+      : esc(String(v).length > 300 ? String(v).slice(0, 300) + '…' : String(v));
+    $('sqlResults').innerHTML = `<table><thead><tr>${r.columns.map((c) => `<th>${esc(c)}</th>`).join('')}</tr></thead>
+      <tbody>${r.rows.map((row) => `<tr>${r.columns.map((c) => `<td>${cell(row[c])}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+  } catch (e) {
+    $('sqlResults').innerHTML = `<div class="empty" style="padding:.8rem;color:var(--red)">${esc(e.message)}</div>`;
+  } finally {
+    $('btnSqlRun').disabled = false;
+  }
+}
+$('btnSqlRun').addEventListener('click', runSql);
+$('sqlInput').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); runSql(); }
+});
+renderSqlHistory();
 
 /* ---------- guided tour (intro.js) ---------- */
 function startTour() {

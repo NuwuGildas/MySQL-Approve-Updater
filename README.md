@@ -146,6 +146,12 @@ batch between rows.
    Abort discards all pending changes. If the server restarts mid-session, pending
    changes are simply gone; approved ones were already committed row-by-row.
 
+**SQL console**: the bottom drawer runs ad-hoc queries against the active
+connection. It is deliberately **read-only** (single statement; SELECT / SHOW /
+DESCRIBE / EXPLAIN only, results capped at 200 rows) so that the per-row approval
+flow remains the only write path. Ctrl+Enter runs; the last 20 queries are kept
+in browser history.
+
 ## Known limitations
 
 - **One session at a time.** Starting a new preview requires the previous session
