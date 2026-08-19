@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>MySQL Approve Updater</title>
 <link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="/vendor/introjs/introjs.min.css">
+<script src="/vendor/introjs/intro.min.js"></script>
 </head>
 <body>
 <header>
@@ -16,7 +18,8 @@
   <button id="btnPause">Pause</button>
   <button id="btnResume">Resume</button>
   <button id="btnAbort" class="warn">Abort</button>
-  <button id="btnConns" title="Manage database / SSH connection profiles">⚙ Connections</button>
+  <button id="btnConns" title="Manage database / SSH connection profiles">Connections</button>
+  <button id="btnTour" title="Guided tour of the interface">Tour</button>
   <a href="/api/audit.log" download><button>Download audit log</button></a>
 </header>
 
@@ -1330,6 +1333,42 @@ function connectSSE() {
   es.addEventListener('log', (e) => appendLog(JSON.parse(e.data)));
 }
 
+/* ---------- guided tour (intro.js) ---------- */
+function startTour() {
+  if (typeof introJs === 'undefined') { toast('Tour library not loaded: run npm install and restart the server'); return; }
+  localStorage.setItem('mau-tour-seen', '1');
+  const steps = [
+    { title: 'Welcome', intro: 'This tool runs <b>rule-based batch updates</b> on MySQL with one hard guarantee: <b>nothing is written without your explicit approval</b>.' },
+    { element: '#btnConns', title: 'Connections', intro: 'Manage <b>connection profiles</b>: database credentials plus an optional SSH tunnel. Test them and switch between them; switching is blocked while changes are pending.' },
+    { element: '#secRuleList > summary', title: 'Saved rules', intro: '<b>Run preview</b> fetches matching rows and computes proposed changes, in memory only. <b>SQL</b> exports the exact queries a rule generates. The rule with an active session is highlighted.' },
+    { element: '#secEditor > summary', title: 'Rule editor', intro: 'A rule is a <b>fetch</b> (table, WHERE as raw SQL, server-capped LIMIT) plus <b>transforms</b> applied in order: find/replace with regex and capture groups, trim, case, prefix/suffix, fixed value.' },
+    { element: '#btnSchemaMap', title: 'Schema tools', intro: '<b>Load schema</b> fills table and column autocomplete. <b>Schema map</b> opens a visual diagram: drag cards, follow relation lines, click a card for details, row counts and its CREATE TABLE.' },
+    { element: '#queueToolbar', title: 'Batch and backup', intro: 'Select cards for <b>batch approve / reject / skip</b>. Every preview auto-saves a <b>restore script</b> server-side. Download it here; you will be warned if you approve without a local copy.' },
+    { element: '#queue', title: 'Approval cards', intro: 'Each card shows a <b>before/after diff</b> of one row. <b>Approve</b> writes exactly that row (parameterized, verified, stale-guarded: externally modified rows are never overwritten). The Edit button hand-tunes the proposed value, the expand button opens a large view. Keys: <b>A / R / S</b>.' },
+    { element: '#dashPanel', title: 'Live progress', intro: 'Counts, progress bar and activity log update in real time. Every decision is also appended to <b>audit.log</b>.' },
+    { element: '#btnAbort', title: 'Session control', intro: '<b>Pause</b> blocks approvals server-side; <b>Abort</b> discards all pending changes (nothing written). The full audit trail can be downloaded from the header.' },
+    { title: 'All set', intro: 'Define a rule, then <b>Run preview</b>, then approve change by change (or in batches). Re-run this tour anytime with the <b>Tour</b> button.' },
+  ];
+  const t = introJs.tour ? introJs.tour() : introJs();
+  t.setOptions({
+    steps,
+    showProgress: true,
+    exitOnOverlayClick: true,
+    scrollToElement: true,
+    tooltipRenderAsHtml: true,
+    tooltipClass: 'mau-tour',
+    nextLabel: 'Next',
+    prevLabel: 'Back',
+    doneLabel: 'Done',
+  });
+  // targets can live inside inner scrollable panels intro.js cannot scroll itself
+  const ensureVisible = (el) => { try { el?.scrollIntoView({ block: 'nearest' }); } catch {} };
+  if (typeof t.onBeforeChange === 'function') t.onBeforeChange(ensureVisible);
+  else if (typeof t.onbeforechange === 'function') t.onbeforechange(ensureVisible);
+  t.start();
+}
+$('btnTour').addEventListener('click', startTour);
+
 /* ---------- init ---------- */
 (async function init() {
   try {
@@ -1345,6 +1384,7 @@ function connectSSE() {
   await loadRules().catch((e) => toast(e.message));
   renderQueue(); renderDashboard();
   connectSSE();
+  if (!localStorage.getItem('mau-tour-seen')) setTimeout(startTour, 700); // first visit: offer the tour
 })();
 </script>
 </body>

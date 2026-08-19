@@ -20,6 +20,11 @@ npm start                 # or: npm run dev (auto-restart on file changes)
 Open <http://localhost:3000>. The server binds to **127.0.0.1 only** — there is no
 login, so do not expose the port.
 
+On first visit a **guided tour** (intro.js) walks through the interface; re-run it
+anytime with the **❓ Tour** button in the header. Note: intro.js is AGPL-3.0 /
+commercially dual-licensed — fine for internal use, but check the license before
+distributing this tool.
+
 ### Connection profiles
 
 Connections are managed in the UI: **⚙ Connections** in the header opens a modal

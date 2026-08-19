@@ -113,6 +113,22 @@ dialog::backdrop { background: rgba(0, 0, 0, .55); }
 #cardModal { width: min(1200px, 96vw); max-height: 92vh; }
 #cardModal .card { margin: 0; }
 #cardModal .diff { max-height: 64vh; }
+/* intro.js tour — themed */
+.mau-tour.introjs-tooltip { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 10px; max-width: 340px; }
+.mau-tour .introjs-tooltip-title { color: var(--text); font-size: 1rem; }
+.mau-tour .introjs-tooltiptext { color: var(--text); font-size: .85rem; }
+.mau-tour .introjs-tooltiptext b { color: var(--accent); }
+.mau-tour .introjs-button { background: var(--panel2); color: var(--text); border: 1px solid var(--border); text-shadow: none; border-radius: 6px; }
+.mau-tour .introjs-button:hover, .mau-tour .introjs-button:focus { background: var(--panel2); color: var(--text); border-color: var(--accent); box-shadow: none; }
+.mau-tour .introjs-progress { background: var(--panel2); }
+.mau-tour .introjs-progressbar { background: var(--accent); }
+.mau-tour .introjs-skipbutton { color: var(--muted); }
+.mau-tour .introjs-arrow.top, .mau-tour .introjs-arrow.top-middle, .mau-tour .introjs-arrow.top-right { border-bottom-color: var(--panel); }
+.mau-tour .introjs-arrow.bottom, .mau-tour .introjs-arrow.bottom-middle, .mau-tour .introjs-arrow.bottom-right { border-top-color: var(--panel); }
+.mau-tour .introjs-arrow.left, .mau-tour .introjs-arrow.left-bottom { border-right-color: var(--panel); }
+.mau-tour .introjs-arrow.right, .mau-tour .introjs-arrow.right-bottom { border-left-color: var(--panel); }
+.introjs-helperLayer { box-shadow: rgba(77, 163, 255, .7) 0 0 1px 2px, rgba(0, 0, 0, .6) 0 0 0 5000px !important; border-radius: 8px; }
+
 /* schema map */
 #schemaModal { width: 97vw; max-height: 95vh; }
 #schemaCanvas { height: 80vh; background: #0b0f13; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; cursor: grab; user-select: none; }
