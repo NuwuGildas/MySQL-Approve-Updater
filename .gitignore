@@ -1,0 +1,7 @@
+/node_modules
+/backups
+.env
+audit.log
+connections.json
+rules.json
+.idea/

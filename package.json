@@ -1,0 +1,20 @@
+{
+  "name": "mysql-approve-updater",
+  "version": "1.0.0",
+  "description": "Rule-based MySQL batch updates with one-by-one human approval in a web UI",
+  "private": true,
+  "type": "commonjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "mysql2": "^3.11.5",
+    "ssh2": "^1.16.0"
+  }
+}
