@@ -118,13 +118,64 @@ main { margin-bottom: 46px; } /* keep content clear of the collapsed console bar
 #sqlConsole { position: fixed; left: 0; right: 0; bottom: 0; z-index: 15; background: var(--panel); border-top: 1px solid var(--border); box-shadow: 0 -6px 24px rgba(0, 0, 0, .35); }
 #sqlBar { display: flex; gap: .7rem; align-items: center; padding: .38rem 1.2rem; cursor: pointer; user-select: none; flex-wrap: wrap; }
 #sqlConsole .body { display: none; }
-#sqlConsole.open .body { display: grid; grid-template-columns: minmax(300px, 34%) 1fr; gap: .8rem; height: 42vh; padding: 0 1.2rem .9rem; }
+/* minmax(0, 1fr): a bare 1fr track's min-width is its CONTENT, so a wide
+   result table would blow the pane (and the page) open instead of scrolling */
+#sqlConsole.open .body { display: grid; grid-template-columns: var(--sql-left, minmax(300px, 34%)) 8px minmax(0, 1fr); gap: 0 .3rem; height: var(--sql-h, 42vh); padding: 0 1.2rem .9rem; }
+#sqlResize { display: none; height: 5px; cursor: ns-resize; touch-action: none; }
+#sqlConsole.open #sqlResize { display: block; }
+#sqlResize:hover { background: var(--accent); }
+#sqlSplit { cursor: col-resize; touch-action: none; border-left: 2px solid var(--border); margin: 0 3px; }
+#sqlSplit:hover { border-color: var(--accent); }
 #sqlInput { font-family: ui-monospace, Consolas, monospace; font-size: .82rem; flex: 1; min-height: 0; resize: none; }
-#sqlResults { overflow: auto; background: #0b0f13; border: 1px solid var(--border); border-radius: 8px; }
-#sqlResults table { border-collapse: collapse; font-family: ui-monospace, Consolas, monospace; font-size: .75rem; min-width: 100%; }
-#sqlResults th { position: sticky; top: 0; background: var(--panel2); color: var(--accent); text-align: left; padding: .3rem .55rem; border-bottom: 1px solid var(--border); white-space: nowrap; }
-#sqlResults td { padding: .25rem .55rem; border-bottom: 1px solid rgba(255,255,255,.05); vertical-align: top; max-width: 420px; overflow-wrap: anywhere; }
+#sqlResultsWrap { position: relative; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
+/* Tabulator owns all scrolling inside the pane (both axes) */
+#sqlResults { flex: 1; min-height: 0; overflow: hidden; background: #0b0f13; border: 1px solid var(--border); border-radius: 8px; }
+/* floating pagination pill over the bottom of the results pane — must beat
+   Tabulator's internal z-indexes (header uses ~10) */
+#sqlPager { position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%); z-index: 40;
+  display: flex; gap: .5rem; align-items: center; padding: .28rem .7rem; background: var(--panel);
+  border: 1px solid var(--border); border-radius: 99px; box-shadow: 0 4px 18px rgba(0, 0, 0, .45); white-space: nowrap; }
+#sqlPager button { padding: .1rem .6rem; font-size: .75rem; }
+#sqlPager[hidden] { display: none; } /* the id-level display:flex must not defeat the hidden attribute */
 #sqlResults .nullv { color: var(--muted); font-style: italic; }
+/* Tabulator, restyled to the app palette.
+   NOTE: Tabulator is instantiated ON #sqlResults, so #sqlResults IS the
+   .tabulator root element — selectors must not use ".tabulator" as an
+   intermediate descendant. */
+#sqlResults.tabulator { background: #0b0f13; border: 1px solid var(--border); font-family: ui-monospace, Consolas, monospace; font-size: .78rem; }
+#sqlResults .tabulator-header { background: var(--panel2); border-bottom: 1px solid var(--border); color: var(--accent); }
+#sqlResults .tabulator-header .tabulator-col { background: var(--panel2); border-right: 1px solid var(--border); }
+#sqlResults .tabulator-header .tabulator-col .tabulator-col-content { padding: .35rem .55rem; }
+#sqlResults .tabulator-col-title { color: var(--accent); font-weight: 600; }
+#sqlResults .tabulator-header .tabulator-col.tabulator-sortable.tabulator-col-sorter-element:hover { background: #26303d; }
+#sqlResults .tabulator-col-sorter { color: var(--muted); }
+#sqlResults .tabulator-tableholder { background: transparent; }
+#sqlResults .tabulator-table { background: transparent; color: var(--text); }
+#sqlResults .tabulator-row { background: transparent; border-bottom: 1px solid rgba(255,255,255,.05); }
+#sqlResults .tabulator-row.tabulator-row-even { background: rgba(255,255,255,.025); }
+#sqlResults .tabulator-row:hover { background: #1c2530; }
+#sqlResults .tabulator-row .tabulator-cell { border-right: 1px solid rgba(255,255,255,.04); padding: .3rem .55rem; }
+#sqlResults .tabulator-placeholder { background: transparent; color: var(--muted); }
+
+/* export preview modal */
+#exportModal { width: min(1050px, 96vw); }
+#exportModal #sqlExportNote { color: var(--muted); }
+#expSqlOpts { display: flex; gap: .8rem; align-items: end; margin-bottom: .6rem; flex-wrap: wrap; }
+#expSqlOpts[hidden] { display: none; } /* keep the hidden attribute effective despite display:flex */
+#exportPreview { background: #0b0f13; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+#exportPreview .CodeMirror { height: 58vh; background: transparent; font-family: ui-monospace, Consolas, monospace; font-size: .78rem; }
+#exportPreview pre { margin: 0; padding: .7rem .8rem; max-height: 58vh; overflow: auto; font-size: .78rem; }
+#sqlPager select { padding: .1rem .4rem; font-size: .75rem; width: auto; }
+
+/* CodeMirror SQL editor, blended into the theme */
+#sqlConsole .CodeMirror { flex: 1; min-height: 0; height: auto; background: var(--panel2); border: 1px solid var(--border); border-radius: 6px; font-family: ui-monospace, Consolas, monospace; font-size: .82rem; }
+#sqlConsole .CodeMirror-gutters { background: var(--panel); border-right: 1px solid var(--border); }
+#sqlConsole .CodeMirror-linenumber { color: #55677a; }
+#sqlConsole .CodeMirror-cursor { border-left-color: var(--accent); }
+.CodeMirror-placeholder { color: var(--muted) !important; }
+.CodeMirror-hints { z-index: 60; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 6px 20px rgba(0,0,0,.5); font-family: ui-monospace, Consolas, monospace; font-size: .78rem; }
+.CodeMirror-hint { color: var(--text); padding: .15rem .5rem; }
+li.CodeMirror-hint-active { background: #1c3a5e; color: #fff; }
 
 /* confirm modal */
 #confirmModal { width: min(480px, 92vw); }

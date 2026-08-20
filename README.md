@@ -70,6 +70,16 @@ and rebuilt on the next request.
 No database connection is opened at startup — only when you click **Load schema**
 or **Run preview**.
 
+## Standalone executable (no Node required)
+
+`npm run build` produces `dist/mysql-approve-updater.exe` (~96 MB, Node runtime
+included, built with @yao-pkg/pkg). Copy the exe anywhere, put a `.env` next to
+it, and double-click: the server starts and your default browser opens the UI
+(set `MAU_NO_OPEN=1` to suppress the auto-open). All mutable files — `.env`,
+`rules.json`, `connections.json`, `audit.log`, `backups/` — live NEXT TO the
+exe, so they survive replacing it with a newer build. The UI and vendor
+libraries are baked into the binary.
+
 ## How rules work
 
 A rule = *fetch* + *transform*, edited in the left panel and persisted to `rules.json`.
@@ -170,7 +180,7 @@ in browser history.
 
 - `server.js` — Express app, SSH tunnel, schema validation, transforms, session +
   approval engine, SSE, audit.
-- `public/index.html` + `public/style.css` — the whole UI (no build step).
+- `public/index.html` + `public/style.css` + `public/app.js` — the whole UI (no build step).
 - `rules.json` — your rules (created on first save).
 - `connections.json` — saved connection profiles (seeded from `.env` on first run).
 - `audit.log` — JSON-lines audit trail (created on first preview/decision).

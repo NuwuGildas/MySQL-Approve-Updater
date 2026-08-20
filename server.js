@@ -15,21 +15,28 @@
  *    LIMIT and multipleStatements disabled.
  */
 
-require('dotenv').config();
 const fs = require('fs');
 const fsp = require('fs/promises');
 const net = require('net');
 const path = require('path');
 const crypto = require('crypto');
+
+// When packaged as a standalone exe (pkg), __dirname points into the read-only
+// snapshot: static assets load from there, but everything the app WRITES (and
+// .env) lives next to the executable instead.
+const IS_PACKAGED = typeof process.pkg !== 'undefined';
+const ROOT = __dirname;
+const DATA_DIR = IS_PACKAGED ? path.dirname(process.execPath) : __dirname;
+require('dotenv').config({ path: path.join(DATA_DIR, '.env') });
+
 const express = require('express');
 const mysql = require('mysql2/promise');
 const sqlLiteral = require('mysql2').escape; // value → safe SQL literal (backup scripts only)
 const { Client: SSHClient } = require('ssh2');
 
-const ROOT = __dirname;
-const RULES_FILE = path.join(ROOT, 'rules.json');
-const AUDIT_FILE = path.join(ROOT, 'audit.log');
-const BACKUPS_DIR = path.join(ROOT, 'backups');
+const RULES_FILE = path.join(DATA_DIR, 'rules.json');
+const AUDIT_FILE = path.join(DATA_DIR, 'audit.log');
+const BACKUPS_DIR = path.join(DATA_DIR, 'backups');
 const PORT = Number(process.env.PORT || 3000);
 const MAX_PREVIEW_ROWS = Math.max(1, Number(process.env.MAX_PREVIEW_ROWS || 500));
 
@@ -40,7 +47,7 @@ const MAX_PREVIEW_ROWS = Math.max(1, Number(process.env.MAX_PREVIEW_ROWS || 500)
 // ---- connection profiles (multiple named DB+SSH configs, one active) ----
 // .env acts as the seed: on first run it is migrated into connections.json.
 // SSH_TUNNEL=false disables the tunnel even when SSH_* settings are present.
-const CONNECTIONS_FILE = path.join(ROOT, 'connections.json');
+const CONNECTIONS_FILE = path.join(DATA_DIR, 'connections.json');
 const sshTunnelDisabled = /^(0|false|no|off)$/i.test((process.env.SSH_TUNNEL || '').trim());
 
 const envProfile = {
@@ -691,6 +698,8 @@ const app = express();
 app.use(express.json({ limit: '1mb' }));
 app.use(express.static(path.join(ROOT, 'public')));
 app.use('/vendor/introjs', express.static(path.join(ROOT, 'node_modules', 'intro.js', 'minified')));
+app.use('/vendor/tabulator', express.static(path.join(ROOT, 'node_modules', 'tabulator-tables', 'dist')));
+app.use('/vendor/codemirror', express.static(path.join(ROOT, 'node_modules', 'codemirror')));
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
@@ -723,8 +732,9 @@ app.get('/api/schema', wrap(async (req, res) => {
    Writes are deliberately refused here: the ONLY write path in this tool is
    executeApprovedChange(). Use a rule + approval for changes.               */
 const SQL_CONSOLE_MAX_ROWS = 200;
-app.post('/api/sql', wrap(async (req, res) => {
-  let sql = String(req.body?.sql || '').trim();
+
+function validateConsoleSql(raw) {
+  let sql = String(raw || '').trim();
   if (!sql) throw httpError(400, 'Empty query');
   sql = sql.replace(/;\s*$/, '');
   if (sql.includes(';')) throw httpError(400, 'Only a single statement is allowed');
@@ -732,27 +742,116 @@ app.post('/api/sql', wrap(async (req, res) => {
   if (!['SELECT', 'SHOW', 'DESCRIBE', 'DESC', 'EXPLAIN', 'WITH'].includes(kw)) {
     throw httpError(400, `This console is read-only (SELECT / SHOW / DESCRIBE / EXPLAIN): "${kw || '?'}" is not allowed. Writes go through rules and per-row approval.`);
   }
+  return { sql, kw };
+}
+
+app.post('/api/sql', wrap(async (req, res) => {
+  const { sql, kw } = validateConsoleSql(req.body?.sql);
+  const page = Math.max(0, Math.min(100000, Number(req.body?.page) || 0));
+  const cap = SQL_CONSOLE_MAX_ROWS;
   const pool = await getPool();
   const started = Date.now();
-  let rows, fields;
+  let rows, fields, hasMore;
   if (kw === 'SELECT' || kw === 'WITH') {
-    // wrap to enforce the row cap inside MySQL; fall back to the raw query when
-    // the wrapper is not applicable (e.g. locking clauses)
+    // wrap to enforce the page window inside MySQL; fall back to the raw query
+    // when the wrapper is not applicable (e.g. locking clauses)
     try {
-      [rows, fields] = await pool.query({ sql: `SELECT * FROM (${sql}) AS _console_q LIMIT ${SQL_CONSOLE_MAX_ROWS + 1}`, timeout: 30000 });
+      [rows, fields] = await pool.query({
+        sql: `SELECT * FROM (${sql}) AS _console_q LIMIT ${cap + 1} OFFSET ${page * cap}`,
+        timeout: 30000,
+      });
+      hasMore = rows.length > cap;
+      rows = rows.slice(0, cap);
     } catch {
       [rows, fields] = await pool.query({ sql, timeout: 30000 });
+      hasMore = rows.length > (page + 1) * cap;
+      rows = rows.slice(page * cap, page * cap + cap);
     }
   } else {
     [rows, fields] = await pool.query({ sql, timeout: 30000 });
+    hasMore = rows.length > (page + 1) * cap;
+    rows = rows.slice(page * cap, page * cap + cap);
   }
   const ms = Date.now() - started;
-  const truncated = rows.length > SQL_CONSOLE_MAX_ROWS;
-  const out = rows.slice(0, SQL_CONSOLE_MAX_ROWS).map((r) =>
+  const out = rows.map((r) =>
     Object.fromEntries(Object.entries(r).map(([k, v]) => [k, Buffer.isBuffer(v) ? '0x' + v.toString('hex').slice(0, 400) : v]))
   );
-  logEvent('info', `Console query (${ms}ms, ${out.length}${truncated ? '+' : ''} rows): ${sql.slice(0, 160)}`);
-  res.json({ columns: (fields || []).map((f) => f.name), rows: out, rowCount: out.length, truncated, ms });
+  logEvent('info', `Console query (page ${page + 1}, ${ms}ms, ${out.length}${hasMore ? '+' : ''} rows): ${sql.slice(0, 160)}`);
+  res.json({ columns: (fields || []).map((f) => f.name), rows: out, rowCount: out.length, page, hasMore, ms });
+}));
+
+/* ---- full-result export: streams ALL rows (no page cap), read-only ---- */
+app.post('/api/sql/export', wrap(async (req, res) => {
+  const { sql } = validateConsoleSql(req.body?.sql);
+  const format = ['updates', 'inserts', 'csv', 'json'].includes(req.body?.format) ? req.body.format : 'json';
+  const table = String(req.body?.table || 'my_table');
+  const pkWanted = String(req.body?.pk || '');
+
+  const qid = (n) => '`' + String(n).replace(/`/g, '``') + '`';
+  const sval = (v) => {
+    if (v === null || v === undefined) return 'NULL';
+    if (typeof v === 'number') return String(v);
+    if (Buffer.isBuffer(v)) v = '0x' + v.toString('hex');
+    return "'" + String(v).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\0/g, '\\0') + "'";
+  };
+  const csvq = (v) => {
+    if (v === null || v === undefined) return '';
+    const s = Buffer.isBuffer(v) ? '0x' + v.toString('hex') : String(v);
+    return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+
+  const ext = format === 'csv' ? 'csv' : format === 'json' ? 'json' : 'sql';
+  res.setHeader('Content-Disposition', `attachment; filename="export-${format}.${ext}"`);
+  res.type({ sql: 'application/sql', csv: 'text/csv', json: 'application/json' }[ext]);
+  const write = (s) => new Promise((r) => (res.write(s) ? r() : res.once('drain', r)));
+
+  const pool = await getPool();
+  const conn = await pool.getConnection();
+  let columns = null, pk = null, setCols = null, count = 0;
+  const started = Date.now();
+  try {
+    const stream = conn.connection.query({ sql, timeout: 300000 }).stream();
+    for await (const row of stream) {
+      if (!columns) {
+        columns = Object.keys(row);
+        pk = pkWanted && columns.includes(pkWanted) ? pkWanted : (columns.find((c) => c.toLowerCase() === 'id') || columns[0]);
+        setCols = columns.filter((c) => c !== pk);
+        if (format === 'updates' || format === 'inserts') {
+          await write(`-- ${format === 'updates' ? 'UPDATE' : 'INSERT'} statements generated from the SQL console (full result)\n` +
+            `-- Source query: ${sql.replace(/\s+/g, ' ').slice(0, 160)}\n-- Review before running.\n\n`);
+        } else if (format === 'csv') {
+          await write(columns.map(csvq).join(',') + '\r\n');
+        } else {
+          await write('[\n');
+        }
+      }
+      if (format === 'updates') {
+        await write(setCols.length
+          ? `UPDATE ${qid(table)} SET ${setCols.map((c) => `${qid(c)} = ${sval(row[c])}`).join(', ')} WHERE ${qid(pk)} = ${sval(row[pk])} LIMIT 1;\n`
+          : '-- row skipped: result only contains the key column\n');
+      } else if (format === 'inserts') {
+        await write(`INSERT INTO ${qid(table)} (${columns.map(qid).join(', ')}) VALUES (${columns.map((c) => sval(row[c])).join(', ')});\n`);
+      } else if (format === 'csv') {
+        await write(columns.map((c) => csvq(row[c])).join(',') + '\r\n');
+      } else {
+        await write((count ? ',\n' : '') + JSON.stringify(
+          Object.fromEntries(columns.map((c) => [c, Buffer.isBuffer(row[c]) ? '0x' + row[c].toString('hex') : row[c]]))
+        ));
+      }
+      count++;
+    }
+    if (!columns) { // empty result
+      if (format === 'csv') await write('');
+      else if (format === 'json') await write('[]');
+      else await write('-- 0 rows\n');
+    } else if (format === 'json') {
+      await write('\n]\n');
+    }
+    logEvent('info', `Console export ${format}: ${count} rows in ${Date.now() - started}ms — ${sql.slice(0, 120)}`);
+    res.end();
+  } finally {
+    conn.release();
+  }
 }));
 
 /* ---- schema graph: tables, columns, and relations for the visual map ---- */
@@ -1237,4 +1336,8 @@ app.listen(PORT, '127.0.0.1', () => {
   const db = currentDb(), ssh = currentSsh();
   console.log(`Connection profile: "${activeProfile().name}" — ${db.database} @ ${db.host}:${db.port}${ssh ? ` via SSH tunnel ${ssh.host}` : ' (direct)'}`);
   console.log('No database connection is opened until you load the schema or run a preview.');
+  if (IS_PACKAGED && process.platform === 'win32' && !process.env.MAU_NO_OPEN) {
+    // double-click convenience: open the UI in the default browser
+    require('child_process').exec(`start http://localhost:${PORT}`, () => {});
+  }
 });

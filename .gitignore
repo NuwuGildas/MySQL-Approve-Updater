@@ -5,3 +5,4 @@ audit.log
 connections.json
 rules.json
 .idea/
+/dist

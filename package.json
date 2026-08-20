@@ -7,15 +7,39 @@
   "engines": {
     "node": ">=20"
   },
+  "bin": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "build": "pkg . --output dist/mysql-approve-updater.exe"
+  },
+  "pkg": {
+    "targets": [
+      "node22-win-x64"
+    ],
+    "assets": [
+      "public/**/*",
+      "node_modules/intro.js/minified/**",
+      "node_modules/tabulator-tables/dist/**",
+      "node_modules/codemirror/lib/**",
+      "node_modules/codemirror/mode/sql/**",
+      "node_modules/codemirror/mode/javascript/**",
+      "node_modules/codemirror/addon/hint/**",
+      "node_modules/codemirror/addon/display/**",
+      "node_modules/codemirror/theme/material-darker.css"
+    ]
   },
   "dependencies": {
+    "codemirror": "^5.65.21",
     "dotenv": "^16.4.5",
     "express": "^4.21.2",
     "intro.js": "^8.5.0",
     "mysql2": "^3.11.5",
-    "ssh2": "^1.16.0"
+    "ssh2": "^1.16.0",
+    "tabulator-tables": "^6.5.2"
+  },
+  "devDependencies": {
+    "@yao-pkg/pkg": "^6.22.0",
+    "puppeteer-core": "^25.8.0"
   }
 }
