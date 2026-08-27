@@ -6,3 +6,4 @@ connections.json
 rules.json
 .idea/
 /dist
+agent.json

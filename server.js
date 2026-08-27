@@ -339,6 +339,38 @@ function validateTransforms(transforms) {
   }
 }
 
+/** Apply a string function to every `s:N:"..."` token of a PHP-serialized
+ * value, rewriting each N with the new content's BYTE length. Byte-exact for
+ * everything outside strings; navigates by the declared lengths, so embedded
+ * quotes/HTML in the content cannot desync it. Tokens that do not line up
+ * (corrupt or not actually serialized) are left untouched. */
+function transformSerializedStrings(value, fn) {
+  const buf = Buffer.from(value, 'utf8');
+  const parts = [];
+  let last = 0, i = 0;
+  while (i < buf.length - 3) {
+    if (buf[i] === 0x73 /* s */ && buf[i + 1] === 0x3a /* : */) {
+      let j = i + 2, n = 0, digits = 0;
+      while (j < buf.length && buf[j] >= 0x30 && buf[j] <= 0x39) { n = n * 10 + (buf[j] - 0x30); j++; digits++; }
+      const start = j + 2;
+      const end = start + n;
+      if (digits > 0 && buf[j] === 0x3a && buf[j + 1] === 0x22 /* :" */ &&
+          end < buf.length && buf[end] === 0x22 && buf[end + 1] === 0x3b /* "; */) {
+        const content = buf.slice(start, end).toString('utf8');
+        const replaced = String(fn(content));
+        const rbuf = Buffer.from(replaced, 'utf8');
+        parts.push(buf.slice(last, i), Buffer.from(`s:${rbuf.length}:"`), rbuf, Buffer.from('";'));
+        i = end + 2;
+        last = i;
+        continue;
+      }
+    }
+    i++;
+  }
+  parts.push(buf.slice(last));
+  return Buffer.concat(parts).toString('utf8');
+}
+
 /** Apply one rule's transforms to a row → { column: newValue } (may be identical to old). */
 function applyTransforms(row, transforms) {
   const out = {};
@@ -347,6 +379,8 @@ function applyTransforms(row, transforms) {
     const current = t.column in out ? out[t.column] : row[t.column];
     if (current === null || current === undefined) {
       out[t.column] = impl.acceptsNull ? impl.apply(null, t.params || {}) : current ?? null;
+    } else if (t.phpSerialized) {
+      out[t.column] = transformSerializedStrings(String(current), (s) => impl.apply(s, t.params || {}));
     } else {
       out[t.column] = impl.apply(String(current), t.params || {});
     }
@@ -390,7 +424,7 @@ function sanitizeRuleInput(body) {
   if (!table) throw httpError(400, 'Target table is required');
   if (!pkColumn) throw httpError(400, 'Primary-key column is required');
   validateTransforms(body.transforms);
-  return { name, table, pkColumn, where, limit, displayColumns, transforms: body.transforms };
+  return { name, table, pkColumn, where, limit, displayColumns, transforms: body.transforms, draft: !!body.draft };
 }
 
 /* ------------------------------------------------------------------ */
@@ -519,13 +553,20 @@ async function buildRuleQuery(rule) {
 }
 
 async function runPreview(rule) {
+  const progress = (stage, text) => sseBroadcast('preview', { stage, text });
+  progress('validate', 'Validating rule against the live schema…');
   const { sql, limit } = await buildRuleQuery(rule);
 
   const pool = await getPool();
   logEvent('info', `Preview: ${sql}`);
+  progress('fetch', `Fetching matching rows${currentSsh() ? ' (via SSH tunnel)' : ''}…`);
   const [rows] = await pool.query(sql); // WHERE is trusted operator input; values elsewhere are parameterized
+  progress('fetched', `Found ${rows.length} matching row(s)${rows.length >= limit ? ` (capped at ${limit})` : ''}.`);
 
+  progress('compute', `Applying ${rule.transforms.length} transform(s) and computing the before/after diff…`);
   const changes = [];
+  const nRows = rows.length;
+  let scanned = 0;
   for (const row of rows) {
     const after = applyTransforms(row, rule.transforms);
     const cols = [];
@@ -534,6 +575,9 @@ async function runPreview(rule) {
         cols.push({ column, before: row[column] ?? null, after: newValue ?? null });
       }
     }
+    scanned++;
+    // periodic progress on big result sets (diffing large text can be slow)
+    if (nRows > 50 && scanned % 50 === 0) progress('computing', `Computed ${scanned}/${nRows} rows, ${changes.length} would change so far…`);
     if (cols.length === 0) continue;
     const display = {};
     for (const d of rule.displayColumns) display[d] = row[d] ?? null;
@@ -546,6 +590,7 @@ async function runPreview(rule) {
       note: null,
     });
   }
+  progress('done', `${changes.length} row(s) would change. Rendering…`);
 
   session = {
     id: crypto.randomUUID(),
@@ -1176,10 +1221,31 @@ app.get('/api/rules/:id/sql', wrap(async (req, res) => {
 app.post('/api/rules/:id/preview', wrap(async (req, res) => {
   const rule = rules.find((r) => r.id === req.params.id);
   if (!rule) throw httpError(404, 'Rule not found');
+  if (rule.draft) throw httpError(400, 'This rule is a draft — open it and use "Save rule" to publish it first');
   if (session && session.status !== 'done' && session.status !== 'aborted' && sessionCounts(session).pending > 0) {
     throw httpError(409, 'A session with pending changes is active — abort it or finish it first');
   }
   res.json(await runPreview(rule));
+}));
+
+/* ---- PHP-serialized helpers for the manual editor: decode to JSON for
+        editing, encode back on save (byte lengths correct by construction) ---- */
+const phpSer = require('php-serialize');
+app.post('/api/php', wrap(async (req, res) => {
+  const { mode, value } = req.body || {};
+  if (mode === 'decode') {
+    let data;
+    try { data = phpSer.unserialize(String(value ?? '')); }
+    catch (e) { throw httpError(400, `Value is not decodable serialized PHP: ${e.message}`); }
+    res.json({ json: JSON.stringify(data, null, 2) });
+  } else if (mode === 'encode') {
+    let data;
+    try { data = JSON.parse(String(value ?? '')); }
+    catch (e) { throw httpError(400, `Invalid JSON: ${e.message}`); }
+    res.json({ serialized: phpSer.serialize(data) });
+  } else {
+    throw httpError(400, 'mode must be "decode" or "encode"');
+  }
 }));
 
 /* ---- manual edit of a proposed value (in-memory only — nothing is written
@@ -1296,6 +1362,545 @@ app.post('/api/session/abort', wrap(async (req, res) => {
   logEvent('warn', `Session aborted — ${discarded} pending change(s) discarded, nothing written`);
   broadcastSession();
   res.json(sessionSnapshot());
+}));
+
+/* ---- AI review of one pending change (single LLM call, result via SSE) ---- */
+// windows around BOTH the first and last difference, so the reviewer can see
+// every edge of the change (not just where it starts) to judge collateral damage
+function reviewExcerpt(before, after, span = 900) {
+  const a = String(before ?? ''), b = String(after ?? '');
+  let p = 0;
+  while (p < a.length && p < b.length && a[p] === b[p]) p++;
+  let sa = a.length, sb = b.length;
+  while (sa > p && sb > p && a[sa - 1] === b[sb - 1]) { sa--; sb--; }
+  const win = (s, from, to) => (from > 0 ? '…' : '') + s.slice(Math.max(0, from - 120), to + 120) + (to + 120 < s.length ? '…' : '');
+  const near = (s, end) => `START-OF-CHANGE: ${win(s, p, p + span)}` + (end - p > span * 2 ? `\nEND-OF-CHANGE: ${win(s, Math.max(p, end - span), end)}` : '');
+  return { before: near(a, sa), after: near(b, sb), beforeLen: a.length, afterLen: b.length, identical: p === a.length && p === b.length };
+}
+
+/* deterministic guard: does the proposed value equal EXACTLY what the rule's
+   transforms produce from the before value? If yes, nothing beyond the rule
+   happened. If no, it was manually edited or something is off. */
+function ruleMatchCheck(rule, change) {
+  if (!rule) return null;
+  const results = [];
+  for (const col of change.cols) {
+    const row = { [col.column]: col.before };
+    let expected;
+    try { expected = applyTransforms(row, rule.transforms.filter((t) => t.column === col.column))[col.column]; }
+    catch (e) { results.push({ column: col.column, ok: false, error: e.message }); continue; }
+    results.push({ column: col.column, ok: valuesEqual(expected, col.after), manualEdit: !!col.manualEdit });
+  }
+  return results;
+}
+
+app.post('/api/session/review/:changeId', wrap(async (req, res) => {
+  if (!agentConfig?.provider) throw httpError(400, 'No AI agent connected');
+  if (!session) throw httpError(409, 'No active session');
+  const change = session.changes.find((c) => c.id === req.params.changeId);
+  if (!change) throw httpError(404, 'Change not found');
+  if (change.aiReview?.status === 'pending') throw httpError(409, 'A review of this change is already running');
+  change.aiReview = { status: 'pending' };
+  broadcastChange(change);
+  res.json({ ok: true }); // the verdict arrives over SSE when ready
+
+  (async () => {
+    try {
+      const rule = rules.find((r) => r.id === session.ruleId);
+      const matchCheck = ruleMatchCheck(rule, change);
+      const ruleTargets = [...new Set((rule?.transforms || []).map((t) => t.column))];
+      const changed = change.cols.map((c) => c.column);
+      const cols = change.cols.map((c) => {
+        const ex = reviewExcerpt(c.before, c.after);
+        return `Column "${c.column}" (before ${ex.beforeLen} chars, after ${ex.afterLen} chars${c.manualEdit ? ', MANUALLY EDITED by the user after the rule ran' : ''}):\n[BEFORE]\n${ex.before}\n[AFTER]\n${ex.after}`;
+      }).join('\n\n');
+      const prompt = `You are reviewing ONE proposed row change in "MySQL Approve Updater" before a human approves it. Be a careful safety reviewer: the goal is to confirm the change does EXACTLY what the rule intends and destroys nothing else.
+
+RULE (the intended modification): "${session.ruleName}"
+  table: ${session.table}, row: ${session.pkColumn}=${change.pk}
+  WHERE (which rows it targets): ${rule?.where || '(all)'}
+  columns the rule is allowed to modify: ${JSON.stringify(ruleTargets)}
+  transforms (in order): ${JSON.stringify(rule?.transforms || [])}
+
+DETERMINISTIC CHECK (already computed by the server): for each changed column, does the proposed AFTER exactly equal the rule's own output re-computed from BEFORE?
+  ${JSON.stringify(matchCheck)}
+  - ok:true  => the AFTER is precisely the rule's transform output; no extra/hidden edits were introduced beyond the rule.
+  - ok:false with manualEdit:true => a human hand-edited the value; scrutinize whether that manual result is safe and on-intent.
+  - ok:false with manualEdit:false => ANOMALY: the value diverges from the rule for no known reason — treat with suspicion.
+
+Columns actually changed: ${JSON.stringify(changed)} (these must be a subset of the rule's allowed columns above; flag "bad" if any other column were affected).
+
+${cols}
+
+Judge, in order of importance:
+1. Confinement: is the change limited to the rule's intent, only on allowed columns, only matching what the rule describes? Nothing unrelated altered or deleted.
+2. Structural safety: no broken HTML tags/attribute quotes, no corrupted PHP-serialized s:N byte lengths, no truncation, no unintended/duplicate replacements (e.g. a pattern that also matched inside URLs or other attributes it shouldn't).
+3. Intent: does AFTER actually achieve what the rule name/transforms describe?
+BEFORE/AFTER show windows at the start and end of the changed region (long unchanged middles are elided with …).
+
+Reply with ONLY one line of JSON, nothing else: {"verdict":"ok"|"warn"|"bad","summary":"<max 2 short, specific sentences>"}`;
+      const out = (await agentRun(prompt)).trim().replace(/^```(json)?\s*|\s*```$/g, '');
+      let parsed = null;
+      try { parsed = JSON.parse((out.match(/\{[\s\S]*\}/) || [out])[0]); } catch {}
+      if (!parsed || !['ok', 'warn', 'bad'].includes(parsed.verdict)) parsed = { verdict: 'warn', summary: out.slice(0, 300) };
+      change.aiReview = { status: 'done', verdict: parsed.verdict, summary: String(parsed.summary || '').slice(0, 500), at: new Date().toISOString() };
+      logEvent('info', `AI review pk=${change.pk}: ${parsed.verdict} — ${change.aiReview.summary.slice(0, 120)}`);
+    } catch (e) {
+      change.aiReview = { status: 'error', summary: e.message };
+      logEvent('error', `AI review failed for pk=${change.pk}: ${e.message}`);
+    }
+    broadcastChange(change);
+  })();
+}));
+
+/* ---- clear: drop the whole session and reset the queue (nothing written) ---- */
+app.post('/api/session/clear', wrap(async (req, res) => {
+  if (!session) throw httpError(409, 'No session to clear');
+  const pending = sessionCounts(session).pending;
+  audit({ action: 'clear', rule: session.ruleName, table: session.table, discardedPending: pending });
+  logEvent('warn', `Session cleared: ${pending} pending change(s) discarded, nothing written`);
+  session = null;
+  broadcastSession();
+  res.json({ ok: true });
+}));
+
+/* ================= AI agent (local CLI providers, read-only tools) ================= */
+const { spawn } = require('child_process');
+const AGENT_FILE = path.join(DATA_DIR, 'agent.json');
+let agentConfig = null;
+try { agentConfig = JSON.parse(fs.readFileSync(AGENT_FILE, 'utf8')); } catch {}
+const agentChat = []; // in-memory conversation: { role: 'user'|'assistant', text }
+
+const AGENT_PROVIDERS = {
+  claude: { label: 'Claude Code (CLI)', short: 'Claude Code', cmd: 'claude', kind: 'cli' },
+  codex: { label: 'Codex CLI', short: 'Codex', cmd: 'codex', kind: 'cli' },
+  'claude-api': { label: 'Claude (API key or sign-in token)', short: 'Claude', kind: 'api' },
+};
+
+/* direct Messages API call — used for API keys (sk-ant-api…) and OAuth tokens
+   from browser sign-in flows like `claude setup-token` (sk-ant-oat…) */
+async function claudeApiCall(apiKey, model, prompt, maxTokens = 1500) {
+  const isOAuth = apiKey.startsWith('sk-ant-oat');
+  const headers = { 'content-type': 'application/json', 'anthropic-version': '2023-06-01' };
+  if (isOAuth) {
+    headers.authorization = 'Bearer ' + apiKey;
+    headers['anthropic-beta'] = 'oauth-2025-04-20';
+  } else {
+    headers['x-api-key'] = apiKey;
+  }
+  const body = { model, max_tokens: maxTokens, messages: [{ role: 'user', content: prompt }] };
+  // OAuth tokens from the Claude sign-in flow are scoped to Claude Code and are
+  // rejected unless the request identifies as such via this exact system prompt.
+  if (isOAuth) body.system = "You are Claude Code, Anthropic's official CLI for Claude.";
+  let res, j;
+  try {
+    res = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers, body: JSON.stringify(body) });
+    j = await res.json().catch(() => ({}));
+  } catch (e) {
+    throw new Error(`network error reaching api.anthropic.com: ${e.message}`);
+  }
+  if (!res.ok) {
+    const msg = j?.error?.message || j?.error?.type || j?.error || (typeof j === 'string' ? j : '') || `HTTP ${res.status}`;
+    throw new Error(`${res.status} ${msg}`);
+  }
+  return (j.content || []).map((c) => c.text || '').join('').trim();
+}
+
+function runCli(cmd, args, input, timeoutMs = 180000) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, { shell: true, cwd: DATA_DIR, windowsHide: true });
+    let out = '', err = '';
+    const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} reject(new Error('Agent CLI timed out')); }, timeoutMs);
+    child.stdout.on('data', (d) => { out += d; });
+    child.stderr.on('data', (d) => { err += d; });
+    child.on('error', (e) => { clearTimeout(timer); reject(e); });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve(out.trim());
+      else reject(new Error(`agent CLI exited ${code}: ${(err || out).slice(0, 400)}`));
+    });
+    if (input != null) child.stdin.write(input);
+    child.stdin.end();
+  });
+}
+
+async function probeProvider(key) {
+  if (AGENT_PROVIDERS[key].kind === 'api') return true; // nothing to probe until a key is given
+  try { await runCli(AGENT_PROVIDERS[key].cmd, ['--version'], null, 20000); return true; } catch { return false; }
+}
+
+async function agentRun(prompt) {
+  const model = agentConfig.model || null; // null = provider/CLI default
+  if (agentConfig.provider === 'claude-api') {
+    try {
+      return await claudeApiCall(agentConfig.apiKey, model || 'claude-sonnet-4-5', prompt);
+    } catch (e) {
+      // expired sign-in token: refresh once and retry
+      if (/401|authentication|expired/i.test(e.message) && (await refreshClaudeToken())) {
+        return claudeApiCall(agentConfig.apiKey, model || 'claude-sonnet-4-5', prompt);
+      }
+      throw e;
+    }
+  }
+  if (agentConfig.provider === 'codex') {
+    const lastFile = path.join(DATA_DIR, '.agent-last.txt');
+    try { await fsp.unlink(lastFile); } catch {}
+    const args = ['exec', '--skip-git-repo-check'];
+    if (model) args.push('-m', model);
+    args.push('--output-last-message', `"${lastFile}"`, '-');
+    await runCli('codex', args, prompt);
+    const txt = (await fsp.readFile(lastFile, 'utf8')).trim();
+    fsp.unlink(lastFile).catch(() => {});
+    return txt;
+  }
+  const args = ['-p'];
+  if (model) args.push('--model', model);
+  return runCli('claude', args, prompt); // print mode: prompt on stdin, answer on stdout
+}
+
+/* read-only tools, executed by THIS server against the active connection */
+const AGENT_TOOLS = {
+  get_state: {
+    desc: 'Current app state: connection info (no secrets) and active approval-session summary.',
+    run: async () => ({
+      config: { database: currentDb().database, sshTunnel: !!currentSsh(), profile: activeProfile().name },
+      session: session ? { ...sessionSnapshot(), changes: `${session.changes.length} changes (use get_audit_tail or ask the user for details)` } : null,
+    }),
+  },
+  list_rules: { desc: 'All saved rules and drafts (their full definitions).', run: async () => rules },
+  list_tables: {
+    desc: 'Tables of the connected database (max 200). Input: {"like":"optional name filter"}',
+    run: async (inp) => {
+      const pool = await getPool();
+      const [rows] = await pool.execute(
+        `SELECT TABLE_NAME AS tableName, TABLE_ROWS AS approxRows FROM information_schema.tables
+          WHERE table_schema = ? AND TABLE_NAME LIKE ? ORDER BY TABLE_NAME LIMIT 200`,
+        [currentDb().database, `%${String(inp?.like || '')}%`]
+      );
+      return rows;
+    },
+  },
+  get_table: { desc: 'Column list of one table. Input: {"table":"name"}', run: async (inp) => getTableColumns(String(inp?.table || '')) },
+  run_sql: {
+    desc: 'Run a READ-ONLY query (SELECT/SHOW/EXPLAIN/DESCRIBE, single statement) on the connected database. Input: {"sql":"..."}. Result capped at 50 rows.',
+    run: async (inp) => {
+      const { sql, kw } = validateConsoleSql(String(inp?.sql || ''));
+      const pool = await getPool();
+      let rows;
+      if (kw === 'SELECT' || kw === 'WITH') {
+        try { [rows] = await pool.query({ sql: `SELECT * FROM (${sql}) AS _a LIMIT 51`, timeout: 30000 }); }
+        catch { [rows] = await pool.query({ sql, timeout: 30000 }); }
+      } else {
+        [rows] = await pool.query({ sql, timeout: 30000 });
+      }
+      return { rows: rows.slice(0, 50), truncated: rows.length > 50 };
+    },
+  },
+  get_audit_tail: {
+    desc: 'Last N audit-log entries (decisions, previews, edits). Input: {"n":20}',
+    run: async (inp) => {
+      try {
+        const lines = (await fsp.readFile(AUDIT_FILE, 'utf8')).trim().split('\n');
+        return lines.slice(-Math.min(50, Number(inp?.n) || 20)).map((l) => { try { return JSON.parse(l); } catch { return l; } });
+      } catch { return []; }
+    },
+  },
+  propose_rule: {
+    desc: 'Propose creating or updating a RULE (requires explicit user approval in the UI before it is saved; nothing happens without it). ' +
+      'Input: {"action":"create"|"update","ruleId":"<existing rule id, update only>","rule":{"name","table","pkColumn","where","limit",' +
+      '"displayColumns":"comma,separated","transforms":[{"column","type","params","phpSerialized"}],"draft":bool}}. ' +
+      'Transform types: findReplace(params: find, replace, regex, flags), trim, changeCase(params: mode=upper|lower|title), prefix(params: text), suffix(params: text), setValue(params: value or setNull).',
+    run: async (inp) => {
+      const action = inp?.action === 'update' ? 'update' : 'create';
+      let existing = null;
+      if (action === 'update') {
+        existing = rules.find((r) => r.id === String(inp?.ruleId || ''));
+        if (!existing) throw new Error('ruleId not found — use list_rules to get valid ids');
+      }
+      const clean = sanitizeRuleInput(inp?.rule || {}); // same validation as the UI editor
+      const prop = {
+        id: crypto.randomUUID(), action, ruleId: existing?.id || null, targetName: existing?.name || null,
+        rule: clean, status: 'pending', ts: new Date().toISOString(),
+      };
+      agentProposals.push(prop);
+      while (agentProposals.length > 30) agentProposals.shift();
+      logEvent('info', `AI agent proposed rule ${action}: "${clean.name}" (awaiting user approval)`);
+      return { proposalId: prop.id, status: 'pending_user_approval', note: 'Submitted. The user must approve it in the chat UI; do not assume it exists yet.' };
+    },
+  },
+};
+const agentProposals = []; // rule change proposals awaiting explicit user decision
+
+function agentSystemPrompt() {
+  const toolLines = Object.entries(AGENT_TOOLS).map(([k, v]) => `- ${k}: ${v.desc}`).join('\n');
+  return `You are the embedded AI assistant of "MySQL Approve Updater", a tool that runs rule-based MySQL updates where every row change needs explicit human approval.
+STRICT SCOPE: only this tool and the currently connected database "${currentDb().database}". Politely refuse anything outside that scope (general coding help, other systems, the wider filesystem, etc).
+DATABASE access is strictly READ-ONLY: you can never write to the database. Row changes only happen through rules whose previewed changes the USER approves.
+You MAY create or update RULES via the propose_rule tool — but every proposal requires the user's explicit approval in the UI before it is saved; never claim a rule exists until a system note confirms approval.
+To gather information, reply with ONLY one JSON object on a single line, nothing else: {"tool":"<name>","input":{...}}
+Available tools:
+${toolLines}
+After a tool result you may call another tool (max 6 total) or give your final answer as plain text (never JSON). Keep answers concise and concrete.`;
+}
+
+function parseAgentToolCall(s) {
+  const tryParse = (str) => {
+    try { const j = JSON.parse(str); if (j && typeof j.tool === 'string' && AGENT_TOOLS[j.tool]) return j; } catch {}
+    return null;
+  };
+  const line = s.trim().replace(/^```(json)?\s*|\s*```$/g, '');
+  return tryParse(line) || (line.startsWith('{') ? null : tryParse((line.match(/\{[\s\S]*\}/) || [])[0] || ''));
+}
+
+app.get('/api/agent', wrap(async (req, res) => {
+  const probe = req.query.probe === '1';
+  const providers = {};
+  for (const [k, v] of Object.entries(AGENT_PROVIDERS)) {
+    providers[k] = { label: v.label, cmd: v.cmd, kind: v.kind, available: probe ? await probeProvider(k) : undefined };
+  }
+  res.json({
+    connected: !!agentConfig?.provider, provider: agentConfig?.provider || null,
+    model: agentConfig?.model || null, // the stored key/token is never sent to the browser
+    providers, chat: agentChat, proposals: agentProposals.filter((p) => p.status === 'pending'),
+  });
+}));
+
+/* user decision on an agent rule proposal */
+app.post('/api/agent/proposal/:id', wrap(async (req, res) => {
+  const prop = agentProposals.find((p) => p.id === req.params.id);
+  if (!prop) throw httpError(404, 'Proposal not found');
+  if (prop.status !== 'pending') throw httpError(409, `Proposal already ${prop.status}`);
+  const decision = req.body?.decision === 'approve' ? 'approved' : 'rejected';
+  if (decision === 'approved') {
+    if (prop.action === 'update') {
+      const idx = rules.findIndex((r) => r.id === prop.ruleId);
+      if (idx === -1) throw httpError(409, 'The target rule no longer exists');
+      rules[idx] = { id: prop.ruleId, ...prop.rule };
+    } else {
+      rules.push({ id: crypto.randomUUID(), ...prop.rule });
+    }
+    await saveRules();
+  }
+  prop.status = decision;
+  agentChat.push({
+    role: 'note', kind: 'decision', decision, proposalAction: prop.action, ruleName: prop.rule.name,
+    text: `User ${decision} the agent's rule-${prop.action} proposal "${prop.rule.name}".`,
+  });
+  audit({ action: `agent-rule-${decision}`, rule: prop.rule.name, table: prop.rule.table, proposalAction: prop.action });
+  logEvent(decision === 'approved' ? 'info' : 'warn', `AI agent rule proposal ${decision}: "${prop.rule.name}"`);
+  res.json({ ok: true, status: decision });
+}));
+
+app.post('/api/agent/connect', wrap(async (req, res) => {
+  const provider = String(req.body?.provider || '');
+  const p = AGENT_PROVIDERS[provider];
+  if (!p) throw httpError(400, 'Unknown provider');
+  if (p.kind === 'api') {
+    const apiKey = String(req.body?.apiKey || '').trim();
+    const model = String(req.body?.model || '').trim() || 'claude-sonnet-4-5';
+    if (!apiKey) throw httpError(400, 'Paste an API key (console.anthropic.com) or a sign-in token (run: claude setup-token)');
+    try { await claudeApiCall(apiKey, model, 'Reply with the single word: ok', 8); }
+    catch (e) { throw httpError(400, `Key/token validation failed: ${e.message}`); }
+    agentConfig = { provider, model, apiKey, connectedAt: new Date().toISOString() };
+  } else {
+    if (!(await probeProvider(provider))) {
+      throw httpError(400, `${p.label} not found: "${p.cmd} --version" failed on this machine`);
+    }
+    agentConfig = { provider, connectedAt: new Date().toISOString() };
+  }
+  await fsp.writeFile(AGENT_FILE, JSON.stringify(agentConfig, null, 2), 'utf8'); // persists across restarts
+  logEvent('info', `AI agent connected: ${p.label}${agentConfig.model ? ` (${agentConfig.model})` : ''}`);
+  res.json({ ok: true, provider });
+}));
+
+/* Claude browser sign-in (OAuth + PKCE, same public flow as `claude setup-token`) */
+const CLAUDE_OAUTH = {
+  clientId: '9d1c250a-e61b-44d9-88ed-5944d1962f5e',
+  authorizeUrl: 'https://claude.ai/oauth/authorize',
+  tokenUrl: 'https://console.anthropic.com/v1/oauth/token',
+  redirectUri: 'https://console.anthropic.com/oauth/code/callback',
+  scopes: 'org:create_api_key user:profile user:inference',
+};
+let oauthPending = null; // { verifier, ts }
+
+app.post('/api/agent/oauth/start', wrap(async (req, res) => {
+  // reuse a fresh pending attempt: clicking the button twice must NOT invalidate
+  // the code from an already-opened authorization tab (PKCE binds code↔verifier)
+  if (!oauthPending || Date.now() - oauthPending.ts > 10 * 60 * 1000) {
+    oauthPending = { verifier: crypto.randomBytes(32).toString('base64url'), ts: Date.now() };
+  }
+  const verifier = oauthPending.verifier;
+  const challenge = crypto.createHash('sha256').update(verifier).digest('base64url');
+  const u = new URL(CLAUDE_OAUTH.authorizeUrl);
+  u.searchParams.set('code', 'true');
+  u.searchParams.set('client_id', CLAUDE_OAUTH.clientId);
+  u.searchParams.set('response_type', 'code');
+  u.searchParams.set('redirect_uri', CLAUDE_OAUTH.redirectUri);
+  u.searchParams.set('scope', CLAUDE_OAUTH.scopes);
+  u.searchParams.set('code_challenge', challenge);
+  u.searchParams.set('code_challenge_method', 'S256');
+  u.searchParams.set('state', verifier);
+  res.json({ url: u.toString() });
+}));
+
+app.post('/api/agent/oauth/finish', wrap(async (req, res) => {
+  let raw = String(req.body?.code || '').replace(/\s+/g, '');
+  if (raw.includes('code=')) { try { raw = new URL(raw).searchParams.get('code') || raw; } catch {} } // tolerate a pasted URL
+  if (!raw) throw httpError(400, 'Paste the authorization code shown after approving access');
+  const [code, statePart] = raw.split('#');
+  // We set state = code_verifier when building the authorize URL, so a full
+  // "code#state" paste is SELF-CONTAINED: the exchange works even if the
+  // server restarted or a newer sign-in attempt replaced the in-memory one.
+  const verifier = statePart && /^[A-Za-z0-9_-]{20,}$/.test(statePart) ? statePart : oauthPending?.verifier;
+  if (!verifier) {
+    throw httpError(400, 'Missing sign-in state: paste the FULL code including everything after "#" (or click "Sign in with Claude" and complete the fresh tab)');
+  }
+  const r = await fetch(CLAUDE_OAUTH.tokenUrl, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      grant_type: 'authorization_code', code, state: statePart || verifier,
+      client_id: CLAUDE_OAUTH.clientId, redirect_uri: CLAUDE_OAUTH.redirectUri, code_verifier: verifier,
+    }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || !j.access_token) {
+    logEvent('warn', `Claude sign-in exchange failed: HTTP ${r.status} ${JSON.stringify(j).slice(0, 250)} ` +
+      `(code ${code.length} chars [${code.slice(0, 6)}…], state ${(statePart || '').length} chars, ` +
+      `${statePart && oauthPending && statePart === oauthPending.verifier ? 'from the CURRENT sign-in attempt' : 'from an OLDER sign-in attempt/tab'})`);
+    throw httpError(400, `Authorization failed: ${j.error_description || j.error || 'HTTP ' + r.status}. ` +
+      `Each code works once — click "Sign in with Claude" for a fresh tab, approve, then paste the FULL code (both parts around "#").`);
+  }
+  const model = String(req.body?.model || '').trim() || 'claude-sonnet-4-5';
+  try { await claudeApiCall(j.access_token, model, 'Reply with the single word: ok', 16); }
+  catch (e) {
+    logEvent('warn', `Claude sign-in token validation failed: ${e.message}`);
+    throw httpError(400, `Signed in, but the token failed validation: ${e.message}`);
+  }
+  agentConfig = {
+    provider: 'claude-api', model, apiKey: j.access_token,
+    refreshToken: j.refresh_token || null, connectedAt: new Date().toISOString(),
+  };
+  oauthPending = null;
+  await fsp.writeFile(AGENT_FILE, JSON.stringify(agentConfig, null, 2), 'utf8');
+  logEvent('info', 'AI agent connected via Claude browser sign-in');
+  res.json({ ok: true, provider: 'claude-api' });
+}));
+
+async function refreshClaudeToken() {
+  if (!agentConfig?.refreshToken) return false;
+  const r = await fetch(CLAUDE_OAUTH.tokenUrl, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: agentConfig.refreshToken, client_id: CLAUDE_OAUTH.clientId }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || !j.access_token) return false;
+  agentConfig.apiKey = j.access_token;
+  if (j.refresh_token) agentConfig.refreshToken = j.refresh_token;
+  await fsp.writeFile(AGENT_FILE, JSON.stringify(agentConfig, null, 2), 'utf8');
+  logEvent('info', 'Claude sign-in token refreshed');
+  return true;
+}
+
+app.post('/api/agent/disconnect', wrap(async (req, res) => {
+  agentConfig = null;
+  agentChat.length = 0;
+  try { await fsp.unlink(AGENT_FILE); } catch {}
+  logEvent('info', 'AI agent disconnected');
+  res.json({ ok: true });
+}));
+
+app.post('/api/agent/reset', (req, res) => { agentChat.length = 0; res.json({ ok: true }); });
+
+/* switch the model live (all providers; empty string = provider default) */
+app.post('/api/agent/model', wrap(async (req, res) => {
+  if (!agentConfig?.provider) throw httpError(400, 'No AI agent connected');
+  const model = String(req.body?.model || '').trim();
+  agentConfig.model = model || null;
+  await fsp.writeFile(AGENT_FILE, JSON.stringify(agentConfig, null, 2), 'utf8');
+  logEvent('info', `AI agent model set to: ${model || '(provider default)'}`);
+  res.json({ ok: true, model: agentConfig.model });
+}));
+
+/* push an AI review of a pending change into the conversation as context */
+app.post('/api/agent/context-review', wrap(async (req, res) => {
+  if (!agentConfig?.provider) throw httpError(400, 'No AI agent connected');
+  if (!session) throw httpError(409, 'No active session');
+  const change = session.changes.find((c) => c.id === String(req.body?.changeId || ''));
+  if (!change?.aiReview || change.aiReview.status !== 'done') throw httpError(400, 'No completed review on that change');
+  const cols = change.cols.map((c) => c.column).join(', ');
+  agentChat.push({
+    role: 'note', kind: 'review',
+    verdict: change.aiReview.verdict, summary: change.aiReview.summary,
+    rule: session.ruleName, pk: change.pk, table: session.table, columns: cols,
+    text: `The user shared a prior AI review of a pending change (rule "${session.ruleName}", table ${session.table}, ${session.pkColumn}=${change.pk}, column(s) ${cols}). Verdict: ${change.aiReview.verdict}. Summary: ${change.aiReview.summary}`,
+  });
+  while (agentChat.length > 20) agentChat.shift();
+  logEvent('info', `AI review of pk=${change.pk} sent to chat as context`);
+  res.json({ ok: true });
+}));
+
+/* attach one rule to the conversation as context */
+app.post('/api/agent/context', wrap(async (req, res) => {
+  if (!agentConfig?.provider) throw httpError(400, 'No AI agent connected');
+  const rule = rules.find((r) => r.id === String(req.body?.ruleId || ''));
+  if (!rule) throw httpError(404, 'Rule not found');
+  agentChat.push({
+    role: 'note', kind: 'context', rule,
+    text: `The user attached rule "${rule.name}" (id ${rule.id}) as context for the conversation: ${JSON.stringify(rule)}`,
+  });
+  while (agentChat.length > 20) agentChat.shift();
+  logEvent('info', `AI chat context: rule "${rule.name}" attached`);
+  res.json({ ok: true, name: rule.name });
+}));
+
+app.post('/api/agent/chat', wrap(async (req, res) => {
+  if (!agentConfig?.provider) throw httpError(400, 'No AI agent connected');
+  const message = String(req.body?.message || '').trim();
+  if (!message) throw httpError(400, 'Empty message');
+  agentChat.push({ role: 'user', text: message });
+  while (agentChat.length > 20) agentChat.shift();
+  const actions = [];
+  const propBefore = agentProposals.length;
+  let transcriptExtra = '';
+  let reply = null;
+  for (let step = 0; step < 6; step++) {
+    const who = AGENT_PROVIDERS[agentConfig.provider].short + (agentConfig.model ? ` (${agentConfig.model})` : '');
+    sseBroadcast('agent', { type: 'step', step: step + 1, msg: `thinking with ${who}` });
+    const prompt = agentSystemPrompt() + '\n\n--- Conversation ---\n' +
+      agentChat.map((m) => `${m.role === 'user' ? 'User' : m.role === 'note' ? 'System note' : 'Assistant'}: ${m.text}`).join('\n\n') +
+      transcriptExtra + '\n\nAssistant:';
+    const outRaw = (await agentRun(prompt)).trim();
+    const call = parseAgentToolCall(outRaw);
+    if (!call) { sseBroadcast('agent', { type: 'final' }); reply = outRaw; break; }
+    sseBroadcast('agent', { type: 'tool', tool: call.tool, input: JSON.stringify(call.input || {}).slice(0, 140) });
+    const t0 = Date.now();
+    let result, ok = true;
+    try { result = await AGENT_TOOLS[call.tool].run(call.input || {}); }
+    catch (e) { ok = false; result = { error: e.message }; }
+    let resultStr = JSON.stringify(result);
+    if (resultStr.length > 12000) resultStr = resultStr.slice(0, 12000) + ' …(truncated)';
+    actions.push({ tool: call.tool, input: call.input || {}, ok, ms: Date.now() - t0 });
+    sseBroadcast('agent', { type: 'tool-done', tool: call.tool, ok, ms: Date.now() - t0 });
+    logEvent('info', `AI agent action: ${call.tool} ${JSON.stringify(call.input || {}).slice(0, 120)} (${Date.now() - t0}ms${ok ? '' : ', FAILED'})`);
+    transcriptExtra += `\n\nAssistant: ${outRaw}\n\nTool result for ${call.tool}: ${resultStr}`;
+  }
+  if (reply == null) reply = 'I hit the tool-step limit before finishing. Ask again more specifically.';
+  agentChat.push({ role: 'assistant', text: reply });
+  res.json({ reply, actions, proposals: agentProposals.slice(propBefore).filter((p) => p.status === 'pending') });
+}));
+
+/* ---- audit viewer: parsed tail, newest first ---- */
+app.get('/api/audit', wrap(async (req, res) => {
+  const limit = Math.min(2000, Math.max(1, Number(req.query.limit) || 500));
+  let entries = [];
+  try {
+    const lines = (await fsp.readFile(AUDIT_FILE, 'utf8')).split('\n').filter((l) => l.trim());
+    entries = lines.slice(-limit).map((l, i) => { try { const o = JSON.parse(l); o._n = i; return o; } catch { return { _raw: l }; } }).reverse();
+  } catch (e) {
+    if (e.code !== 'ENOENT') throw e;
+  }
+  const actions = [...new Set(entries.map((e) => e.action).filter(Boolean))].sort();
+  res.json({ entries, actions, total: entries.length });
 }));
 
 /* ---- audit download ---- */

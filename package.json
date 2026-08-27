@@ -35,6 +35,7 @@
     "express": "^4.21.2",
     "intro.js": "^8.5.0",
     "mysql2": "^3.11.5",
+    "php-serialize": "^4.1.1",
     "ssh2": "^1.16.0",
     "tabulator-tables": "^6.5.2"
   },

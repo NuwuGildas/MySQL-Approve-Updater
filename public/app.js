@@ -74,6 +74,10 @@ function transformRowHtml(t = {}) {
       <div><label>Type</label><select class="t-type">${opts}</select></div>
     </div>
     <div class="t-params"></div>
+    <label style="display:flex;align-items:center;gap:.4rem;margin-top:.45rem;font-size:.72rem;color:var(--muted)">
+      <input type="checkbox" class="t-ser" style="width:auto" ${t.phpSerialized ? 'checked' : ''}>
+      PHP-serialized value: transform the strings inside and auto-fix the s:N byte lengths
+    </label>
   </div>`;
 }
 
@@ -88,10 +92,12 @@ function renderParams(rowEl, type, params = {}) {
   }).join('');
 }
 
+let transformUid = 0;
 function addTransformRow(t) {
   const div = document.createElement('div');
   div.innerHTML = transformRowHtml(t);
   const row = div.firstElementChild;
+  row.dataset.uid = String(++transformUid); // lets the summary view address this row
   $('transformList').appendChild(row);
   renderParams(row, t?.type || 'findReplace', t?.params || {});
   row.querySelector('.t-type').addEventListener('change', (e) => renderParams(row, e.target.value, {}));
@@ -104,6 +110,89 @@ function updateTransformCount() {
   $('transformCount').textContent = n ? `(${n})` : '';
 }
 
+/* ---------- transforms: summarized view with drag-to-reorder ---------- */
+let transformsSummaryView = false;
+
+function renderTransformView() {
+  $('transformList').hidden = transformsSummaryView;
+  $('btnAddTransform').hidden = transformsSummaryView;
+  $('transformSummary').hidden = !transformsSummaryView;
+  $('btnTransformView').textContent = transformsSummaryView ? 'Detailed view' : 'Summary & reorder';
+  $('transformViewHint').textContent = transformsSummaryView
+    ? 'Drag the lines to change the execution order.'
+    : 'Transforms run in order; later ones see earlier results.';
+  if (transformsSummaryView) renderTransformSummary();
+}
+$('btnTransformView').addEventListener('click', () => {
+  transformsSummaryView = !transformsSummaryView;
+  renderTransformView();
+});
+
+function summarizeTransformRow(row) {
+  const type = row.querySelector('.t-type').value;
+  const col = row.querySelector('.t-col').value.trim() || '(no column)';
+  const p = {};
+  row.querySelectorAll('.t-params [data-k]').forEach((el) => { p[el.dataset.k] = el.type === 'checkbox' ? el.checked : el.value; });
+  const short = (s, n = 34) => { s = String(s ?? ''); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
+  let detail = '';
+  if (type === 'findReplace') detail = `"${short(p.find)}" → "${short(p.replace)}"${p.regex ? ' (regex)' : ''}`;
+  else if (type === 'changeCase') detail = p.mode || '';
+  else if (type === 'prefix' || type === 'suffix') detail = `"${short(p.text)}"`;
+  else if (type === 'setValue') detail = p.setNull ? 'NULL' : `"${short(p.value)}"`;
+  if (row.querySelector('.t-ser').checked) detail += ' · serialized';
+  return { type, col, detail };
+}
+
+function renderTransformSummary() {
+  const rows = [...$('transformList').querySelectorAll('.transform-row')];
+  const cont = $('transformSummary');
+  cont.innerHTML = rows.length ? '' : '<div class="empty">No transforms yet: switch to detailed view to add one.</div>';
+  rows.forEach((row, i) => {
+    const s = summarizeTransformRow(row);
+    const item = document.createElement('div');
+    item.className = 'tsum-item';
+    item.draggable = true;
+    item.dataset.uid = row.dataset.uid;
+    item.innerHTML = `<span class="tsum-grip">⣿</span><b>${i + 1}.</b>
+      <span class="tsum-type">${esc(state.transformTypes[s.type] || s.type)}</span> on <b>${esc(s.col)}</b>
+      <span class="tsum-detail">${esc(s.detail)}</span>`;
+    cont.appendChild(item);
+  });
+}
+
+(() => {
+  const cont = $('transformSummary');
+  let dragging = null;
+  cont.addEventListener('dragstart', (e) => {
+    dragging = e.target.closest('.tsum-item');
+    if (!dragging) return;
+    dragging.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    try { e.dataTransfer.setData('text/plain', ''); } catch {} // Firefox needs data to start a drag
+  });
+  cont.addEventListener('dragover', (e) => {
+    if (!dragging) return;
+    e.preventDefault();
+    const others = [...cont.querySelectorAll('.tsum-item:not(.dragging)')];
+    const after = others.find((it) => e.clientY < it.getBoundingClientRect().top + it.offsetHeight / 2);
+    if (after) cont.insertBefore(dragging, after);
+    else cont.appendChild(dragging);
+  });
+  cont.addEventListener('drop', (e) => e.preventDefault());
+  cont.addEventListener('dragend', () => {
+    if (!dragging) return;
+    dragging.classList.remove('dragging');
+    dragging = null;
+    // apply the summary order to the real editor rows (DOM moves keep all input state)
+    const list = $('transformList');
+    for (const it of cont.querySelectorAll('.tsum-item')) {
+      const row = list.querySelector(`.transform-row[data-uid="${CSS.escape(it.dataset.uid)}"]`);
+      if (row) list.appendChild(row);
+    }
+    renderTransformSummary(); // renumber
+  });
+})();
+
 function readTransforms() {
   return [...$('transformList').querySelectorAll('.transform-row')].map((row) => {
     const type = row.querySelector('.t-type').value;
@@ -111,34 +200,85 @@ function readTransforms() {
     row.querySelectorAll('.t-params [data-k]').forEach((el) => {
       params[el.dataset.k] = el.type === 'checkbox' ? el.checked : el.value;
     });
-    return { column: row.querySelector('.t-col').value.trim(), type, params };
+    return {
+      column: row.querySelector('.t-col').value.trim(),
+      type,
+      params,
+      phpSerialized: row.querySelector('.t-ser').checked,
+    };
   });
 }
 
 /* ---------- Rules list ---------- */
+const RULE_ICONS = {
+  trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6"/></svg>',
+  edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
+  copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>',
+  exp: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 21h16"/></svg>',
+  chat: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-8.5 8.5 8.5 8.5 0 0 1-3.5-.76L3 21l1.76-5.27A8.38 8.38 0 0 1 4 11.5 8.5 8.5 0 0 1 12.5 3a8.38 8.38 0 0 1 8.5 8.5Z"/><path d="M12.5 8.5v6M9.5 11.5h6"/></svg>',
+};
+
 async function loadRules() {
   state.rules = await api('/api/rules');
-  const list = $('ruleList');
-  $('ruleCount').textContent = state.rules.length ? `(${state.rules.length})` : '';
-  list.innerHTML = state.rules.length ? '' : '<div class="empty">No rules yet — create one below.</div>';
-  for (const r of state.rules) {
+  const saved = state.rules.filter((r) => !r.draft);
+  const drafts = state.rules.filter((r) => r.draft);
+  $('ruleCount').textContent = saved.length ? `(${saved.length})` : '';
+  $('draftCount').textContent = drafts.length ? `(${drafts.length})` : '';
+  const fill = (elId, items, emptyMsg) => {
+    const list = $(elId);
+    list.innerHTML = items.length ? '' : `<div class="empty">${emptyMsg}</div>`;
+    for (const r of items) list.appendChild(makeRuleCard(r));
+  };
+  fill('ruleList', saved, 'No rules yet: use "+ New rule".');
+  fill('draftList', drafts, 'No drafts. Use "Save as draft" in the rule editor.');
+  updateRuleHighlight();
+}
+
+function makeRuleCard(r) {
+  {
     const el = document.createElement('div');
     el.className = 'rule-item';
     el.dataset.ruleId = r.id;
-    el.innerHTML = `<div class="name">${esc(r.name)} <span class="badge runbadge" hidden></span><span class="meta">${esc(r.table)} · ${r.transforms.length} transform(s) · limit ${r.limit}</span></div>
-      <button class="primary" data-act="preview">Run preview</button>
-      <button data-act="edit">Edit</button>
-      <button data-act="sql" title="Download the SQL this rule generates">SQL</button>
-      <button data-act="delete" title="Delete rule">✕</button>`;
+    el.innerHTML = `
+      <div class="r1">
+        <div class="name">${esc(r.name)} ${r.draft ? '<span class="badge draftbadge">draft</span>' : ''}<span class="badge runbadge" hidden></span><span class="meta">${esc(r.table)} · ${r.transforms.length} transform(s) · limit ${r.limit}</span></div>
+        <button class="iconbtn danger" data-act="delete" title="Delete rule">${RULE_ICONS.trash}</button>
+      </div>
+      <div class="r2">
+        <button class="primary" data-act="preview" ${r.draft ? 'disabled title="Drafts cannot run previews: open it and use Save rule to publish"' : ''}>Run preview</button>
+        <button class="iconbtn" data-act="edit" title="Edit rule">${RULE_ICONS.edit}</button>
+        <button class="iconbtn" data-act="dup" title="Duplicate this rule and edit the copy">${RULE_ICONS.copy}</button>
+        <button class="iconbtn" data-act="export" title="Export the rule definition as JSON">${RULE_ICONS.exp}</button>
+        <button class="iconbtn addchat" data-act="addchat" title="Add this rule to the AI chat as context">${RULE_ICONS.chat}</button>
+        <button data-act="sql" title="Download the SQL this rule generates">SQL</button>
+      </div>`;
     el.addEventListener('click', async (e) => {
-      const act = e.target.dataset?.act;
+      const btn = e.target.closest?.('[data-act]'); // clicks land on the SVGs inside the buttons
+      const act = btn?.dataset.act;
       if (!act) return;
       try {
         if (act === 'preview') {
-          e.target.disabled = true; e.target.textContent = 'Fetching…';
+          btn.disabled = true; btn.textContent = 'Fetching…';
+          showQueueLoading(r.name); // spinner in the approval queue until the preview lands
           await api(`/api/rules/${r.id}/preview`, { method: 'POST' });
         } else if (act === 'edit') {
-          fillForm(r);
+          openRuleModal(r);
+        } else if (act === 'dup') {
+          openRuleModal({ ...r, id: '', name: r.name + ' (copy)' }, '- duplicate: adjust and save as a new rule');
+        } else if (act === 'addchat') {
+          await api('/api/agent/context', { method: 'POST', body: JSON.stringify({ ruleId: r.id }) });
+          if ($('agentDrawer').classList.contains('open')) {
+            appendAgentMsg('note', '', null, { kind: 'context', rule: r });
+            $('agentInput').focus();
+          } else {
+            openAgent(); // re-fetches the conversation, which now includes the context note
+          }
+        } else if (act === 'export') {
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(new Blob([JSON.stringify(r, null, 2)], { type: 'application/json' }));
+          a.download = `rule-${r.name.replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 60)}.json`;
+          a.click();
+          URL.revokeObjectURL(a.href);
         } else if (act === 'sql') {
           const res = await fetch(`/api/rules/${r.id}/sql`);
           if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
@@ -156,19 +296,18 @@ async function loadRules() {
           });
           if (ok) { await api(`/api/rules/${r.id}`, { method: 'DELETE' }); loadRules(); }
         }
-      } catch (err) { toast(err.message); }
-      finally { if (act === 'preview') { e.target.disabled = false; e.target.textContent = 'Run preview'; } }
+      } catch (err) { toast(err.message); if (act === 'preview') { queueLoading = false; renderQueue(); } }
+      finally { if (act === 'preview') { btn.disabled = false; btn.textContent = 'Run preview'; } }
     });
-    list.appendChild(el);
+    return el;
   }
-  updateRuleHighlight();
 }
 
 /* Mark the rule whose session is currently active */
 function updateRuleHighlight() {
   const s = state.session;
   const activeRuleId = s && ['running', 'paused'].includes(s.status) ? s.ruleId : null;
-  document.querySelectorAll('#ruleList .rule-item').forEach((el) => {
+  document.querySelectorAll('#ruleList .rule-item, #draftList .rule-item').forEach((el) => {
     const isActive = el.dataset.ruleId === activeRuleId;
     el.classList.toggle('running', isActive);
     const badge = el.querySelector('.runbadge');
@@ -192,27 +331,77 @@ function fillForm(r) {
   $('rDisplay').value = (r?.displayColumns || []).join(', ');
   $('transformList').innerHTML = '';
   (r?.transforms?.length ? r.transforms : [undefined]).forEach(addTransformRow);
-  $('editorHint').textContent = r ? `— editing "${r.name}"` : '';
-  if (r) $('secEditor').open = true; // jump the editor open when a rule is loaded into it
   updateColDatalist();
 }
 
-$('ruleForm').addEventListener('submit', async (e) => {
-  e.preventDefault();
+async function saveRule(asDraft) {
   const body = {
     name: $('rName').value, table: $('rTable').value.trim(), pkColumn: $('rPk').value.trim(),
     where: $('rWhere').value, limit: Number($('rLimit').value) || undefined,
     displayColumns: $('rDisplay').value, transforms: readTransforms(),
+    draft: asDraft,
   };
   const id = $('rId').value;
   try {
     await api(id ? `/api/rules/${id}` : '/api/rules', { method: id ? 'PUT' : 'POST', body: JSON.stringify(body) });
-    fillForm(null);
+    if ($('ruleModal').open) $('ruleModal').close();
     loadRules();
   } catch (err) { toast(err.message); }
+}
+$('ruleForm').addEventListener('submit', (e) => { e.preventDefault(); saveRule(false); });
+$('btnSaveDraft').addEventListener('click', () => { if ($('ruleForm').reportValidity()) saveRule(true); });
+/* ---------- rule editor modal: the only place rules are edited ---------- */
+function openRuleModal(rule, hint) {
+  fillForm(rule);
+  transformsSummaryView = false; // always open in the editable detailed view
+  renderTransformView();
+  $('ruleModalHint').textContent = hint ?? (rule?.id ? `- editing ${rule.draft ? 'draft ' : ''}"${rule.name}"` : '- new rule');
+  $('ruleModal').showModal();
+  $('rName').focus();
+  if (rule && !rule.id) $('rName').select(); // duplicates: name is preselected for renaming
+}
+$('btnNewRule').addEventListener('click', () => openRuleModal(null));
+
+/* ---------- rule import (single rule object or an array of rules) ---------- */
+$('btnImportRules').addEventListener('click', () => $('ruleImportFile').click());
+$('ruleImportFile').addEventListener('change', async () => {
+  const files = [...$('ruleImportFile').files];
+  $('ruleImportFile').value = '';
+  if (!files.length) return;
+  let imported = 0, failed = 0, firstError = '';
+  for (const file of files) {
+    let parsed;
+    try { parsed = JSON.parse(await file.text()); }
+    catch (e) { failed++; if (!firstError) firstError = `${file.name}: not valid JSON`; continue; }
+    const items = Array.isArray(parsed) ? parsed : [parsed];
+    for (const r of items) {
+      if (!r || typeof r !== 'object' || !r.name || !r.table || !Array.isArray(r.transforms)) {
+        failed++;
+        if (!firstError) firstError = `${file.name}: entry is not a rule (needs name, table, transforms)`;
+        continue;
+      }
+      try {
+        // fresh id via POST: imports can never overwrite existing rules
+        await api('/api/rules', {
+          method: 'POST',
+          body: JSON.stringify({
+            name: r.name, table: r.table, pkColumn: r.pkColumn, where: r.where, limit: r.limit,
+            displayColumns: Array.isArray(r.displayColumns) ? r.displayColumns.join(', ') : (r.displayColumns || ''),
+            transforms: r.transforms, draft: !!r.draft,
+          }),
+        });
+        imported++;
+      } catch (e) {
+        failed++;
+        if (!firstError) firstError = `${file.name} (${r.name}): ${e.message}`;
+      }
+    }
+  }
+  loadRules();
+  toast(`Import: ${imported} rule(s) imported${failed ? `, ${failed} failed (${firstError})` : ''}`);
 });
-$('btnNewRule').addEventListener('click', () => { fillForm(null); $('secEditor').open = true; $('rName').focus(); });
-$('btnCancelEdit').addEventListener('click', () => fillForm(null));
+$('btnCloseRuleModal').addEventListener('click', () => $('ruleModal').close());
+$('btnCancelEdit').addEventListener('click', () => $('ruleModal').close());
 $('btnAddTransform').addEventListener('click', () => addTransformRow());
 
 /* ---------- Schema autocomplete ---------- */
@@ -223,7 +412,7 @@ $('btnLoadSchema').addEventListener('click', async () => {
     $('tableList').innerHTML = Object.keys(state.schema.tables).map((t) => `<option value="${esc(t)}">`).join('');
     updateColDatalist();
     updateSqlHints();
-    toast(`Schema loaded: ${Object.keys(state.schema.tables).length} tables — SQL console autocomplete active`);
+    toast(`Schema loaded: ${Object.keys(state.schema.tables).length} tables - SQL console autocomplete active`);
   } catch (err) { toast('Schema load failed: ' + err.message); }
   finally { $('btnLoadSchema').textContent = 'Load schema'; }
 });
@@ -303,7 +492,7 @@ function makeSegPusher(segs) {
 }
 
 /* Fine, token-level diff. Degrades to a single del+ins block when the edit
- * distance exceeds the Myers cap — callers keep the regions it sees small. */
+ * distance exceeds the Myers cap - callers keep the regions it sees small. */
 function fineDiffSegs(beforeStr, afterStr) {
   const a = tokenize(beforeStr), b = tokenize(afterStr);
   let start = 0;
@@ -404,9 +593,9 @@ function updateToolbar() {
   $('btnBatchApprove').disabled = !canAct || !hasSel;
   $('btnBatchReject').disabled = !canAct || !hasSel;
   $('btnBatchSkip').disabled = !canAct || !hasSel;
-  const showBackup = s && s.changes.length ? '' : 'none';
-  $('lnkBackupSql').style.display = showBackup;
-  $('lnkBackupJson').style.display = showBackup;
+  if ($('btnReviewSel') && !reviewingAll) $('btnReviewSel').disabled = !s || !hasSel;
+  $('backupSelect').style.display = s && s.changes.length ? '' : 'none';
+  $('btnClearAll').disabled = !s;
   $('backupWarn').style.display =
     s && s.changes.length && !s.backupDownloaded && (s.counts?.pending || 0) > 0 ? '' : 'none';
   updateRuleHighlight();
@@ -420,7 +609,7 @@ async function confirmNoBackup(extra) {
   const ok = await confirmDialog({
     title: 'No backup downloaded',
     message: `A restore script was auto-saved on the server (<code>${esc(s.backupFile || 'backups/')}</code>), but you have no local copy.<br>` +
-      `Use the <b>Backup .sql</b> button in the queue toolbar to download one first.<br><br>${esc(extra)}`,
+      `Use the <b>Backup…</b> menu in the queue toolbar to download one first.<br><br>${esc(extra)}`,
     okLabel: 'Proceed without backup', okClass: 'warn',
     cancelLabel: 'Go back',
   });
@@ -428,28 +617,54 @@ async function confirmNoBackup(extra) {
   return ok;
 }
 
+let queueLoading = false;
+function showQueueLoading(ruleName) {
+  queueLoading = true;
+  $('queue').innerHTML = `<div class="queue-loading">
+    <div class="ql-head"><span class="spinner"></span>Running preview${ruleName ? ` for "${esc(ruleName)}"` : ''}…</div>
+    <div class="ql-steps" id="queueSteps"></div>
+  </div>`;
+}
+function queueStep(text) {
+  if (!queueLoading) return;
+  const steps = $('queueSteps');
+  if (!steps) return;
+  // mark the previous step done, add the new active one
+  const prev = steps.lastElementChild;
+  if (prev) prev.classList.replace('active', 'ql-done');
+  const el = document.createElement('div');
+  el.className = 'ql-step active';
+  el.textContent = text;
+  steps.appendChild(el);
+}
+
 function renderQueue() {
   const q = $('queue');
   const s = state.session;
+  if (queueLoading) return; // a preview is in flight; the loader stays until its session arrives
   foldStore.length = 0;
   // selection only ever holds ids that are still pending
   if (s) {
     const pendingIds = new Set(s.changes.filter((c) => c.status === 'pending').map((c) => c.id));
     for (const id of [...selected]) if (!pendingIds.has(id)) selected.delete(id);
-    for (const key of [...editorOpen.keys()]) if (!pendingIds.has(key.slice(0, key.indexOf(':')))) editorOpen.delete(key);
-  } else { selected.clear(); editorOpen.clear(); }
-  $('queueRule').textContent = s ? `— ${s.ruleName} on ${s.table} [${s.status}]` : '';
+    for (const key of [...editorOpen.keys()]) if (!pendingIds.has(key.slice(0, key.indexOf(':')))) closeEditor(key);
+  } else { selected.clear(); editorOpen.clear(); editorSerialized.clear(); editorBeforeJson.clear(); }
+  $('queueRule').textContent = s ? `- ${s.ruleName} on ${s.table} [${s.status}]` : '';
   $('sessStatus').textContent = s ? `${s.ruleName}: ${s.status}` : 'no session';
   $('btnPause').disabled = !s || s.status !== 'running';
   $('btnResume').disabled = !s || s.status !== 'paused';
   $('btnAbort').disabled = !s || ['aborted','done'].includes(s.status);
-  if (!s) { q.innerHTML = '<div class="empty">Run a preview to load changes.</div>'; return; }
+  if (!s) {
+    q.innerHTML = '<div class="empty">Run a preview to load changes.</div>';
+    updateToolbar(); // the early return must not skip toolbar state (buttons, backup links)
+    return;
+  }
 
   const pending = s.changes.filter((c) => c.status === 'pending');
   const settledRecent = s.changes.filter((c) => c.status !== 'pending').slice(-6).reverse();
   let html = '';
   if (!pending.length) {
-    html += `<div class="empty">No pending changes${s.changes.length ? ` — ${s.changes.length} processed.` : ' (nothing matched or nothing would change).'}</div>`;
+    html += `<div class="empty">No pending changes${s.changes.length ? ` - ${s.changes.length} processed.` : ' (nothing matched or nothing would change).'}</div>`;
   }
   pending.slice(0, MAX_CARDS).forEach((c, i) => { html += cardHtml(c, s, i === 0); });
   if (pending.length > MAX_CARDS) html += `<div class="empty">…and ${pending.length - MAX_CARDS} more pending.</div>`;
@@ -471,10 +686,56 @@ function renderQueue() {
     });
   });
   q.querySelectorAll('[data-expand]').forEach((b) => b.addEventListener('click', () => openCardModal(b.dataset.expand)));
+  wireAiReviewButtons(q);
   q.querySelectorAll('[data-editopen]').forEach((b) => b.addEventListener('click', () => {
     openColumnEditor(b.dataset.cid, b.dataset.col); // editing happens in the large card view
   }));
   updateToolbar();
+}
+
+const AI_SPARK = '<svg class="spark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9Z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8Z"/></svg>';
+
+function aiReviewStrip(c) {
+  const r = c.aiReview;
+  if (!r) return '';
+  if (r.status === 'pending') return `<div class="ai-review pending">${AI_SPARK}<span>AI review running…</span></div>`;
+  if (r.status === 'error') return `<div class="ai-review bad">${AI_SPARK}<span>AI review failed: ${esc(r.summary || '')}</span></div>`;
+  const send = `<button type="button" class="ai-send" data-sendreview="${c.id}" title="Send this review to the AI chat as context">Send to chat</button>`;
+  return `<div class="ai-review ${esc(r.verdict)}">${AI_SPARK}<span class="airv-verdict">${esc(r.verdict)}</span><span class="airv-text">${esc(r.summary || '')}</span>${send}</div>`;
+}
+
+/* wire the AI-review + send-to-chat buttons inside a container (card list or modal) */
+function wireAiReviewButtons(root) {
+  root.querySelectorAll('[data-review]').forEach((b) => b.addEventListener('click', async () => {
+    b.disabled = true;
+    b.querySelector('span').textContent = 'Reviewing…';
+    try { await api('/api/session/review/' + b.dataset.review, { method: 'POST' }); }
+    catch (e) { toast(e.message); b.disabled = false; b.querySelector('span').textContent = 'AI review'; }
+  }));
+  root.querySelectorAll('[data-sendreview]').forEach((b) => b.addEventListener('click', async () => {
+    b.disabled = true;
+    try {
+      await api('/api/agent/context-review', { method: 'POST', body: JSON.stringify({ changeId: b.dataset.sendreview }) });
+      b.textContent = 'Sent ✓';
+      const c = state.session?.changes.find((x) => x.id === b.dataset.sendreview);
+      if ($('agentDrawer').classList.contains('open')) {
+        // drawer already open: append the review card live instead of only on reopen
+        if (c?.aiReview) appendAgentMsg('note', '', null, {
+          kind: 'review', verdict: c.aiReview.verdict, summary: c.aiReview.summary,
+          rule: state.session.ruleName, table: state.session.table, pk: c.pk,
+          columns: c.cols.map((x) => x.column).join(', '),
+        });
+      } else {
+        openAgent(); // refetches the conversation, which now includes the note
+      }
+    } catch (e) { toast(e.message); b.disabled = false; }
+  }));
+}
+
+function aiReviewButton(c) {
+  if (c.status !== 'pending') return '';
+  const busy = c.aiReview?.status === 'pending';
+  return `<button type="button" class="aireview glossy" data-review="${c.id}" ${busy ? 'disabled' : ''} title="Ask the connected AI to review this change">${AI_SPARK}<span>${busy ? 'Reviewing…' : 'AI review'}</span></button>`;
 }
 
 function cardHtml(c, s, active) {
@@ -492,6 +753,7 @@ function cardHtml(c, s, active) {
         <button class="approve" data-decide="approve" data-id="${c.id}">Approve${active?' <kbd>A</kbd>':''}</button>
         <button class="reject" data-decide="reject" data-id="${c.id}">Reject${active?' <kbd>R</kbd>':''}</button>
         <button data-decide="skip" data-id="${c.id}">Skip${active?' <kbd>S</kbd>':''}</button>
+        ${aiReviewButton(c)}
       </div>`
     : `<span class="badge ${c.status}">${c.status}</span>`;
   const selBox = c.status === 'pending'
@@ -504,6 +766,7 @@ function cardHtml(c, s, active) {
         <button type="button" data-expand="${c.id}" title="Open in large view">⤢</button>
       </span></div>
     ${diffs}
+    ${aiReviewStrip(c)}
     ${c.status === 'pending' ? actions : ''}
     ${c.note ? `<div class="note">${esc(c.note)}</div>` : ''}${staleInfo}
   </div>`;
@@ -518,14 +781,14 @@ function findChangeCol(key) {
 }
 
 // A textarea always normalizes its value to \n, so DB values with \r\n must be
-// normalized the same way before diffing — otherwise every line looks changed.
+// normalized the same way before diffing - otherwise every line looks changed.
 const normNl = (v) => String(v ?? '').replace(/\r\n?/g, '\n');
 
 function syncEditBackdrop(area) {
   const back = area.parentElement.querySelector('.editback');
   const col = findChangeCol(area.dataset.key);
   if (!back || !col) return;
-  const segs = diffSegments(normNl(col.before), area.value);
+  const segs = diffSegments(editorBeforeText(area.dataset.key, col), area.value);
   let html = '';
   for (const s of segs) {
     if (s.op === -1) continue; // removed text does not exist in the draft
@@ -544,10 +807,41 @@ function openCardModal(changeId) {
   if (!$('cardModal').open) $('cardModal').showModal();
 }
 
+/* serialized-value editing state */
+const editorSerialized = new Set();   // keys whose editor shows decoded JSON
+const editorBeforeJson = new Map();   // key → decoded BEFORE value, for meaningful diffs
+function closeEditor(key) {
+  editorOpen.delete(key);
+  editorSerialized.delete(key);
+  editorBeforeJson.delete(key);
+}
+/* the text the live diff should compare the draft against */
+function editorBeforeText(key, col) {
+  return editorSerialized.has(key) ? String(editorBeforeJson.get(key) ?? '') : normNl(col.before);
+}
+
 /* Open the large view with one column's editor active, cursor on the first change */
-function openColumnEditor(cid, colName) {
+async function openColumnEditor(cid, colName) {
   const key = cid + ':' + colName;
-  if (!editorOpen.has(key)) editorOpen.set(key, null); // null draft = start from the proposed value
+  if (!editorOpen.has(key)) {
+    const col = findChangeCol(key);
+    const after = String(col?.after ?? '').trim();
+    if (col && /^(a|O):\d+:|^s:\d+:"/.test(after)) {
+      // PHP-serialized: edit the decoded structure as JSON, re-serialize on save
+      try {
+        const dec = await api('/api/php', { method: 'POST', body: JSON.stringify({ mode: 'decode', value: String(col.after ?? '') }) });
+        editorOpen.set(key, dec.json);
+        editorSerialized.add(key);
+        try {
+          editorBeforeJson.set(key, (await api('/api/php', { method: 'POST', body: JSON.stringify({ mode: 'decode', value: String(col.before ?? '') }) })).json);
+        } catch { editorBeforeJson.set(key, String(col.before ?? '')); }
+      } catch {
+        editorOpen.set(key, null); // not decodable (e.g. unknown PHP classes): raw editing
+      }
+    } else {
+      editorOpen.set(key, null); // null draft = start from the proposed value
+    }
+  }
   openCardModal(cid);
   focusEditor(key);
 }
@@ -557,7 +851,7 @@ function focusEditor(key) {
   const col = findChangeCol(key);
   if (!area || !col) return;
   area.focus();
-  const segs = diffSegments(normNl(col.before), area.value);
+  const segs = diffSegments(editorBeforeText(key, col), area.value);
   let pos = 0, start = -1, len = 0;
   for (const s of segs) {
     if (s.op === -1) continue;
@@ -582,10 +876,12 @@ function renderCardModal() {
     const edited = col.manualEdit ? '<span class="editedmark" title="Proposed value was manually edited">edited</span>' : '';
     const editBtn = c.status === 'pending' && !editorOpen.has(key)
       ? `<button type="button" class="editbtn" data-editopen="1" data-cid="${c.id}" data-col="${esc(col.column)}">✎ Edit</button>` : '';
+    const serialized = editorSerialized.has(key);
     const body = editorOpen.has(key)
-      ? `<div class="editwrap"><div class="editback"></div><textarea class="editArea" data-key="${esc(key)}" rows="5">${esc(editorOpen.get(key) ?? (col.after ?? ''))}</textarea></div>
+      ? `${serialized ? '<div class="hint" style="margin:0 0 .3rem">PHP-serialized value, decoded to JSON for editing. It is validated and re-serialized (byte lengths fixed) on save.</div>' : ''}
+         <div class="editwrap"><div class="editback"></div><textarea class="editArea" data-key="${esc(key)}" rows="5">${esc(editorOpen.get(key) ?? (col.after ?? ''))}</textarea></div>
          <div class="actions">
-           <button type="button" class="primary" data-editsave="1" data-cid="${c.id}" data-col="${esc(col.column)}">Save proposed value</button>
+           <button type="button" class="primary" data-editsave="1" data-cid="${c.id}" data-col="${esc(col.column)}">${serialized ? 'Re-serialize and save' : 'Save proposed value'}</button>
            <button type="button" data-editcancel="1" data-cid="${c.id}" data-col="${esc(col.column)}">Cancel</button>
          </div>`
       : diffHtml(col.before, col.after, key, false);
@@ -596,16 +892,18 @@ function renderCardModal() {
         <button class="approve" data-decide="approve" data-id="${c.id}">Approve <kbd>A</kbd></button>
         <button class="reject" data-decide="reject" data-id="${c.id}">Reject <kbd>R</kbd></button>
         <button data-decide="skip" data-id="${c.id}">Skip <kbd>S</kbd></button>
+        ${aiReviewButton(c)}
       </div>` : '';
   const staleInfo = c.status === 'stale' && c.currentValues
     ? `<div class="note">Current DB value(s): ${esc(JSON.stringify(c.currentValues))}. Re-run the preview to act on this row.</div>` : '';
   $('cardModalBody').innerHTML = `<div class="card ${c.status}">
     <div class="head"><span class="pk">${esc(s.pkColumn)} = ${esc(c.pk)}</span><span class="ident">${ident}</span>
       ${c.status !== 'pending' ? `<span class="badge ${c.status}">${c.status}</span>` : ''}</div>
-    ${diffs}${actions}
+    ${diffs}${aiReviewStrip(c)}${actions}
     ${c.note ? `<div class="note">${esc(c.note)}</div>` : ''}${staleInfo}
   </div>`;
   const body = $('cardModalBody');
+  wireAiReviewButtons(body);
   body.querySelectorAll('[data-decide]').forEach((btn) => {
     btn.addEventListener('click', () => decide(btn.dataset.id, btn.dataset.decide));
   });
@@ -613,7 +911,7 @@ function renderCardModal() {
     openColumnEditor(b.dataset.cid, b.dataset.col);
   }));
   body.querySelectorAll('[data-editcancel]').forEach((b) => b.addEventListener('click', () => {
-    editorOpen.delete(b.dataset.cid + ':' + b.dataset.col);
+    closeEditor(b.dataset.cid + ':' + b.dataset.col);
     renderCardModal();
   }));
   body.querySelectorAll('.editArea').forEach((t) => {
@@ -631,18 +929,24 @@ function renderCardModal() {
     const key = b.dataset.cid + ':' + b.dataset.col;
     const area = body.querySelector(`.editArea[data-key="${CSS.escape(key)}"]`);
     if (!area) return;
-    // the textarea normalized \r\n to \n — restore the original convention so a
-    // manual edit doesn't rewrite every line ending in the column
     const col = findChangeCol(key);
-    const newValue = col && /\r\n/.test(String(col.before ?? ''))
-      ? area.value.replace(/\n/g, '\r\n')
-      : area.value;
+    let newValue;
+    if (editorSerialized.has(key)) {
+      // JSON draft → validate and re-serialize server-side; bad JSON stays in the editor
+      try {
+        newValue = (await api('/api/php', { method: 'POST', body: JSON.stringify({ mode: 'encode', value: area.value }) })).serialized;
+      } catch (err) { toast(err.message); return; }
+    } else {
+      // the textarea normalized \r\n to \n - restore the original convention so a
+      // manual edit doesn't rewrite every line ending in the column
+      newValue = col && /\r\n/.test(String(col.before ?? '')) ? area.value.replace(/\n/g, '\r\n') : area.value;
+    }
     try {
       await api('/api/session/edit', {
         method: 'POST',
         body: JSON.stringify({ changeId: b.dataset.cid, column: b.dataset.col, newValue }),
       });
-      editorOpen.delete(key); // the SSE change event re-renders with the new diff
+      closeEditor(key); // the SSE change event re-renders with the new diff
     } catch (err) { toast(err.message); }
   }));
 }
@@ -683,6 +987,49 @@ function renderDashboard() {
   const seg = (n, color) => total ? `<div style="width:${(n/total*100)}%;background:${color}"></div>` : '';
   $('bar').innerHTML = seg(c.approved,'var(--green)')+seg(c.rejected,'var(--red)')+seg(c.skipped,'var(--amber)')+seg(c.failed,'#7a2727')+seg(c.stale,'var(--purple)');
   $('barLabel').textContent = total ? `${done} / ${total} decided` : 'no active session';
+  renderReviewSummary();
+}
+
+/* review roll-up under the activity log: counts + approve-the-OK-ones */
+function renderReviewSummary() {
+  const box = $('reviewSummary');
+  const s = state.session;
+  const reviewed = s ? s.changes.filter((c) => c.status === 'pending' && c.aiReview && ['done', 'error'].includes(c.aiReview.status)) : [];
+  if (!reviewed.length) { box.hidden = true; box.innerHTML = ''; return; }
+  const n = { ok: 0, warn: 0, bad: 0, error: 0 };
+  for (const c of reviewed) n[c.aiReview.status === 'error' ? 'error' : c.aiReview.verdict]++;
+  const canApprove = s.status === 'running' && n.ok > 0;
+  box.hidden = false;
+  box.innerHTML = `
+    <h2 style="margin-top:1rem">AI review summary</h2>
+    <div class="rs-counts">
+      <span class="rs ok">${n.ok} OK</span>
+      <span class="rs warn">${n.warn} warn</span>
+      <span class="rs bad">${n.bad} bad</span>
+      ${n.error ? `<span class="rs err">${n.error} error</span>` : ''}
+    </div>
+    <button id="btnApproveOk" class="approve" ${canApprove ? '' : 'disabled'}>Approve all OK-reviewed (${n.ok})</button>`;
+  const btn = $('btnApproveOk');
+  if (btn) btn.addEventListener('click', approveReviewedOk);
+}
+
+async function approveReviewedOk() {
+  const s = state.session;
+  if (!s) return;
+  const ids = s.changes.filter((c) => c.status === 'pending' && c.aiReview?.status === 'done' && c.aiReview.verdict === 'ok').map((c) => c.id);
+  if (!ids.length) { toast('No OK-reviewed pending changes'); return; }
+  if (!(await confirmNoBackup(`Approve ${ids.length} OK-reviewed row(s) anyway?`))) return;
+  const ok = await confirmDialog({
+    title: 'Approve OK-reviewed changes',
+    message: `Approve the <b>${ids.length}</b> change(s) the AI reviewed as <b>OK</b>? Each is written individually with the usual stale guard; warn/bad/unreviewed changes are left untouched for you to handle.`,
+    okLabel: `Approve ${ids.length}`, okClass: 'approve',
+  });
+  if (!ok) return;
+  try {
+    const r = await api('/api/session/batch', { method: 'POST', body: JSON.stringify({ changeIds: ids, action: 'approve' }) });
+    const parts = Object.entries(r.results).map(([k, v]) => `${v} ${k}`).join(', ');
+    toast(`Approved OK-reviewed: ${parts || 'nothing'}${r.stopped ? ' - stopped: ' + r.stopped : ''}`);
+  } catch (e) { toast(e.message); }
 }
 
 function appendLog(entry) {
@@ -694,6 +1041,36 @@ function appendLog(entry) {
   while (log.children.length > 300) log.removeChild(log.firstChild);
   log.scrollTop = log.scrollHeight;
 }
+
+$('backupSelect').addEventListener('change', async () => {
+  const fmt = $('backupSelect').value;
+  $('backupSelect').value = '';
+  if (!fmt) return;
+  try {
+    const res = await fetch('/api/session/backup?format=' + fmt);
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = (res.headers.get('content-disposition')?.match(/filename="(.+)"/) || [])[1] || `backup.${fmt}`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  } catch (e) { toast('Backup failed: ' + e.message); }
+});
+
+$('btnClearAll').addEventListener('click', async () => {
+  const s = state.session;
+  if (!s) return;
+  const pending = s.counts?.pending ?? 0;
+  const ok = await confirmDialog({
+    title: 'Clear preview',
+    message: `Clear the current preview and reset the queue?<br>` +
+      `${pending ? `<b>${pending}</b> pending change(s) will be discarded and ` : ''}<b>nothing</b> is written to the database. ` +
+      `Rows you already approved stay committed (they are in the audit log and backups).`,
+    okLabel: 'Clear all', okClass: 'warn',
+  });
+  if (ok) api('/api/session/clear', { method: 'POST' }).catch((e) => toast(e.message));
+});
 
 /* ---------- Batch actions ---------- */
 let batching = false;
@@ -715,7 +1092,7 @@ async function batch(action) {
   try {
     const r = await api('/api/session/batch', { method: 'POST', body: JSON.stringify({ changeIds: [...selected], action }) });
     const parts = Object.entries(r.results).map(([k, v]) => `${v} ${k}`).join(', ');
-    toast(`Batch ${action}: ${parts || 'nothing done'}${r.stopped ? ' — stopped: ' + r.stopped : ''}`);
+    toast(`Batch ${action}: ${parts || 'nothing done'}${r.stopped ? ' - stopped: ' + r.stopped : ''}`);
   } catch (e) { toast(e.message); }
   finally { batching = false; }
 }
@@ -725,6 +1102,58 @@ $('btnBatchSkip').addEventListener('click', () => batch('skip'));
 $('btnSelAll').addEventListener('click', () => {
   (state.session?.changes || []).forEach((c) => { if (c.status === 'pending') selected.add(c.id); });
   renderQueue();
+});
+
+// resolves when a change's SSE-updated review reaches a terminal state
+function waitForReview(changeId, timeoutMs = 240000) {
+  return new Promise((resolve) => {
+    const t0 = Date.now();
+    const tick = () => {
+      const c = state.session?.changes.find((x) => x.id === changeId);
+      if (!c || !state.session) return resolve();
+      if (c.aiReview && ['done', 'error'].includes(c.aiReview.status)) return resolve();
+      if (Date.now() - t0 > timeoutMs) return resolve();
+      setTimeout(tick, 250);
+    };
+    tick();
+  });
+}
+
+let reviewingAll = false;
+$('btnReviewSel').addEventListener('click', async () => {
+  if (reviewingAll || !state.session) return;
+  if (!selected.size) { toast('Select one or more changes first'); return; }
+  // review selected pending changes without a completed/in-flight review
+  const todo = state.session.changes.filter((c) =>
+    selected.has(c.id) && c.status === 'pending' && !['pending', 'done'].includes(c.aiReview?.status));
+  if (!todo.length) { toast('Selected changes are already reviewed'); return; }
+  const ok = await confirmDialog({
+    title: 'AI review selected',
+    message: `Run an AI review on <b>${todo.length}</b> selected change(s)? Each is one AI call, done one at a time - this can take a while and consumes usage.`,
+    okLabel: `Review ${todo.length}`, okClass: 'primary',
+  });
+  if (!ok) return;
+  reviewingAll = true;
+  const btn = $('btnReviewSel');
+  const label = btn.querySelector('span');
+  btn.disabled = true;
+  try {
+    for (let i = 0; i < todo.length; i++) {
+      if (!state.session) break; // session cleared/aborted mid-run
+      label.textContent = `Reviewing ${i + 1}/${todo.length}…`;
+      try {
+        await api('/api/session/review/' + todo[i].id, { method: 'POST' });
+        // the endpoint returns before the LLM finishes (result arrives via SSE);
+        // wait for THIS review to settle before starting the next one
+        await waitForReview(todo[i].id);
+      } catch { /* per-change failure already surfaces on its card; keep going */ }
+    }
+  } finally {
+    reviewingAll = false;
+    btn.disabled = false;
+    label.textContent = 'AI review selected';
+    updateToolbar();
+  }
 });
 $('btnSelNone').addEventListener('click', () => { selected.clear(); renderQueue(); });
 
@@ -739,20 +1168,37 @@ async function refreshHeader() {
 async function loadConns() {
   conns = await api('/api/connections');
   const list = $('connList');
-  list.innerHTML = conns.profiles.length ? '' : '<div class="empty">No saved connections — create one below.</div>';
+  list.innerHTML = conns.profiles.length ? '' : '<div class="empty">No saved connections - create one below.</div>';
   for (const p of conns.profiles) {
     const isActive = p.id === conns.activeId;
     const el = document.createElement('div');
-    el.className = 'rule-item';
-    el.innerHTML = `<div class="name">${esc(p.name)} ${isActive ? '<span class="badge approved">active</span>' : ''}
-        <span class="meta">${esc(p.db.user)}@${esc(p.db.host)}:${p.db.port}/${esc(p.db.database)}${p.ssh.enabled ? ' · SSH ' + esc(p.ssh.host) : ''}</span></div>
-      ${isActive ? '' : '<button data-act="activate" class="primary">Use</button>'}
-      <button data-act="test">Test</button>
-      <button data-act="edit">Edit</button>
-      ${isActive ? '' : '<button data-act="delete" title="Delete connection">✕</button>'}`;
+    el.className = 'conn-card' + (isActive ? ' active' : '');
+    el.innerHTML = `
+      <div class="conn-head">
+        <b class="conn-name">${esc(p.name)}</b>
+        ${isActive ? '<span class="badge approved">active</span>' : ''}
+        <span class="spacer"></span>
+        ${isActive ? '' : '<button data-act="activate" class="primary">Use</button>'}
+        <button data-act="test">Test</button>
+        <button class="iconbtn" data-act="edit" title="Edit connection">${RULE_ICONS.edit}</button>
+        ${isActive ? '' : `<button class="iconbtn danger" data-act="delete" title="Delete connection">${RULE_ICONS.trash}</button>`}
+      </div>
+      <div class="conn-route">
+        <span class="chip">This tool</span><span class="arrow">→</span>
+        ${p.ssh.enabled ? `<span class="chip ssh">SSH · ${esc(p.ssh.user ? p.ssh.user + '@' : '')}${esc(p.ssh.host)}</span><span class="arrow">→</span>` : ''}
+        <span class="chip db">MySQL · ${esc(p.db.host)}:${p.db.port}</span>
+      </div>
+      <div class="conn-fields">
+        <div><span class="flabel">Database</span><span class="fval">${esc(p.db.database)}</span></div>
+        <div><span class="flabel">User</span><span class="fval">${esc(p.db.user)}</span></div>
+        <div><span class="flabel">Connection</span><span class="fval">${p.ssh.enabled ? 'SSH tunnel' : 'Direct'}</span></div>
+      </div>
+      <div class="conn-status" hidden></div>`;
     el.addEventListener('click', async (e) => {
-      const act = e.target.dataset?.act;
+      const btn = e.target.closest?.('[data-act]');
+      const act = btn?.dataset.act;
       if (!act) return;
+      const status = el.querySelector('.conn-status');
       try {
         if (act === 'activate') {
           await api(`/api/connections/${p.id}/activate`, { method: 'POST' });
@@ -761,11 +1207,16 @@ async function loadConns() {
           $('colList').innerHTML = '';
           updateSqlHints(); // stale tables from the previous connection must not be suggested
           await Promise.all([refreshHeader(), loadConns()]);
-          toast(`Now using "${p.name}" — reload the schema for autocomplete`);
+          toast(`Now using "${p.name}" - reload the schema for autocomplete`);
         } else if (act === 'test') {
-          e.target.disabled = true; e.target.textContent = 'Testing…';
+          btn.disabled = true;
+          status.hidden = false;
+          status.className = 'conn-status';
+          status.textContent = 'Testing connection…';
+          const t0 = Date.now();
           await api(`/api/connections/${p.id}/test`, { method: 'POST' });
-          toast(`✓ Connection "${p.name}" works`);
+          status.className = 'conn-status ok';
+          status.textContent = `Connection OK, reached the database in ${Date.now() - t0} ms`;
         } else if (act === 'edit') {
           fillConnForm(p);
         } else if (act === 'delete') {
@@ -776,8 +1227,17 @@ async function loadConns() {
           });
           if (ok) { await api(`/api/connections/${p.id}`, { method: 'DELETE' }); loadConns(); }
         }
-      } catch (err) { toast(err.message); }
-      finally { if (act === 'test') { e.target.disabled = false; e.target.textContent = 'Test'; } }
+      } catch (err) {
+        if (act === 'test' && status) {
+          status.hidden = false;
+          status.className = 'conn-status err';
+          status.textContent = 'Failed: ' + err.message;
+        } else {
+          toast(err.message);
+        }
+      } finally {
+        if (act === 'test' && btn) btn.disabled = false;
+      }
     });
     list.appendChild(el);
   }
@@ -791,7 +1251,7 @@ function fillConnForm(p) {
   $('cDbPort').value = p?.db.port || '';
   $('cDbUser').value = p?.db.user || '';
   $('cDbPass').value = '';
-  $('cDbPass').placeholder = p?.db.passwordSet ? '(unchanged — type to replace)' : '';
+  $('cDbPass').placeholder = p?.db.passwordSet ? '(unchanged - type to replace)' : '';
   $('cDbName').value = p?.db.database || '';
   $('cSshOn').checked = !!p?.ssh.enabled;
   $('sshFields').hidden = !p?.ssh.enabled;
@@ -799,10 +1259,10 @@ function fillConnForm(p) {
   $('cSshPort').value = p?.ssh.port || '';
   $('cSshUser').value = p?.ssh.user || '';
   $('cSshPass').value = '';
-  $('cSshPass').placeholder = p?.ssh.passwordSet ? '(unchanged — type to replace)' : '';
+  $('cSshPass').placeholder = p?.ssh.passwordSet ? '(unchanged - type to replace)' : '';
   $('cSshKey').value = p?.ssh.privateKeyPath || '';
   $('cSshPhrase').value = '';
-  $('cSshPhrase').placeholder = p?.ssh.passphraseSet ? '(unchanged — type to replace)' : '';
+  $('cSshPhrase').placeholder = p?.ssh.passphraseSet ? '(unchanged - type to replace)' : '';
   $('cName').focus();
 }
 
@@ -828,10 +1288,10 @@ $('connForm').addEventListener('submit', async (e) => {
 });
 
 /* ---------- Schema map (SVG) ---------- */
-/* Pure layout+markup builder — takes the /api/schema/graph payload,
+/* Pure layout+markup builder - takes the /api/schema/graph payload,
  * returns {svg, width, height}. Kept DOM-free so it is unit-testable. */
 /* Turn a list of waypoints into a path whose corners are smoothed with
- * quadratic beziers — straight runs, curved bends. */
+ * quadratic beziers - straight runs, curved bends. */
 function roundedPath(pts, radius = 22) {
   const n = (v) => Math.round(v * 10) / 10;
   let d = `M ${n(pts[0].x)} ${n(pts[0].y)}`;
@@ -849,7 +1309,7 @@ function roundedPath(pts, radius = 22) {
   return d + ` L ${n(last.x)} ${n(last.y)}`;
 }
 
-/* Edge path between two (movable) boxes — also used live while dragging.
+/* Edge path between two (movable) boxes - also used live while dragging.
  * 4-point orthogonal routing (start, two bends, end) with bezier-rounded
  * corners: leaves the card horizontally, turns smoothly, enters horizontally. */
 function schemaEdgeD(a, b, fromColumn, toColumn) {
@@ -919,7 +1379,7 @@ function buildSchemaSvg(g) {
       <rect class="tbl-box" x="0" y="0" width="${w}" height="${h}" rx="7"></rect>
       <rect class="tbl-head" x="0" y="0" width="${w}" height="${HEAD_H}" rx="7"></rect>
       <rect class="tbl-head" x="0" y="${HEAD_H - 7}" width="${w}" height="7"></rect>
-      <text class="tbl-title" x="8" y="16" font-size="11">${esc(trunc(t.name, 23))}<title>${esc(t.name)} — ${t.columns.length} columns</title></text>
+      <text class="tbl-title" x="8" y="16" font-size="11">${esc(trunc(t.name, 23))}<title>${esc(t.name)} - ${t.columns.length} columns</title></text>
       <text class="ddl-btn" data-ddl="${esc(t.name)}" x="${w - 8}" y="16" text-anchor="end" font-size="9">DDL<title>Show CREATE TABLE statement</title></text>
       ${rowsMk}</g>`;
   }
@@ -951,7 +1411,7 @@ function renderSchemaMap(g) {
   if (!g.tables.length) {
     schemaView.el = null;
     canvas.innerHTML = '<div class="empty" style="padding:1rem">No tables match this filter.</div>';
-    $('schemaMapInfo').textContent = `— ${g.database}: 0 of ${g.totalTables} tables`;
+    $('schemaMapInfo').textContent = `- ${g.database}: 0 of ${g.totalTables} tables`;
     return;
   }
   const { svg, width, height, boxes } = buildSchemaSvg(g);
@@ -964,10 +1424,10 @@ function renderSchemaMap(g) {
   const nMatched = g.tables.length - nRelated;
   const truncated = nMatched < g.totalTables;
   $('schemaMapInfo').textContent =
-    `— ${g.database}: showing ${nMatched} of ${g.totalTables} tables` +
+    `- ${g.database}: showing ${nMatched} of ${g.totalTables} tables` +
     (nRelated ? ` + ${nRelated} related` : '') +
     `, ${g.relations.length} relations (${g.relations.filter((r) => r.inferred).length} inferred)` +
-    (truncated ? ' — use the filter to narrow down' : '');
+    (truncated ? ' - use the filter to narrow down' : '');
   schemaView.el = canvas.querySelector('svg');
   schemaView.vb = { x: 0, y: 0, w: width, h: height };
   applySchemaVb();
@@ -980,7 +1440,7 @@ function renderSchemaMap(g) {
   });
 }
 
-/* pan / zoom via viewBox — wired once */
+/* pan / zoom via viewBox - wired once */
 (() => {
   const canvas = $('schemaCanvas');
   canvas.addEventListener('wheel', (e) => {
@@ -1000,7 +1460,7 @@ function renderSchemaMap(g) {
     if (!schemaView.el) return;
     drag = { x: e.clientX, y: e.clientY };
     dragDist = 0;
-    downTarget = e.target; // real element under the press — pointer capture retargets later events to the canvas
+    downTarget = e.target; // real element under the press - pointer capture retargets later events to the canvas
     const gEl = e.target.closest?.('g[data-table]');
     if (gEl && schemaView.boxes?.has(gEl.dataset.table)) {
       tableDrag = { gEl, box: schemaView.boxes.get(gEl.dataset.table) };
@@ -1083,7 +1543,7 @@ function renderSchemaDrawer(name) {
   const approx = t.approxRows == null ? 'rows: n/a' : `≈ ${Number(t.approxRows).toLocaleString()} rows`;
   $('drawerBody').innerHTML =
     `<div class="hint" style="margin:0">${t.columns.length} columns · <span id="drawerRows">${approx}</span>
-      <button id="btnExactCount" style="padding:0 .4rem;font-size:.68rem" title="Run SELECT COUNT(*) — may take a moment on large tables">count exactly</button>${t.related ? ' · pulled in as a relation of your search' : ''}</div>
+      <button id="btnExactCount" style="padding:0 .4rem;font-size:.68rem" title="Run SELECT COUNT(*) - may take a moment on large tables">count exactly</button>${t.related ? ' · pulled in as a relation of your search' : ''}</div>
      <h3>Columns</h3>${cols}
      <h3>References (outgoing: ${out.length})</h3>${out.map((r) => relRow(r, 'out')).join('') || '<div class="hint" style="margin:0">none</div>'}
      <h3>Referenced by (incoming: ${inc.length})</h3>${inc.map((r) => relRow(r, 'in')).join('') || '<div class="hint" style="margin:0">none</div>'}`;
@@ -1111,7 +1571,7 @@ $('btnDrawerDdl').addEventListener('click', () => { if (schemaView.selected) sho
 async function showDdl(table) {
   try {
     const r = await api('/api/schema/table/' + encodeURIComponent(table) + '/ddl');
-    $('ddlTitle').textContent = `— ${r.table}`;
+    $('ddlTitle').textContent = `- ${r.table}`;
     $('ddlText').textContent = r.ddl + ';';
     $('ddlModal').showModal();
   } catch (e) { toast(e.message); }
@@ -1119,10 +1579,10 @@ async function showDdl(table) {
 $('btnCloseDdl').addEventListener('click', () => $('ddlModal').close());
 $('btnCopyDdl').addEventListener('click', async () => {
   try { await navigator.clipboard.writeText($('ddlText').textContent); toast('Copied to clipboard'); }
-  catch { toast('Clipboard unavailable — select the text manually'); }
+  catch { toast('Clipboard unavailable - select the text manually'); }
 });
 $('btnDownloadDdl').addEventListener('click', () => {
-  const name = ($('ddlTitle').textContent.replace(/^—\s*/, '') || 'table').replace(/[^A-Za-z0-9_-]+/g, '_');
+  const name = ($('ddlTitle').textContent.replace(/^-\s*/, '') || 'table').replace(/[^A-Za-z0-9_-]+/g, '_');
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([$('ddlText').textContent], { type: 'application/sql' }));
   a.download = `create-${name}.sql`;
@@ -1169,6 +1629,7 @@ function connectSSE() {
   es.addEventListener('session', (e) => {
     state.session = JSON.parse(e.data);
     diffCache.clear();
+    queueLoading = false; // the preview (or any session update) has arrived
     renderQueue(); renderDashboard();
     if (modalChangeId) renderCardModal();
   });
@@ -1184,6 +1645,31 @@ function connectSSE() {
     if (modalChangeId) renderCardModal();
   });
   es.addEventListener('log', (e) => appendLog(JSON.parse(e.data)));
+  es.addEventListener('preview', (e) => {
+    const p = JSON.parse(e.data);
+    // "computing" is a rolling counter: update the active line in place, don't stack
+    if (p.stage === 'computing') {
+      const active = $('queueSteps')?.querySelector('.ql-step.active');
+      if (active) { active.textContent = p.text; return; }
+    }
+    queueStep(p.text);
+  });
+  es.addEventListener('agent', (e) => {
+    if (!agentFeedEl || !agentFeedEl.isConnected) return;
+    const ev = JSON.parse(e.data);
+    const line = document.createElement('div');
+    line.className = 'agent-feed-line' + (ev.type === 'tool-done' && !ev.ok ? ' err' : '');
+    line.textContent =
+      ev.type === 'step' ? `step ${ev.step}: ${ev.msg}…`
+      : ev.type === 'tool' ? `running ${ev.tool} ${ev.input || ''}`
+      : ev.type === 'tool-done' ? `${ev.ok ? 'done' : 'FAILED'}: ${ev.tool} (${ev.ms} ms)`
+      : ev.type === 'final' ? 'writing the answer…'
+      : '';
+    if (line.textContent) {
+      agentFeedEl.appendChild(line);
+      $('agentMessages').scrollTop = $('agentMessages').scrollHeight;
+    }
+  });
 }
 
 /* ---------- SQL console drawer ---------- */
@@ -1411,7 +1897,7 @@ function refreshExportPreview() {
   exportState.text = buildExport(exportState.format);
   $('exportMeta').textContent = exportIsComplete()
     ? `${sqlState.result.rows.length} row(s), complete result`
-    : `preview: the ${sqlState.result.rows.length} row(s) of this page — Copy and Download export the FULL result, uncapped`;
+    : `preview: the ${sqlState.result.rows.length} row(s) of this page - Copy and Download export the FULL result, uncapped`;
   if (!exportCM && typeof CodeMirror !== 'undefined') {
     exportCM = CodeMirror($('exportPreview'), { readOnly: true, lineNumbers: true, theme: 'material-darker', lineWrapping: false, mode: 'text/x-mysql' });
   }
@@ -1436,7 +1922,7 @@ function openExport(format) {
     $('expPk').innerHTML = r.columns.map((c) =>
       `<option value="${esc(c)}" ${c.toLowerCase() === 'id' ? 'selected' : ''}>${esc(c)}</option>`).join('');
   }
-  $('exportTitle').textContent = '— ' + ({ updates: 'SQL UPDATE statements', inserts: 'SQL INSERT statements', csv: 'CSV', json: 'JSON' })[format];
+  $('exportTitle').textContent = '- ' + ({ updates: 'SQL UPDATE statements', inserts: 'SQL INSERT statements', csv: 'CSV', json: 'JSON' })[format];
   refreshExportPreview();
   $('exportModal').showModal();
   if (exportCM) setTimeout(() => exportCM.refresh(), 0);
@@ -1547,13 +2033,13 @@ function startTour() {
     { title: 'Welcome', intro: 'This tool runs <b>rule-based batch updates</b> on MySQL with one hard guarantee: <b>nothing is written without your explicit approval</b>.' },
     { element: '#btnConns', title: 'Connections', intro: 'Manage <b>connection profiles</b>: database credentials plus an optional SSH tunnel. Test them and switch between them; switching is blocked while changes are pending.' },
     { element: '#secRuleList > summary', title: 'Saved rules', intro: '<b>Run preview</b> fetches matching rows and computes proposed changes, in memory only. <b>SQL</b> exports the exact queries a rule generates. The rule with an active session is highlighted.' },
-    { element: '#secEditor > summary', title: 'Rule editor', intro: 'A rule is a <b>fetch</b> (table, WHERE as raw SQL, server-capped LIMIT) plus <b>transforms</b> applied in order: find/replace with regex and capture groups, trim, case, prefix/suffix, fixed value.' },
+    { element: '#btnNewRule', title: 'Rule editor', intro: 'New rule, the pencil (edit) and the copy (duplicate) buttons all open the rule editor modal. A rule is a <b>fetch</b> (table, WHERE as raw SQL, server-capped LIMIT) plus <b>transforms</b> applied in order: find/replace with regex and capture groups, trim, case, prefix/suffix, fixed value.' },
     { element: '#btnSchemaMap', title: 'Schema tools', intro: '<b>Load schema</b> fills table and column autocomplete. <b>Schema map</b> opens a visual diagram: drag cards, follow relation lines, click a card for details, row counts and its CREATE TABLE.' },
     { element: '#queueToolbar', title: 'Batch and backup', intro: 'Select cards for <b>batch approve / reject / skip</b>. Every preview auto-saves a <b>restore script</b> server-side. Download it here; you will be warned if you approve without a local copy.' },
     { element: '#queue', title: 'Approval cards', intro: 'Each card shows a <b>before/after diff</b> of one row. <b>Approve</b> writes exactly that row (parameterized, verified, stale-guarded: externally modified rows are never overwritten). The Edit button hand-tunes the proposed value, the expand button opens a large view. Keys: <b>A / R / S</b>.' },
     { element: '#dashPanel', title: 'Live progress', intro: 'Counts, progress bar and activity log update in real time. Every decision is also appended to <b>audit.log</b>.' },
-    { element: '#btnAbort', title: 'Session control', intro: '<b>Pause</b> blocks approvals server-side; <b>Abort</b> discards all pending changes (nothing written). The full audit trail can be downloaded from the header.' },
-    { title: 'All set', intro: 'Define a rule, then <b>Run preview</b>, then approve change by change (or in batches). Re-run this tour anytime with the <b>Tour</b> button.' },
+    { element: '#btnAbort', title: 'Session control', intro: '<b>Pause</b> blocks approvals server-side; <b>Abort</b> discards all pending changes (nothing written). The full audit trail can be downloaded from the <b>More</b> menu in the header.' },
+    { title: 'All set', intro: 'Define a rule, then <b>Run preview</b>, then approve change by change (or in batches). Re-run this tour anytime from the <b>More</b> menu in the header.' },
   ];
   const t = introJs.tour ? introJs.tour() : introJs();
   t.setOptions({
@@ -1573,7 +2059,339 @@ function startTour() {
   else if (typeof t.onbeforechange === 'function') t.onbeforechange(ensureVisible);
   t.start();
 }
-$('btnTour').addEventListener('click', startTour);
+/* ---------- AI agent ---------- */
+let agentBusy = false;
+let agentFeedEl = null; // live-feed container of the in-flight "Working…" bubble
+
+$('btnAiAgent').addEventListener('click', () => {
+  if ($('agentDrawer').classList.contains('open')) closeAgentDrawer();
+  else openAgent();
+});
+const closeAgentDrawer = () => $('agentDrawer').classList.remove('open');
+$('btnAgentClose').addEventListener('click', closeAgentDrawer);
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && $('agentDrawer').classList.contains('open') && !document.querySelector('dialog[open]')) {
+    closeAgentDrawer();
+  }
+});
+
+async function openAgent() {
+  $('agentDrawer').classList.add('open');
+  $('agentConnect').hidden = true;
+  $('agentChatWrap').hidden = true;
+  $('btnAgentReset').hidden = $('btnAgentDisconnect').hidden = true;
+  $('agentStatus').textContent = '- checking for local agents…';
+  try {
+    const st = await api('/api/agent?probe=1');
+    document.body.classList.toggle('agent-on', st.connected);
+    if (st.connected) showAgentChat(st);
+    else showAgentConnect(st);
+  } catch (e) {
+    $('agentStatus').textContent = '- ' + e.message;
+  }
+}
+
+// gate agent-dependent UI (e.g. "add to chat" on rule cards) from startup
+api('/api/agent').then((st) => document.body.classList.toggle('agent-on', st.connected)).catch(() => {});
+
+function showAgentConnect(st) {
+  $('agentStatus').textContent = '- not connected';
+  $('agentConnect').hidden = false;
+  const box = $('agentProviders');
+  box.innerHTML = '';
+  for (const [key, p] of Object.entries(st.providers)) {
+    const el = document.createElement('div');
+    el.className = 'agent-prov' + (p.kind === 'api' ? ' api' : '');
+    if (p.kind === 'api') {
+      el.innerHTML = `
+        <div style="flex:1;min-width:0">
+          <div class="pname">${esc(p.label)}</div>
+          <div class="pstat">Easiest: <b>Sign in with Claude</b> opens claude.ai in a new tab for authorization. Alternatively paste an API key (console.anthropic.com) or a token from <b>claude setup-token</b>.</div>
+          <div class="row" style="margin-top:.45rem">
+            <button type="button" class="p-oauth" style="flex:none">Sign in with Claude</button>
+            <input class="p-key" type="password" autocomplete="off" placeholder="or paste sk-ant-api… / sk-ant-oat…">
+            <input class="p-model" placeholder="model (default: claude-sonnet-4-5)" style="max-width:220px">
+          </div>
+          <div class="p-oauth-step" hidden style="margin-top:.45rem">
+            <div class="pstat">An authorization tab was opened. Approve access there, copy the code it shows, and paste it here:</div>
+            <div class="row" style="margin-top:.3rem">
+              <input class="p-code" autocomplete="off" placeholder="paste the authorization code">
+              <button type="button" class="primary p-finish" style="flex:none">Complete sign-in</button>
+            </div>
+          </div>
+        </div>
+        <button class="primary" data-prov="${esc(key)}">Connect</button>`;
+      el.querySelector('.p-oauth').addEventListener('click', async (e) => {
+        try {
+          const r = await api('/api/agent/oauth/start', { method: 'POST', body: '{}' });
+          window.open(r.url, '_blank');
+          el.querySelector('.p-oauth-step').hidden = false;
+          el.querySelector('.p-code').focus();
+        } catch (err) { toast(err.message); }
+      });
+      el.querySelector('.p-finish').addEventListener('click', async (e) => {
+        e.target.disabled = true;
+        e.target.textContent = 'Verifying…';
+        try {
+          await api('/api/agent/oauth/finish', {
+            method: 'POST',
+            body: JSON.stringify({ code: el.querySelector('.p-code').value.trim(), model: el.querySelector('.p-model').value.trim() }),
+          });
+          openAgent();
+        } catch (err) {
+          toast(err.message);
+          el.querySelector('.p-code').value = ''; // codes are single-use: never re-paste a failed one
+          el.querySelector('.p-code').placeholder = 'code rejected - click "Sign in with Claude" again for a fresh one';
+        } finally {
+          e.target.disabled = false;
+          e.target.textContent = 'Complete sign-in';
+        }
+      });
+    } else {
+      el.innerHTML = `
+        <div style="min-width:0">
+          <div class="pname">${esc(p.label)}</div>
+          <div class="pstat ${p.available ? 'ok' : 'no'}">${p.available ? `detected ("${esc(p.cmd)}" CLI works)` : `not found: install it and make "${esc(p.cmd)}" available on PATH`}</div>
+        </div>
+        <span class="spacer"></span>
+        <button class="primary" data-prov="${esc(key)}" ${p.available ? '' : 'disabled'}>Connect</button>`;
+    }
+    el.querySelector('[data-prov]').addEventListener('click', async (e) => {
+      const body = { provider: key };
+      if (p.kind === 'api') {
+        body.apiKey = el.querySelector('.p-key').value.trim();
+        body.model = el.querySelector('.p-model').value.trim();
+      }
+      e.target.disabled = true;
+      e.target.textContent = p.kind === 'api' ? 'Validating…' : 'Connecting…';
+      try {
+        await api('/api/agent/connect', { method: 'POST', body: JSON.stringify(body) });
+        openAgent();
+      } catch (err) {
+        toast(err.message);
+      } finally {
+        e.target.disabled = false;
+        e.target.textContent = 'Connect';
+      }
+    });
+    box.appendChild(el);
+  }
+}
+
+function showAgentChat(st) {
+  $('agentStatus').textContent = `- connected: ${st.providers[st.provider]?.label || st.provider}${st.model ? ` (${st.model})` : ''}`;
+  $('agentConnect').hidden = true;
+  $('agentChatWrap').hidden = false;
+  $('btnAgentReset').hidden = $('btnAgentDisconnect').hidden = false;
+  $('agentScope').textContent = `Database access is read-only (${$('dbInfo').textContent.replace(/^profile: /, '')}). The agent can propose rule creations and edits, but each proposal needs your approval below. Every action is listed under its reply and in the activity log.`;
+  // model switcher: provider-appropriate suggestions, current value prefilled
+  const claudeModels = ['claude-fable-5', 'claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5-20251001', 'claude-sonnet-4-5', 'claude-opus-4-1', 'claude-3-5-haiku-latest'];
+  const codexModels = ['gpt-5-codex', 'gpt-5', 'o4-mini', 'gpt-4.1'];
+  const suggestions = st.provider === 'codex' ? codexModels : claudeModels;
+  $('agentModelList').innerHTML = suggestions.map((m) => `<option value="${esc(m)}">`).join('');
+  $('agentModel').value = st.model || '';
+  agentModelSaved = st.model || '';
+  $('agentMessages').innerHTML = '';
+  for (const m of st.chat || []) appendAgentMsg(m.role, m.text, null, m);
+  for (const p of st.proposals || []) appendAgentProposal(p);
+  $('agentInput').focus();
+}
+
+function appendAgentMsg(role, text, actions, meta) {
+  const el = document.createElement('div');
+  if (role === 'note') {
+    if (meta?.kind === 'context' && meta.rule) {
+      // attached-rule context: render as a card, not a JSON blob
+      const t = meta.rule;
+      el.className = 'agent-ctx-card';
+      el.innerHTML = `
+        <div class="ap-head">Context attached: <b>${esc(t.name)}</b>${t.draft ? ' <span class="badge draftbadge">draft</span>' : ''}</div>
+        <div class="ap-meta">${esc(t.table)} · WHERE ${esc(String(t.where || '1=1').replace(/\s+/g, ' ').slice(0, 90))}${String(t.where || '').length > 90 ? '…' : ''} · ${t.transforms.length} transform(s)</div>
+        <details><summary>Full definition</summary><pre>${esc(JSON.stringify(t, null, 2))}</pre></details>`;
+    } else if (meta?.kind === 'review') {
+      el.className = 'agent-ctx-card';
+      el.innerHTML = `
+        <div class="ap-head">AI review shared <span class="badge ai-${esc(meta.verdict)}">${esc(meta.verdict)}</span></div>
+        <div class="ap-meta">${esc(meta.rule || '')} · ${esc(meta.table || '')} pk=${esc(String(meta.pk))} · ${esc(meta.columns || '')}</div>
+        <div class="txt" style="margin-top:.3rem">${esc(meta.summary || '')}</div>`;
+    } else if (meta?.kind === 'decision') {
+      el.className = 'agent-note';
+      el.innerHTML = `<span class="badge ${meta.decision === 'approved' ? 'approved' : 'rejected'}">${esc(meta.decision)}</span> rule ${esc(meta.proposalAction || '')} proposal <b>${esc(meta.ruleName || '')}</b>`;
+    } else {
+      el.className = 'agent-note';
+      el.textContent = text;
+    }
+    $('agentMessages').appendChild(el);
+    $('agentMessages').scrollTop = $('agentMessages').scrollHeight;
+    return el;
+  }
+  el.className = 'agent-msg ' + (role === 'user' ? 'user' : 'ai');
+  const acts = (actions && actions.length)
+    ? `<details class="agent-actions"><summary>${actions.length} action(s) taken</summary>${actions.map((a) =>
+        `<div class="agent-action ${a.ok ? '' : 'err'}">${esc(a.tool)} ${esc(JSON.stringify(a.input))} · ${a.ms} ms${a.ok ? '' : ' · FAILED'}</div>`).join('')}</details>`
+    : '';
+  el.innerHTML = `<div class="who">${role === 'user' ? 'You' : 'AI agent'}</div><div class="txt">${esc(text)}</div>${acts}`;
+  $('agentMessages').appendChild(el);
+  $('agentMessages').scrollTop = $('agentMessages').scrollHeight;
+  return el;
+}
+
+/* rule proposal card: the user gate for agent rule changes */
+function appendAgentProposal(p) {
+  const t = p.rule;
+  const el = document.createElement('div');
+  el.className = 'agent-proposal';
+  el.innerHTML = `
+    <div class="ap-head">Rule ${p.action === 'update' ? `update: <b>${esc(p.targetName || '')}</b> → <b>${esc(t.name)}</b>` : `proposal: <b>${esc(t.name)}</b>`}
+      ${t.draft ? '<span class="badge draftbadge">draft</span>' : ''}</div>
+    <div class="ap-meta">${esc(t.table)} · WHERE ${esc(t.where || '1=1')} · limit ${t.limit} · ${t.transforms.length} transform(s)</div>
+    <details><summary>Full definition</summary><pre>${esc(JSON.stringify(t, null, 2))}</pre></details>
+    <div class="actions">
+      <button class="approve" data-dec="approve">Approve and save</button>
+      <button class="reject" data-dec="reject">Reject</button>
+    </div>`;
+  el.querySelectorAll('[data-dec]').forEach((b) => b.addEventListener('click', async () => {
+    try {
+      const r = await api('/api/agent/proposal/' + p.id, { method: 'POST', body: JSON.stringify({ decision: b.dataset.dec }) });
+      el.querySelector('.actions').innerHTML = `<span class="badge ${r.status === 'approved' ? 'approved' : 'rejected'}">${r.status}</span>`;
+      appendAgentMsg('note', '', null, { kind: 'decision', decision: r.status, proposalAction: p.action, ruleName: t.name });
+      if (r.status === 'approved') loadRules();
+    } catch (e) { toast(e.message); }
+  }));
+  $('agentMessages').appendChild(el);
+  $('agentMessages').scrollTop = $('agentMessages').scrollHeight;
+}
+
+async function agentSend() {
+  if (agentBusy) return;
+  const msg = $('agentInput').value.trim();
+  if (!msg) return;
+  agentBusy = true;
+  $('btnAgentSend').disabled = true;
+  $('agentInput').value = '';
+  appendAgentMsg('user', msg);
+  // no bubble while working: animated icon + label, live feed streaming below
+  const pending = document.createElement('div');
+  pending.className = 'agent-working';
+  pending.innerHTML = `
+    <div class="aw-head">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9Z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8Z"/></svg>
+      <span>Working…</span>
+    </div>
+    <div class="agent-feed"></div>`;
+  $('agentMessages').appendChild(pending);
+  $('agentMessages').scrollTop = $('agentMessages').scrollHeight;
+  agentFeedEl = pending.querySelector('.agent-feed'); // the SSE 'agent' listener streams progress lines into it
+  document.body.classList.add('agent-busy'); // pulses the header button icon too
+  try {
+    const r = await api('/api/agent/chat', { method: 'POST', body: JSON.stringify({ message: msg }) });
+    pending.remove();
+    appendAgentMsg('ai', r.reply, r.actions);
+    (r.proposals || []).forEach(appendAgentProposal);
+  } catch (e) {
+    pending.remove();
+    appendAgentMsg('ai', 'Error: ' + e.message);
+  } finally {
+    agentFeedEl = null;
+    agentBusy = false;
+    document.body.classList.remove('agent-busy');
+    $('btnAgentSend').disabled = false;
+    $('agentInput').focus();
+  }
+}
+$('btnAgentSend').addEventListener('click', agentSend);
+$('agentInput').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); agentSend(); }
+});
+let agentModelSaved = '';
+async function saveAgentModel() {
+  const model = $('agentModel').value.trim();
+  if (model === agentModelSaved) return;
+  try {
+    const r = await api('/api/agent/model', { method: 'POST', body: JSON.stringify({ model }) });
+    agentModelSaved = r.model || '';
+    $('agentModel').value = agentModelSaved;
+    toast(`Model set to ${agentModelSaved || 'provider default'}`);
+  } catch (e) { toast(e.message); }
+}
+$('agentModel').addEventListener('change', saveAgentModel); // fires on datalist pick and on blur-with-change
+$('agentModel').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); $('agentModel').blur(); } });
+$('btnAgentReset').addEventListener('click', async () => {
+  await api('/api/agent/reset', { method: 'POST' }).catch((e) => toast(e.message));
+  $('agentMessages').innerHTML = '';
+});
+$('btnAgentDisconnect').addEventListener('click', async () => {
+  const ok = await confirmDialog({
+    title: 'Disconnect AI agent',
+    message: 'Disconnect the agent and forget the stored provider choice? The conversation is discarded.',
+    okLabel: 'Disconnect', okClass: 'warn',
+  });
+  if (ok) {
+    await api('/api/agent/disconnect', { method: 'POST' }).catch((e) => toast(e.message));
+    document.body.classList.remove('agent-on');
+    openAgent();
+  }
+});
+
+$('moreMenu').addEventListener('change', async () => {
+  const action = $('moreMenu').value;
+  $('moreMenu').value = '';
+  if (action === 'tour') startTour();
+  else if (action === 'audit') openAudit();
+});
+
+/* ---------- audit log viewer ---------- */
+let auditData = [];
+const closeAudit = () => $('auditDrawer').classList.remove('open');
+async function openAudit() {
+  $('auditDrawer').classList.add('open');
+  $('auditBody').innerHTML = '<div class="empty" style="padding:1rem">Loading…</div>';
+  try {
+    const d = await api('/api/audit');
+    auditData = d.entries;
+    $('auditFilter').innerHTML = '<option value="">all actions</option>' +
+      d.actions.map((a) => `<option value="${esc(a)}">${esc(a)}</option>`).join('');
+    renderAudit();
+  } catch (e) {
+    $('auditBody').innerHTML = `<div class="empty" style="padding:1rem;color:var(--red)">${esc(e.message)}</div>`;
+  }
+}
+function renderAudit() {
+  const filter = $('auditFilter').value;
+  const rows = auditData.filter((e) => !filter || e.action === filter);
+  $('auditCount').textContent = `- ${rows.length}${filter ? ' ' + filter : ''} of ${auditData.length}`;
+  if (!rows.length) { $('auditBody').innerHTML = '<div class="empty" style="padding:1rem">No audit entries yet.</div>'; return; }
+  const short = (v) => { const s = String(v ?? ''); return s.length > 70 ? s.slice(0, 70) + '…' : s; };
+  const detailFor = (e) => {
+    if (e._raw) return `<span class="a-detail">${esc(e._raw)}</span>`;
+    const bits = [];
+    if (e.pk !== undefined) bits.push(`pk=${esc(String(e.pk))}`);
+    if (e.column) bits.push(esc(e.column));
+    // approve/reject decision: show a compact before→after per column
+    if (Array.isArray(e.columns)) {
+      for (const c of e.columns) bits.push(`<span class="a-diff">${esc(short(c.oldValue))}<del></del> → ${esc(short(c.newValue))}</span>`.replace('<del></del>', ''));
+    }
+    if (e.matchedRows !== undefined) bits.push(`${e.matchedRows} matched, ${e.proposedChanges} proposed`);
+    if (e.discardedPending !== undefined) bits.push(`${e.discardedPending} discarded`);
+    if (e.sqlResult) bits.push(`sql: ${esc(short(JSON.stringify(e.sqlResult)))}`);
+    const full = `<details><summary>raw</summary><pre>${esc(JSON.stringify(e, (k, v) => (k === '_n' ? undefined : v), 2))}</pre></details>`;
+    return `<span class="a-detail">${bits.join(' · ') || ''} ${full}</span>`;
+  };
+  $('auditBody').innerHTML = `<table>
+    <thead><tr><th>Time</th><th>Action</th><th>Rule / table</th><th>Detail</th></tr></thead>
+    <tbody>${rows.map((e) => `<tr>
+      <td class="a-time">${esc((e.ts || '').replace('T', ' ').replace(/\.\d+Z$/, ''))}</td>
+      <td class="a-act">${e.action ? `<span class="a-tag ${esc(e.action.split('-')[0])}" data-a="${esc(e.action)}">${esc(e.action)}</span>` : '-'}</td>
+      <td>${esc(e.rule || '')}${e.table ? `<br><span class="a-time">${esc(e.table)}</span>` : ''}</td>
+      <td>${detailFor(e)}</td>
+    </tr>`).join('')}</tbody></table>`;
+}
+$('auditFilter').addEventListener('change', renderAudit);
+$('btnAuditRefresh').addEventListener('click', openAudit);
+$('btnAuditClose').addEventListener('click', closeAudit);
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && $('auditDrawer').classList.contains('open') && !document.querySelector('dialog[open]')) closeAudit();
+});
 
 /* ---------- init ---------- */
 (async function init() {

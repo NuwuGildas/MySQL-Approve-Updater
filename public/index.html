@@ -20,18 +20,43 @@
 <script src="/vendor/codemirror/addon/display/placeholder.js"></script>
 </head>
 <body>
+<!-- filters for the AI-agent button glow (adapted from Uiverse.io by SelfMadeSystem) -->
+<svg style="position:absolute;width:0;height:0" aria-hidden="true">
+  <filter width="300%" x="-100%" height="300%" y="-100%" id="unopaq">
+    <feColorMatrix values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 9 0"></feColorMatrix>
+  </filter>
+  <filter width="300%" x="-100%" height="300%" y="-100%" id="unopaq2">
+    <feColorMatrix values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 3 0"></feColorMatrix>
+  </filter>
+  <filter width="300%" x="-100%" height="300%" y="-100%" id="unopaq3">
+    <feColorMatrix values="1 0 0 0.2 0  0 1 0 0.2 0  0 0 1 0.2 0  0 0 0 2 0"></feColorMatrix>
+  </filter>
+</svg>
 <header>
   <h1>MySQL Approve Updater</h1>
   <span class="sub" id="dbInfo">…</span>
   <span class="sub"><span class="dot" id="sseDot"></span> live</span>
   <span class="spacer"></span>
+  <div class="ai-agent">
+    <button class="ai-real" id="btnAiAgent" title="AI agent" aria-label="AI agent"></button>
+    <div class="ai-border">
+      <div class="ai-spin ai-spin-inside"></div>
+      <div class="ai-btn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9Z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8Z"/></svg>
+        <span>AI agent</span>
+      </div>
+    </div>
+  </div>
   <span class="sess-status" id="sessStatus">no session</span>
   <button id="btnPause">Pause</button>
   <button id="btnResume">Resume</button>
   <button id="btnAbort" class="warn">Abort</button>
   <button id="btnConns" title="Manage database / SSH connection profiles">Connections</button>
-  <button id="btnTour" title="Guided tour of the interface">Tour</button>
-  <a href="/api/audit.log" download><button>Download audit log</button></a>
+  <select id="moreMenu" title="More actions">
+    <option value="">More…</option>
+    <option value="tour">Guided tour</option>
+    <option value="audit">Download audit log</option>
+  </select>
 </header>
 
 <dialog id="connModal">
@@ -79,6 +104,95 @@
   </form>
 </dialog>
 
+<aside id="auditDrawer" aria-label="Audit log">
+  <div class="audit-head">
+    <h2 style="margin:0;font-size:.85rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)">Audit log <span class="sec-hint" id="auditCount"></span></h2>
+    <span class="spacer"></span>
+    <select id="auditFilter" title="Filter by action" style="width:auto"><option value="">all actions</option></select>
+    <button id="btnAuditRefresh" title="Reload">Refresh</button>
+    <a href="/api/audit.log" download><button title="Download the raw JSON-lines file">Download</button></a>
+    <button id="btnAuditClose" title="Close (Esc)">✕</button>
+  </div>
+  <div id="auditBody"></div>
+</aside>
+
+<aside id="agentDrawer" aria-label="AI agent">
+  <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.6rem;flex-wrap:wrap">
+    <h2 style="margin:0;font-size:.85rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)">AI agent <span class="sec-hint" id="agentStatus"></span></h2>
+    <span class="spacer"></span>
+    <button id="btnAgentReset" hidden>Reset chat</button>
+    <button id="btnAgentDisconnect" hidden class="warn">Disconnect</button>
+    <button id="btnAgentClose" title="Close (Esc)">✕</button>
+  </div>
+  <div id="agentConnect" hidden>
+    <div class="hint" style="margin:0 0 .7rem">Connect a locally installed CLI agent (no API key needed here). The choice is stored in <b>agent.json</b> and persists across sessions. The agent gets <b>read-only</b> access, mediated by this server, and is scoped to this tool and the connected database.</div>
+    <div id="agentProviders"></div>
+  </div>
+  <div id="agentChatWrap" hidden>
+    <div class="agent-model-row">
+      <label for="agentModel">Model</label>
+      <input id="agentModel" list="agentModelList" placeholder="provider default" spellcheck="false">
+      <datalist id="agentModelList"></datalist>
+    </div>
+    <div class="hint" id="agentScope" style="margin:0 0 .5rem"></div>
+    <div id="agentMessages"></div>
+    <div class="modal-foot" style="border-top:none;padding-top:0">
+      <textarea id="agentInput" rows="2" placeholder="Ask about rules, schema, data… (read-only; Enter sends, Shift+Enter = newline)" style="flex:1"></textarea>
+      <button id="btnAgentSend" class="primary">Send</button>
+    </div>
+  </div>
+</aside>
+
+<dialog id="ruleModal">
+  <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.6rem">
+    <h2 style="margin:0;font-size:.85rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)">Rule <span class="sec-hint" id="ruleModalHint"></span></h2>
+    <span class="spacer"></span>
+    <button id="btnCloseRuleModal">Close</button>
+  </div>
+  <div id="ruleModalBody">
+    <form id="ruleForm">
+      <div id="ruleFormScroll">
+      <input type="hidden" id="rId">
+      <label>Rule name</label>
+      <input id="rName" required placeholder="e.g. Fix phone formatting">
+      <details class="sec sub" id="secFetch" open>
+        <summary>Fetch</summary>
+        <div class="sec-body">
+          <div class="row">
+            <div><label>Table</label><input id="rTable" list="tableList" required></div>
+            <div><label>Primary-key column</label><input id="rPk" list="colList" required></div>
+          </div>
+          <label>WHERE condition <span style="color:var(--amber)">(trusted operator input - raw SQL)</span></label>
+          <textarea id="rWhere" placeholder="e.g. status = 'active' AND phone LIKE '00%'"></textarea>
+          <div class="row">
+            <div><label>Limit (server caps at <span id="maxRows">?</span>)</label><input id="rLimit" type="number" min="1" placeholder="200"></div>
+            <div><label>Identifying columns (comma-sep)</label><input id="rDisplay" placeholder="name, email"></div>
+          </div>
+        </div>
+      </details>
+      <details class="sec sub" id="secTransforms" open>
+        <summary>Transforms <span class="sec-hint" id="transformCount"></span></summary>
+        <div class="sec-body">
+          <div style="display:flex;gap:.5rem;align-items:center;margin-bottom:.4rem">
+            <button type="button" id="btnTransformView">Summary &amp; reorder</button>
+            <span class="hint" style="margin:0" id="transformViewHint">Transforms run in order; later ones see earlier results.</span>
+          </div>
+          <div id="transformSummary" hidden></div>
+          <div id="transformList"></div>
+          <button type="button" id="btnAddTransform" style="margin-top:.4rem">+ Add transform</button>
+        </div>
+      </details>
+      </div>
+      <div class="modal-foot">
+        <button type="submit" class="primary">Save rule</button>
+        <button type="button" id="btnSaveDraft" title="Store without publishing - drafts cannot run previews">Save as draft</button>
+        <span class="spacer"></span>
+        <button type="button" id="btnCancelEdit">Cancel</button>
+      </div>
+    </form>
+  </div>
+</dialog>
+
 <dialog id="cardModal">
   <div id="cardModalBody"></div>
   <div style="display:flex;gap:.5rem;margin-top:.8rem">
@@ -123,74 +237,52 @@
 <main>
   <!-- (1) Rules -->
   <section class="panel" id="rulesPanel">
-    <h2>Rules</h2>
-    <details class="sec" id="secRuleList" open>
-      <summary>Saved rules <span class="sec-hint" id="ruleCount"></span></summary>
-      <div class="sec-body">
-        <div id="ruleList"></div>
-        <div style="display:flex;gap:.5rem;margin-top:.4rem">
-          <button id="btnNewRule">+ New rule</button>
-          <button id="btnLoadSchema" title="Connects to the database to load table/column names for autocomplete">Load schema</button>
-          <button id="btnSchemaMap" title="Visualize tables and their relations">Schema map</button>
+    <div class="panel-head">
+      <h2 style="margin:0">Rules</h2>
+      <span class="spacer"></span>
+      <button id="btnImportRules" title="Import rules from exported JSON files (single rule or an array)">Import</button>
+      <button id="btnNewRule" class="primary">+ New rule</button>
+      <input type="file" id="ruleImportFile" accept=".json,application/json" multiple hidden>
+    </div>
+    <div id="rulesScroll">
+      <details class="sec" id="secRuleList">
+        <summary>Saved rules <span class="sec-hint" id="ruleCount"></span></summary>
+        <div class="sec-body">
+          <div id="ruleList"></div>
         </div>
-      </div>
-    </details>
-    <details class="sec" id="secEditor" open>
-      <summary>Rule editor <span class="sec-hint" id="editorHint"></span></summary>
-      <div class="sec-body">
-        <form id="ruleForm">
-          <input type="hidden" id="rId">
-          <label>Rule name</label>
-          <input id="rName" required placeholder="e.g. Fix phone formatting">
-          <details class="sec sub" id="secFetch" open>
-            <summary>Fetch</summary>
-            <div class="sec-body">
-              <div class="row">
-                <div><label>Table</label><input id="rTable" list="tableList" required></div>
-                <div><label>Primary-key column</label><input id="rPk" list="colList" required></div>
-              </div>
-              <label>WHERE condition <span style="color:var(--amber)">(trusted operator input — raw SQL)</span></label>
-              <textarea id="rWhere" placeholder="e.g. status = 'active' AND phone LIKE '00%'"></textarea>
-              <div class="row">
-                <div><label>Limit (server caps at <span id="maxRows">?</span>)</label><input id="rLimit" type="number" min="1" placeholder="200"></div>
-                <div><label>Identifying columns (comma-sep)</label><input id="rDisplay" placeholder="name, email"></div>
-              </div>
-            </div>
-          </details>
-          <details class="sec sub" id="secTransforms" open>
-            <summary>Transforms <span class="sec-hint" id="transformCount"></span></summary>
-            <div class="sec-body">
-              <div id="transformList"></div>
-              <button type="button" id="btnAddTransform" style="margin-top:.4rem">+ Add transform</button>
-              <div class="hint">Transforms run in order; later ones see earlier results.</div>
-            </div>
-          </details>
-          <div style="display:flex;gap:.5rem;margin-top:.8rem">
-            <button type="submit" class="primary">Save rule</button>
-            <button type="button" id="btnCancelEdit">Clear</button>
-          </div>
-        </form>
-      </div>
-    </details>
+      </details>
+      <details class="sec" id="secDrafts" open>
+        <summary>Rule drafts <span class="sec-hint" id="draftCount"></span></summary>
+        <div class="sec-body">
+          <div id="draftList"></div>
+        </div>
+      </details>
+    </div>
     <datalist id="tableList"></datalist>
     <datalist id="colList"></datalist>
   </section>
 
   <!-- (2) Approval queue -->
   <section class="panel" id="queuePanel">
-    <h2>Approval queue <span style="text-transform:none;letter-spacing:0" id="queueRule"></span></h2>
-    <div class="hint" style="margin-bottom:.6rem">Keyboard: <b>A</b> approve · <b>R</b> reject · <b>S</b> skip (acts on the highlighted card)</div>
+    <h2>Approval queue <span style="text-transform:none;letter-spacing:0" id="queueRule"></span> <span class="warnpill" style="margin-left: 10px;" id="backupWarn" title="Download a backup before approving - the restore script was auto-saved server-side, but you have no local copy yet">⚠ No backup downloaded</span></h2>
+    <div class="hint" style="margin-bottom:.6rem">
+      Keyboard: <b>A</b> approve · <b>R</b> reject · <b>S</b> skip (acts on the highlighted card)
+    </div>
     <div id="queueToolbar" style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-bottom:.7rem">
       <button id="btnSelAll">Select all pending</button>
+      <button id="btnReviewSel" class="aireview glossy" title="Run an AI review on the selected changes"><svg class="spark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9Z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8Z"/></svg><span>AI review selected</span></button>
       <button id="btnSelNone">Clear selection</button>
       <span class="hint" id="selCount" style="margin:0"></span>
       <span class="spacer"></span>
       <button id="btnBatchApprove" class="approve">Approve selected</button>
       <button id="btnBatchReject" class="reject">Reject selected</button>
       <button id="btnBatchSkip">Skip selected</button>
-      <span class="warnpill" id="backupWarn" title="Download a backup before approving — the restore script was auto-saved server-side, but you have no local copy yet">⚠ No backup downloaded</span>
-      <a id="lnkBackupSql" href="/api/session/backup?format=sql" title="Restore script with the values captured at preview time"><button>Backup .sql</button></a>
-      <a id="lnkBackupJson" href="/api/session/backup?format=json"><button>Backup .json</button></a>
+      <select id="backupSelect" title="Download the restore snapshot captured at preview time" style="width:auto">
+        <option value="">Backup…</option>
+        <option value="sql">.sql</option>
+        <option value="json">.json</option>
+      </select>
+      <button id="btnClearAll" class="warn" title="Discard the preview and reset the queue (nothing is written)">Clear all</button>
     </div>
     <div id="queue"><div class="empty">Run a preview to load changes.</div></div>
   </section>
@@ -203,6 +295,7 @@
     <div class="hint" id="barLabel"></div>
     <h2 style="margin-top:1rem">Activity log</h2>
     <div id="log"></div>
+    <div id="reviewSummary" hidden></div>
   </section>
 </main>
 <div id="sqlConsole">
@@ -212,6 +305,8 @@
     <span class="hint" style="margin:0">read-only: SELECT / SHOW / DESCRIBE / EXPLAIN · Ctrl+Enter runs · results capped at 200 rows</span>
     <span class="spacer"></span>
     <span class="hint" id="sqlMeta" style="margin:0"></span>
+    <button id="btnLoadSchema" title="Connects to the database to load table/column names for autocomplete (rule editor and console)">Load schema</button>
+    <button id="btnSchemaMap" title="Visualize tables and their relations">Schema map</button>
     <button id="btnSqlToggle">Open</button>
   </div>
   <div class="body">
