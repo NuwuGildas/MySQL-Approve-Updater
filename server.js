@@ -120,35 +120,40 @@ function resetPool(reason) {
  * connection) is forwarded through the SSH connection to DB_HOST:DB_PORT as
  * seen from the SSH server. The mysql2 pool then targets the local server.
  */
+/** Build ssh2 connect options from a profile's ssh config, wiring
+ *  keyboard-interactive fallback on the given client. Shared by the tunnel
+ *  and the remote console. */
+function sshConnectOptions(sshCfg, ssh) {
+  const opts = {
+    host: sshCfg.host,
+    port: sshCfg.port,
+    username: sshCfg.user,
+    readyTimeout: 20000,
+    keepaliveInterval: 15000,
+    keepaliveCountMax: 4,
+  };
+  if (sshCfg.privateKeyPath) {
+    opts.privateKey = fs.readFileSync(sshCfg.privateKeyPath); // may throw; caller handles
+    if (sshCfg.passphrase) opts.passphrase = sshCfg.passphrase;
+  } else if (sshCfg.password) {
+    opts.password = sshCfg.password;
+    // Some servers only accept keyboard-interactive instead of plain password.
+    opts.tryKeyboard = true;
+    ssh.on('keyboard-interactive', (name, instructions, lang, prompts, finish) => {
+      finish(prompts.map(() => sshCfg.password));
+    });
+  } else {
+    throw new Error('SSH enabled but neither an SSH password nor a private key is configured');
+  }
+  return opts;
+}
+
 function openSshTunnel(sshCfg, dbCfg, onDown = () => {}) {
   return new Promise((resolve, reject) => {
     const ssh = new SSHClient();
-    const connectOpts = {
-      host: sshCfg.host,
-      port: sshCfg.port,
-      username: sshCfg.user,
-      readyTimeout: 20000,
-      keepaliveInterval: 15000,
-      keepaliveCountMax: 4,
-    };
-    if (sshCfg.privateKeyPath) {
-      try {
-        connectOpts.privateKey = fs.readFileSync(sshCfg.privateKeyPath);
-        if (sshCfg.passphrase) connectOpts.passphrase = sshCfg.passphrase;
-      } catch (e) {
-        return reject(new Error(`Cannot read SSH private key: ${e.message}`));
-      }
-    } else if (sshCfg.password) {
-      connectOpts.password = sshCfg.password;
-      // Some servers only accept keyboard-interactive instead of plain
-      // password auth — answer its prompts with the same password.
-      connectOpts.tryKeyboard = true;
-      ssh.on('keyboard-interactive', (name, instructions, lang, prompts, finish) => {
-        finish(prompts.map(() => sshCfg.password));
-      });
-    } else {
-      return reject(new Error('SSH tunnel enabled but neither an SSH password nor a private key is configured'));
-    }
+    let connectOpts;
+    try { connectOpts = sshConnectOptions(sshCfg, ssh); }
+    catch (e) { return reject(e.message.includes('private key') ? e : new Error(`Cannot read SSH private key: ${e.message}`)); }
 
     let settled = false;
     ssh.on('error', (err) => {
@@ -745,6 +750,8 @@ app.use(express.static(path.join(ROOT, 'public')));
 app.use('/vendor/introjs', express.static(path.join(ROOT, 'node_modules', 'intro.js', 'minified')));
 app.use('/vendor/tabulator', express.static(path.join(ROOT, 'node_modules', 'tabulator-tables', 'dist')));
 app.use('/vendor/codemirror', express.static(path.join(ROOT, 'node_modules', 'codemirror')));
+app.use('/vendor/xterm', express.static(path.join(ROOT, 'node_modules', '@xterm', 'xterm')));
+app.use('/vendor/xterm-addon-fit', express.static(path.join(ROOT, 'node_modules', '@xterm', 'addon-fit')));
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
@@ -1082,13 +1089,20 @@ function sanitizeProfile(body, existing) {
   const db = body.db || {};
   const database = String(db.database || '').trim();
   const user = String(db.user || '').trim();
-  if (!database) throw httpError(400, 'Database name is required');
-  if (!user) throw httpError(400, 'Database user is required');
   const sshIn = body.ssh || {};
+  // A profile is either a DB connection (needs database + user) or an
+  // SSH-only server (ssh enabled + host). sshOnly profiles can't drive the
+  // database side but appear in the SSH servers view.
+  const sshOnly = !!body.sshOnly || (!database && !user && sshIn.enabled);
+  if (!sshOnly) {
+    if (!database) throw httpError(400, 'Database name is required');
+    if (!user) throw httpError(400, 'Database user is required');
+  }
   const num = (v, dflt) => (Number.isInteger(Number(v)) && Number(v) > 0 ? Number(v) : dflt);
   const profile = {
     id: existing?.id || crypto.randomUUID(),
     name,
+    sshOnly,
     db: {
       host: String(db.host || '127.0.0.1').trim() || '127.0.0.1',
       port: num(db.port, 3306),
@@ -1106,7 +1120,8 @@ function sanitizeProfile(body, existing) {
       passphrase: sshIn.passphrase ? String(sshIn.passphrase) : (existing?.ssh?.passphrase || ''),
     },
   };
-  if (profile.ssh.enabled && !profile.ssh.host) throw httpError(400, 'SSH tunnel is enabled but the SSH host is empty');
+  if (profile.ssh.enabled && !profile.ssh.host) throw httpError(400, 'SSH is enabled but the SSH host is empty');
+  if (sshOnly && !profile.ssh.enabled) throw httpError(400, 'An SSH server needs SSH enabled with a host');
   return profile;
 }
 
@@ -1117,7 +1132,8 @@ function assertNoPendingSession(what) {
 }
 
 app.get('/api/connections', (req, res) => {
-  res.json({ activeId: activeProfile().id, profiles: connStore.profiles.map(maskProfile) });
+  // the Connections modal manages DB connections; SSH-only servers live in the SSH servers view
+  res.json({ activeId: activeProfile().id, profiles: connStore.profiles.filter((p) => !p.sshOnly).map(maskProfile) });
 });
 
 app.post('/api/connections', wrap(async (req, res) => {
@@ -1158,10 +1174,12 @@ app.delete('/api/connections/:id', wrap(async (req, res) => {
 app.post('/api/connections/:id/activate', wrap(async (req, res) => {
   const p = connStore.profiles.find((x) => x.id === req.params.id);
   if (!p) throw httpError(404, 'Connection not found');
+  if (p.sshOnly) throw httpError(400, 'This is an SSH-only server — it has no database to activate');
   assertNoPendingSession('switching connections');
   connStore.activeId = p.id;
   await saveConnections();
   resetPool('connection profile switched');
+  if (sshConsole) { try { sshConsole.client.end(); } catch {} sshConsole = null; }
   session = null; // sessions belong to the database they were previewed on
   logEvent('info', `Active connection: "${p.name}" (${p.db.database} @ ${p.db.host})`);
   broadcastSession();
@@ -1414,7 +1432,7 @@ app.post('/api/session/review/:changeId', wrap(async (req, res) => {
         const ex = reviewExcerpt(c.before, c.after);
         return `Column "${c.column}" (before ${ex.beforeLen} chars, after ${ex.afterLen} chars${c.manualEdit ? ', MANUALLY EDITED by the user after the rule ran' : ''}):\n[BEFORE]\n${ex.before}\n[AFTER]\n${ex.after}`;
       }).join('\n\n');
-      const prompt = `You are reviewing ONE proposed row change in "MySQL Approve Updater" before a human approves it. Be a careful safety reviewer: the goal is to confirm the change does EXACTLY what the rule intends and destroys nothing else.
+      const prompt = `You are reviewing ONE proposed row change in "Server Tools" before a human approves it. Be a careful safety reviewer: the goal is to confirm the change does EXACTLY what the rule intends and destroys nothing else.
 
 RULE (the intended modification): "${session.ruleName}"
   table: ${session.table}, row: ${session.pkColumn}=${change.pk}
@@ -1469,7 +1487,15 @@ const { spawn } = require('child_process');
 const AGENT_FILE = path.join(DATA_DIR, 'agent.json');
 let agentConfig = null;
 try { agentConfig = JSON.parse(fs.readFileSync(AGENT_FILE, 'utf8')); } catch {}
-const agentChat = []; // in-memory conversation: { role: 'user'|'assistant', text }
+const CHAT_FILE = path.join(DATA_DIR, 'agent-chat.json');
+let agentChat = []; // conversation: { role: 'user'|'assistant'|'note', text, ... } — persisted so it resumes across restarts
+try { const c = JSON.parse(fs.readFileSync(CHAT_FILE, 'utf8')); if (Array.isArray(c)) agentChat = c; } catch {}
+let chatSaveChain = Promise.resolve();
+function saveChat() {
+  chatSaveChain = chatSaveChain.then(() => fsp.writeFile(CHAT_FILE, JSON.stringify(agentChat), 'utf8')).catch(() => {});
+}
+const MAX_CHAT = 200; // keep a long resumable history (was 20 in-memory)
+function trimChat() { if (agentChat.length > MAX_CHAT) agentChat.splice(0, agentChat.length - MAX_CHAT); }
 
 const AGENT_PROVIDERS = {
   claude: { label: 'Claude Code (CLI)', short: 'Claude Code', cmd: 'claude', kind: 'cli' },
@@ -1479,7 +1505,7 @@ const AGENT_PROVIDERS = {
 
 /* direct Messages API call — used for API keys (sk-ant-api…) and OAuth tokens
    from browser sign-in flows like `claude setup-token` (sk-ant-oat…) */
-async function claudeApiCall(apiKey, model, prompt, maxTokens = 1500) {
+async function claudeApiCall(apiKey, model, prompt, maxTokens = 8192) {
   const isOAuth = apiKey.startsWith('sk-ant-oat');
   const headers = { 'content-type': 'application/json', 'anthropic-version': '2023-06-01' };
   if (isOAuth) {
@@ -1503,7 +1529,10 @@ async function claudeApiCall(apiKey, model, prompt, maxTokens = 1500) {
     const msg = j?.error?.message || j?.error?.type || j?.error || (typeof j === 'string' ? j : '') || `HTTP ${res.status}`;
     throw new Error(`${res.status} ${msg}`);
   }
-  return (j.content || []).map((c) => c.text || '').join('').trim();
+  const text = (j.content || []).map((c) => c.text || '').join('').trim();
+  // surface a hit output cap so a truncated tool-call JSON isn't silently mistaken for a final reply
+  if (j.stop_reason === 'max_tokens') { const e = new Error('response hit the output token limit (truncated)'); e.truncated = true; e.partial = text; throw e; }
+  return text;
 }
 
 function runCli(cmd, args, input, timeoutMs = 180000) {
@@ -1633,7 +1662,7 @@ const agentProposals = []; // rule change proposals awaiting explicit user decis
 
 function agentSystemPrompt() {
   const toolLines = Object.entries(AGENT_TOOLS).map(([k, v]) => `- ${k}: ${v.desc}`).join('\n');
-  return `You are the embedded AI assistant of "MySQL Approve Updater", a tool that runs rule-based MySQL updates where every row change needs explicit human approval.
+  return `You are the embedded AI assistant of "Server Tools", a tool that runs rule-based MySQL updates where every row change needs explicit human approval.
 STRICT SCOPE: only this tool and the currently connected database "${currentDb().database}". Politely refuse anything outside that scope (general coding help, other systems, the wider filesystem, etc).
 DATABASE access is strictly READ-ONLY: you can never write to the database. Row changes only happen through rules whose previewed changes the USER approves.
 You MAY create or update RULES via the propose_rule tool — but every proposal requires the user's explicit approval in the UI before it is saved; never claim a rule exists until a system note confirms approval.
@@ -1803,13 +1832,13 @@ async function refreshClaudeToken() {
 
 app.post('/api/agent/disconnect', wrap(async (req, res) => {
   agentConfig = null;
-  agentChat.length = 0;
+  agentChat = []; saveChat();
   try { await fsp.unlink(AGENT_FILE); } catch {}
   logEvent('info', 'AI agent disconnected');
   res.json({ ok: true });
 }));
 
-app.post('/api/agent/reset', (req, res) => { agentChat.length = 0; res.json({ ok: true }); });
+app.post('/api/agent/reset', (req, res) => { agentChat = []; saveChat(); res.json({ ok: true }); });
 
 /* switch the model live (all providers; empty string = provider default) */
 app.post('/api/agent/model', wrap(async (req, res) => {
@@ -1834,7 +1863,7 @@ app.post('/api/agent/context-review', wrap(async (req, res) => {
     rule: session.ruleName, pk: change.pk, table: session.table, columns: cols,
     text: `The user shared a prior AI review of a pending change (rule "${session.ruleName}", table ${session.table}, ${session.pkColumn}=${change.pk}, column(s) ${cols}). Verdict: ${change.aiReview.verdict}. Summary: ${change.aiReview.summary}`,
   });
-  while (agentChat.length > 20) agentChat.shift();
+  trimChat(); saveChat();
   logEvent('info', `AI review of pk=${change.pk} sent to chat as context`);
   res.json({ ok: true });
 }));
@@ -1848,7 +1877,7 @@ app.post('/api/agent/context', wrap(async (req, res) => {
     role: 'note', kind: 'context', rule,
     text: `The user attached rule "${rule.name}" (id ${rule.id}) as context for the conversation: ${JSON.stringify(rule)}`,
   });
-  while (agentChat.length > 20) agentChat.shift();
+  trimChat(); saveChat();
   logEvent('info', `AI chat context: rule "${rule.name}" attached`);
   res.json({ ok: true, name: rule.name });
 }));
@@ -1857,8 +1886,9 @@ app.post('/api/agent/chat', wrap(async (req, res) => {
   if (!agentConfig?.provider) throw httpError(400, 'No AI agent connected');
   const message = String(req.body?.message || '').trim();
   if (!message) throw httpError(400, 'Empty message');
-  agentChat.push({ role: 'user', text: message });
-  while (agentChat.length > 20) agentChat.shift();
+  agentChat.push({ role: 'user', text: message, ts: new Date().toISOString() });
+  trimChat(); saveChat();
+  audit({ action: 'ai-chat', role: 'user', text: message });
   const actions = [];
   const propBefore = agentProposals.length;
   let transcriptExtra = '';
@@ -1866,10 +1896,17 @@ app.post('/api/agent/chat', wrap(async (req, res) => {
   for (let step = 0; step < 6; step++) {
     const who = AGENT_PROVIDERS[agentConfig.provider].short + (agentConfig.model ? ` (${agentConfig.model})` : '');
     sseBroadcast('agent', { type: 'step', step: step + 1, msg: `thinking with ${who}` });
+    // only the recent tail is sent to the model (full history is kept for resume/review)
+    const recent = agentChat.slice(-16);
     const prompt = agentSystemPrompt() + '\n\n--- Conversation ---\n' +
-      agentChat.map((m) => `${m.role === 'user' ? 'User' : m.role === 'note' ? 'System note' : 'Assistant'}: ${m.text}`).join('\n\n') +
+      recent.map((m) => `${m.role === 'user' ? 'User' : m.role === 'note' ? 'System note' : 'Assistant'}: ${m.text}`).join('\n\n') +
       transcriptExtra + '\n\nAssistant:';
-    const outRaw = (await agentRun(prompt)).trim();
+    let outRaw;
+    try { outRaw = (await agentRun(prompt)).trim(); }
+    catch (e) {
+      if (e.truncated) { reply = 'My response was too long and got cut off before it was complete. If I was building a rule, ask me to split it into smaller rules or use fewer transforms per rule.'; break; }
+      throw e;
+    }
     const call = parseAgentToolCall(outRaw);
     if (!call) { sseBroadcast('agent', { type: 'final' }); reply = outRaw; break; }
     sseBroadcast('agent', { type: 'tool', tool: call.tool, input: JSON.stringify(call.input || {}).slice(0, 140) });
@@ -1885,8 +1922,316 @@ app.post('/api/agent/chat', wrap(async (req, res) => {
     transcriptExtra += `\n\nAssistant: ${outRaw}\n\nTool result for ${call.tool}: ${resultStr}`;
   }
   if (reply == null) reply = 'I hit the tool-step limit before finishing. Ask again more specifically.';
-  agentChat.push({ role: 'assistant', text: reply });
+  agentChat.push({ role: 'assistant', text: reply, actions, ts: new Date().toISOString() });
+  trimChat(); saveChat();
+  audit({ action: 'ai-chat', role: 'assistant', text: reply, tools: actions.map((a) => a.tool) });
   res.json({ reply, actions, proposals: agentProposals.slice(propBefore).filter((p) => p.status === 'pending') });
+}));
+
+/* natural-language -> SQL for the read-only console.
+   Single-shot (no tool loop): we build an authoritative schema context straight
+   from information_schema so the model always sees the real, current tables and
+   columns regardless of what the browser has cached. The result is validated
+   through the same read-only guard the console itself uses before it is returned. */
+app.post('/api/agent/sql', wrap(async (req, res) => {
+  if (!agentConfig?.provider) throw httpError(400, 'No AI agent connected — open the AI agent (top-right) and connect a provider first.');
+  const ask = String(req.body?.prompt || '').trim();
+  if (!ask) throw httpError(400, 'Describe the query you want in plain language.');
+  const attachSchema = req.body?.attachSchema !== false; // client asks the user; false = generate without DB metadata
+  const previousSql = String(req.body?.previousSql || '').trim(); // present for follow-up / regenerate refinements
+  const db = currentDb().database;
+
+  // Build the schema context only when the user agreed to attach it.
+  let schemaText = '', shown = 0, omitted = 0;
+  if (attachSchema) {
+    const pool = await getPool();
+    // 1) all table names (cheap even on huge schemas)
+    const [tRows] = await pool.execute(
+      `SELECT TABLE_NAME AS t FROM information_schema.tables WHERE table_schema = ? ORDER BY TABLE_NAME`, [db]
+    );
+    const allNames = tRows.map((r) => r.t);
+    if (!allNames.length) throw httpError(400, `The connected database "${db}" exposes no tables to describe.`);
+
+    // 2) pick the tables most relevant to the request. Schemas here can hold
+    //    thousands of tables, so a blind alphabetical slice would hide the right
+    //    one — score by overlap between the prompt and each table name instead.
+    const MAX_TABLES = 45, MAX_COLS = 45;
+    const stop = new Set(['the', 'and', 'for', 'from', 'with', 'that', 'this', 'row', 'rows', 'all', 'get', 'list', 'show', 'find', 'where', 'select', 'count', 'table', 'tables', 'column', 'columns', 'top', 'last', 'first', 'per', 'them', 'their', 'has', 'contains', 'contain', 'still']);
+    const basis = `${ask} ${previousSql}`.toLowerCase();
+    const tokens = [...new Set((basis.match(/[a-z0-9_]{3,}/g) || []).filter((w) => !stop.has(w)))];
+    const scoreOf = (name) => {
+      const low = name.toLowerCase();
+      let s = 0;
+      for (const tok of tokens) {
+        if (low === tok) s += 10;                       // exact table name in the prompt
+        else if (low.includes(tok) || tok.includes(low)) s += 3; // substring either way
+      }
+      return s;
+    };
+    const scored = allNames.map((n) => ({ n, s: scoreOf(n) }));
+    const matched = scored.filter((x) => x.s > 0).sort((a, b) => b.s - a.s || a.n.localeCompare(b.n));
+    let picked = matched.slice(0, MAX_TABLES).map((x) => x.n);
+    // if nothing matched (generic request), fall back to the first tables alphabetically
+    if (!picked.length) picked = allNames.slice(0, MAX_TABLES);
+    else if (picked.length < MAX_TABLES) {
+      for (const n of allNames) { if (picked.length >= MAX_TABLES) break; if (!picked.includes(n)) picked.push(n); }
+    }
+
+    // 3) columns for the picked tables only
+    const [cRows] = await pool.query(
+      `SELECT TABLE_NAME AS t, COLUMN_NAME AS c, COLUMN_KEY AS k, DATA_TYPE AS dt
+         FROM information_schema.columns WHERE table_schema = ? AND TABLE_NAME IN (?)
+         ORDER BY TABLE_NAME, ORDINAL_POSITION`, [db, picked]
+    );
+    const cols = new Map();
+    for (const r of cRows) { (cols.get(r.t) || cols.set(r.t, []).get(r.t)).push(r); }
+    for (const t of picked) {
+      const list = cols.get(t) || [];
+      const colDesc = list.slice(0, MAX_COLS).map((c) => `${c.c}${c.k === 'PRI' ? '*' : ''}:${c.dt}`).join(', ');
+      schemaText += `${t}(${colDesc}${list.length > MAX_COLS ? ', …' : ''})\n`;
+    }
+    shown = picked.length; omitted = Math.max(0, allNames.length - shown);
+    if (omitted) schemaText += `… and ${omitted} other table(s) exist but are not shown. If the request needs one, name it explicitly and I will use it.\n`;
+  }
+
+  const schemaBlock = attachSchema
+    ? `Schema  table(column*=PK:type, …):\n${schemaText}`
+    : `No schema was attached. Rely only on table/column names the request itself provides; do not invent names you were not given.`;
+  const followBlock = previousSql
+    ? `\nThe current query is:\n${previousSql}\nModify it to satisfy the request; keep the parts that already fit.\n`
+    : '';
+
+  const genPrompt =
+`You convert a request into ONE MySQL statement for a strictly READ-ONLY console.
+Output rules (obey exactly):
+- Reply with ONLY the SQL. No prose, no explanation, no markdown fences, no comments, no trailing semicolon.
+- ${attachSchema ? 'Use ONLY tables/columns from the schema below. Backtick-quote identifiers that need it. "*" marks a primary key.' : 'Backtick-quote identifiers that need it.'}
+- The console runs ONLY: SELECT, SHOW, DESCRIBE, EXPLAIN, WITH. Never emit INSERT/UPDATE/DELETE/REPLACE/DDL. If the request implies a write, return the SELECT that finds the rows it would affect instead.
+- Add a sensible LIMIT (<= 200) to row-returning queries unless an aggregate makes it unnecessary or the user asked for a specific count.
+- Single statement only.
+Database: ${db}
+${schemaBlock}${followBlock}
+Request: ${ask}
+SQL:`;
+
+  let out;
+  try { out = (await agentRun(genPrompt)).trim(); }
+  catch (e) {
+    if (e.truncated) throw httpError(502, 'The model response was cut off before finishing. Try a simpler request.');
+    throw httpError(502, `AI request failed: ${e.message}`);
+  }
+  // strip fences / stray prose the model may add despite instructions
+  let sql = out.replace(/^```(?:sql)?\s*/i, '').replace(/\s*```$/i, '').trim();
+  const m = sql.match(/\b(WITH|SELECT|SHOW|DESCRIBE|DESC|EXPLAIN)\b/i);
+  if (m) sql = sql.slice(sql.indexOf(m[0]));
+  sql = sql.replace(/;\s*$/, '').trim();
+  try { validateConsoleSql(sql); }
+  catch (e) { throw httpError(422, `The model produced SQL the read-only console rejects (${e.message}). Rephrase your request.`); }
+  audit({ action: 'ai-sql', prompt: ask, sql, schemaAttached: attachSchema, followUp: !!previousSql });
+  logEvent('info', `AI generated SQL from prompt: "${ask.slice(0, 90)}"${attachSchema ? '' : ' (no schema)'}${previousSql ? ' (follow-up)' : ''}`);
+  res.json({ sql, tablesShown: shown, tablesOmitted: omitted, schemaAttached: attachSchema });
+}));
+
+/* ================= remote SSH console (command-per-exec, cwd-aware) ================= */
+let sshConsole = null; // { client, profileId, cwd }
+
+function sshConsoleConnect() {
+  const sshCfg = currentSsh();
+  if (!sshCfg) throw httpError(400, 'The active connection has no SSH tunnel configured');
+  if (sshConsole && sshConsole.profileId === activeProfile().id && sshConsole.client) return Promise.resolve(sshConsole);
+  if (sshConsole) { try { sshConsole.client.end(); } catch {} sshConsole = null; }
+  return new Promise((resolve, reject) => {
+    const client = new SSHClient();
+    let opts;
+    try { opts = sshConnectOptions(sshCfg, client); }
+    catch (e) { return reject(httpError(400, e.message)); }
+    let settled = false;
+    client.on('ready', () => { settled = true; sshConsole = { client, profileId: activeProfile().id, cwd: '.' }; resolve(sshConsole); });
+    client.on('error', (err) => { if (!settled) { settled = true; reject(httpError(400, `SSH connection failed: ${err.message}`)); } else if (sshConsole?.client === client) sshConsole = null; });
+    client.on('close', () => { if (sshConsole?.client === client) sshConsole = null; });
+    client.connect(opts);
+  });
+}
+
+const SSH_CONSOLE_MAX_OUT = 200000; // cap streamed output per command
+function sshConsoleExec(con, command) {
+  return new Promise((resolve, reject) => {
+    // run from the tracked cwd, then report the resulting cwd so `cd` persists.
+    // marker is unguessable so it can't collide with real output.
+    const marker = '___MAU_CWD_' + crypto.randomBytes(6).toString('hex') + '___';
+    const wrapped = `cd ${JSON.stringify(con.cwd)} 2>/dev/null; ${command}\n__ec=$?; printf '\\n%s%s:%s\\n' ${JSON.stringify(marker)} "$__ec" "$(pwd)"`;
+    con.client.exec(wrapped, { pty: false }, (err, stream) => {
+      if (err) return reject(err);
+      let out = '', truncated = false;
+      const onData = (d) => {
+        if (out.length < SSH_CONSOLE_MAX_OUT) out += d.toString('utf8');
+        else truncated = true;
+      };
+      stream.on('data', onData);
+      stream.stderr.on('data', onData);
+      stream.on('close', () => {
+        let code = null;
+        const mi = out.lastIndexOf(marker);
+        if (mi !== -1) {
+          const tail = out.slice(mi + marker.length);
+          const m = /^(\d+):([\s\S]*?)\n?$/.exec(tail);
+          if (m) { code = Number(m[1]); con.cwd = m[2].trim() || con.cwd; }
+          out = out.slice(0, mi).replace(/\n$/, '');
+        }
+        resolve({ output: out, exitCode: code, cwd: con.cwd, truncated });
+      });
+      stream.on('error', reject);
+    });
+  });
+}
+
+app.post('/api/ssh-console/exec', wrap(async (req, res) => {
+  const command = String(req.body?.command || '').trim();
+  if (!command) throw httpError(400, 'Empty command');
+  const con = await sshConsoleConnect();
+  const started = Date.now();
+  let r;
+  try { r = await sshConsoleExec(con, command); }
+  catch (e) { throw httpError(500, `SSH exec failed: ${e.message}`); }
+  const ms = Date.now() - started;
+  logEvent('info', `SSH console (${currentSsh().host}, ${ms}ms, exit ${r.exitCode}): ${command.slice(0, 160)}`);
+  audit({ action: 'ssh-console', sshHost: currentSsh().host, cwd: r.cwd, command, exitCode: r.exitCode });
+  res.json({ ...r, ms, host: currentSsh().host, user: currentSsh().user });
+}));
+
+app.post('/api/ssh-console/close', (req, res) => {
+  if (sshConsole) { try { sshConsole.client.end(); } catch {} sshConsole = null; }
+  res.json({ ok: true });
+});
+
+/* ================= SSH session manager (independent of the active DB profile) =========
+   One live ssh2 client per profile that has SSH enabled, plus pulled VM meta. */
+const sshSessions = new Map(); // profileId -> { client, connectedAt, meta, host, user, name }
+
+function sshEnabledProfiles() {
+  return connStore.profiles.filter((p) => p.ssh && p.ssh.enabled && p.ssh.host);
+}
+function profileById(id) { return connStore.profiles.find((p) => p.id === id); }
+
+function sshClientFor(sshCfg) {
+  return new Promise((resolve, reject) => {
+    const client = new SSHClient();
+    let opts;
+    try { opts = sshConnectOptions(sshCfg, client); }
+    catch (e) { return reject(new Error(e.message)); }
+    let settled = false;
+    client.on('ready', () => { settled = true; resolve(client); });
+    client.on('error', (err) => { if (!settled) { settled = true; reject(new Error(err.message)); } });
+    client.connect(opts);
+  });
+}
+
+function execOnClient(client, cmd, timeoutMs = 20000) {
+  return new Promise((resolve, reject) => {
+    client.exec(cmd, (err, stream) => {
+      if (err) return reject(err);
+      let out = '';
+      const t = setTimeout(() => { try { stream.close(); } catch {} resolve(out); }, timeoutMs);
+      stream.on('data', (d) => { out += d.toString('utf8'); });
+      stream.stderr.on('data', () => {});
+      stream.on('close', () => { clearTimeout(t); resolve(out); });
+      stream.on('error', (e) => { clearTimeout(t); reject(e); });
+    });
+  });
+}
+
+// one compound command → labeled key=value lines we can parse
+const VM_META_CMD = [
+  'echo "HOST=$(hostname 2>/dev/null)"',
+  'echo "DISTRO=$( ( . /etc/os-release 2>/dev/null; printf %s "$PRETTY_NAME" ) )"',
+  'echo "KERNEL=$(uname -sr 2>/dev/null)"',
+  'echo "ARCH=$(uname -m 2>/dev/null)"',
+  'echo "UPTIME=$(uptime -p 2>/dev/null | sed s/^up.//)"',
+  'echo "CPUS=$(nproc 2>/dev/null)"',
+  'echo "LOAD=$(cut -d\' \' -f1-3 /proc/loadavg 2>/dev/null)"',
+  'echo "MEM=$(free -m 2>/dev/null | awk \'/Mem:/{print $3"/"$2}\')"',
+  'echo "DISK=$(df -h / 2>/dev/null | awk \'NR==2{print $3"/"$2" "$5}\')"',
+  'echo "USER=$(whoami 2>/dev/null)"',
+].join('; ');
+
+async function pullVmMeta(client) {
+  const out = await execOnClient(client, VM_META_CMD);
+  const meta = {};
+  for (const line of out.split('\n')) {
+    const i = line.indexOf('=');
+    if (i > 0) meta[line.slice(0, i).trim().toLowerCase()] = line.slice(i + 1).trim();
+  }
+  meta.pulledAt = new Date().toISOString();
+  return meta;
+}
+
+function sshSessionView(p) {
+  const s = sshSessions.get(p.id);
+  return {
+    id: p.id, name: p.name, host: p.ssh.host, port: p.ssh.port, user: p.ssh.user,
+    active: p.id === activeProfile().id, sshOnly: !!p.sshOnly,
+    connected: !!s, connectedAt: s?.connectedAt || null, meta: s?.meta || null,
+  };
+}
+
+app.get('/api/ssh/sessions', (req, res) => {
+  res.json({ sessions: sshEnabledProfiles().map(sshSessionView) });
+});
+
+app.post('/api/ssh/sessions/:id/connect', wrap(async (req, res) => {
+  const p = profileById(req.params.id);
+  if (!p || !p.ssh?.enabled || !p.ssh.host) throw httpError(400, 'That profile has no SSH configured');
+  let s = sshSessions.get(p.id);
+  if (!s) {
+    let client;
+    try { client = await sshClientFor(p.ssh); }
+    catch (e) { throw httpError(400, `SSH connection failed: ${e.message}`); }
+    s = { client, connectedAt: new Date().toISOString(), meta: null, host: p.ssh.host, user: p.ssh.user, name: p.name };
+    client.on('close', () => { if (sshSessions.get(p.id)?.client === client) sshSessions.delete(p.id); });
+    sshSessions.set(p.id, s);
+    logEvent('info', `SSH session connected: ${p.ssh.user}@${p.ssh.host} ("${p.name}")`);
+    audit({ action: 'ssh-session-connect', sshHost: p.ssh.host, sshUser: p.ssh.user, profile: p.name });
+  }
+  try { s.meta = await pullVmMeta(s.client); }
+  catch (e) { s.meta = { error: e.message, pulledAt: new Date().toISOString() }; }
+  res.json(sshSessionView(p));
+}));
+
+app.post('/api/ssh/sessions/:id/refresh', wrap(async (req, res) => {
+  const p = profileById(req.params.id);
+  const s = p && sshSessions.get(p.id);
+  if (!s) throw httpError(409, 'Not connected');
+  try { s.meta = await pullVmMeta(s.client); }
+  catch (e) { throw httpError(500, `Meta refresh failed: ${e.message}`); }
+  res.json(sshSessionView(p));
+}));
+
+app.post('/api/ssh/sessions/:id/disconnect', wrap(async (req, res) => {
+  const p = profileById(req.params.id);
+  const killed = p ? closeTerminalsFor(p.id) : 0; // kill terminals (and any AI CLI running in them) first
+  const s = p && sshSessions.get(p.id);
+  const cleaned = [];
+  if (s) {
+    const rc = s.remoteCleanup;
+    if (rc) {
+      // remove what we put on the box: forwarded token/session, and Claude if we installed it
+      let cmd = 'rm -f "$HOME"/.mau_* 2>/dev/null';
+      if (rc.removeCreds) { cmd += '; rm -f "$HOME/.claude/.credentials.json" 2>/dev/null'; cleaned.push('session'); }
+      if (rc.removeJson) { cmd += '; rm -f "$HOME/.claude.json" 2>/dev/null'; }
+      if (rc.uninstallClaude) {
+        cmd += '; rm -rf "$HOME/.local/bin/claude" "$HOME/.local/share/claude" "$HOME/.cache/claude-cli-nodejs" 2>/dev/null';
+        if (rc.createdDotClaude) cmd += '; rm -rf "$HOME/.claude" 2>/dev/null';
+        cleaned.push('claude-uninstall');
+      }
+      await new Promise((r) => setTimeout(r, 300)); // let the SIGHUP'd shells release the files first
+      try { await execOnClient(s.client, cmd, 20000); } catch (e) { logEvent('warn', `SSH cleanup partial: ${e.message}`); }
+    }
+    try { s.client.end(); } catch {}
+    sshSessions.delete(p.id);
+    logEvent('info', `SSH session disconnected: ${p.ssh.host} ("${p.name}")${killed ? `, ${killed} terminal(s) killed` : ''}${cleaned.length ? `, cleaned: ${cleaned.join('+')}` : ''}`);
+    if (cleaned.length) audit({ action: 'ssh-session-cleanup', sshHost: p.ssh.host, cleaned });
+  }
+  res.json({ ok: true, terminalsClosed: killed, cleaned });
 }));
 
 /* ---- audit viewer: parsed tail, newest first ---- */
@@ -1936,8 +2281,168 @@ app.use((err, req, res, next) => {
   res.status(status).json({ error: err.message || 'Internal error' });
 });
 
-app.listen(PORT, '127.0.0.1', () => {
-  console.log(`mysql-approve-updater listening on http://localhost:${PORT} (localhost only)`);
+/* Build the remote AI-CLI bootstrap. Prefers no-root, runtime-independent
+   installers so it works on boxes with old/absent Node and without sudo:
+   - claude: official native installer → self-contained binary in ~/.local/bin
+   - codex:  user-prefix npm (no global write), else point to release binaries
+   All output is visible in the user's PTY; nothing hidden. */
+function buildAiBootstrap(cli, ctx) {
+  const path = 'export PATH="$HOME/.local/bin:$HOME/bin:$HOME/.npm-global/bin:$PATH"';
+  const banner = ctx ? `echo "Target: ${ctx.replace(/"/g, '')}"; ` : '';
+  if (cli === 'codex') {
+    return `clear; ${path}; ${banner}` +
+      `if command -v codex >/dev/null 2>&1; then echo "Starting codex (already installed)…"; codex; ` +
+      `elif command -v npm >/dev/null 2>&1; then echo "Installing Codex to a user prefix (no root)…"; ` +
+      `mkdir -p "$HOME/.npm-global" && npm install --prefix "$HOME/.npm-global" -g @openai/codex && codex || ` +
+      `echo "Install failed. For old Node, grab a prebuilt binary from https://github.com/openai/codex/releases and put it on your PATH."; ` +
+      `else echo "No codex and no npm here. Download a prebuilt binary from https://github.com/openai/codex/releases into ~/.local/bin."; fi`;
+  }
+  // claude
+  return `clear; ${path}; ${banner}` +
+    `if command -v claude >/dev/null 2>&1; then echo "Starting claude (already installed)…"; claude; ` +
+    `elif command -v curl >/dev/null 2>&1; then echo "Installing Claude Code via the official native installer (no root, bundles its own runtime)…"; ` +
+    `curl -fsSL https://claude.ai/install.sh | bash && ${path} && claude || ` +
+    `echo "Install failed - see the messages above. You can also try: wget -qO- https://claude.ai/install.sh | bash"; ` +
+    `elif command -v wget >/dev/null 2>&1; then wget -qO- https://claude.ai/install.sh | bash && ${path} && claude || echo "Install failed."; ` +
+    `else echo "Neither curl nor wget is available to run the installer."; fi`;
+}
+
+/* write a small file over SFTP (reliable, encrypted, not shown in the PTY).
+   relPath is relative to the SSH home dir. Creates a parent dir if asked. */
+function sftpWriteFile(client, relPath, data, mode, mkdirParent) {
+  return new Promise((resolve, reject) => {
+    client.sftp((err, sftp) => {
+      if (err) return reject(err);
+      const done = () => {
+        const w = sftp.createWriteStream(relPath, { mode });
+        w.on('close', resolve);
+        w.on('error', reject);
+        w.end(data);
+      };
+      if (mkdirParent) sftp.mkdir(mkdirParent, () => done()); // ignore "exists"
+      else done();
+    });
+  });
+}
+
+/* ================= interactive SSH terminal (WebSocket + PTY) ================= */
+const { WebSocketServer } = require('ws');
+const termWss = new WebSocketServer({ noServer: true });
+const sshTerminals = new Map(); // profileId -> Set of { close() } — so disconnecting a server kills its terminals (and any AI CLI running in them)
+function closeTerminalsFor(profileId) {
+  const set = sshTerminals.get(profileId);
+  if (!set) return 0;
+  const n = set.size;
+  for (const t of [...set]) { try { t.close(); } catch {} }
+  sshTerminals.delete(profileId);
+  return n;
+}
+
+termWss.on('connection', (ws, req) => {
+  const url = new URL(req.url, 'http://localhost');
+  const say = (s) => { try { ws.send('\x00' + s); } catch {} }; // \x00 prefix = our status line, not shell output
+  // target a specific SSH-enabled profile if given, else the active connection's tunnel
+  const wantProfile = url.searchParams.get('profile');
+  const sshCfg = wantProfile
+    ? (profileById(wantProfile)?.ssh?.enabled ? profileById(wantProfile).ssh : null)
+    : currentSsh();
+  if (!sshCfg) { say('No SSH configured for the requested server.\r\n'); ws.close(); return; }
+  const cols = Math.max(20, Math.min(500, Number(url.searchParams.get('cols')) || 100));
+  const rows = Math.max(5, Math.min(200, Number(url.searchParams.get('rows')) || 30));
+  // AI terminal: launch the CLI of the currently-connected AI provider on the
+  // remote box, installing it first if missing. Runs as a VISIBLE command in
+  // the user's own PTY (nothing hidden).
+  const aiMode = url.searchParams.get('ai') === '1' && !!agentConfig?.provider;
+  const aiCli = agentConfig?.provider === 'codex' ? 'codex' : 'claude';
+  const meta = wantProfile ? sshSessions.get(wantProfile)?.meta : null; // OS/arch context (pulled at connect)
+  const ctx = meta && !meta.error ? `${meta.distro || meta.kernel || ''} ${meta.arch || ''}`.trim() : '';
+  const aiBootstrap = buildAiBootstrap(aiCli, ctx);
+
+  const client = new SSHClient();
+  let opts;
+  try { opts = sshConnectOptions(sshCfg, client); }
+  catch (e) { say(`SSH config error: ${e.message}\r\n`); ws.close(); return; }
+  say(`Connecting to ${sshCfg.user}@${sshCfg.host}…\r\n`);
+
+  // reuse the tool's active AI session on the remote so the CLI skips login.
+  // Only the claude-api connection carries a token we can forward.
+  const cred = (aiMode && aiCli === 'claude' && agentConfig?.provider === 'claude-api' && agentConfig.apiKey)
+    ? { oauth: agentConfig.apiKey.startsWith('sk-ant-oat'), env: agentConfig.apiKey.startsWith('sk-ant-oat') ? 'CLAUDE_CODE_OAUTH_TOKEN' : 'ANTHROPIC_API_KEY', value: agentConfig.apiKey }
+    : null;
+
+  client.on('ready', async () => {
+    const sess = wantProfile ? sshSessions.get(wantProfile) : null;
+    let credPrefix = '';
+    if (cred) {
+      // detect prior state so cleanup only removes what WE add
+      let hadCli = true, hadCreds = true, hadJson = true;
+      try {
+        const probe = await execOnClient(client,
+          'command -v claude >/dev/null 2>&1 && echo CLI1 || echo CLI0; ' +
+          'test -e "$HOME/.claude/.credentials.json" && echo CR1 || echo CR0; ' +
+          'test -e "$HOME/.claude.json" && echo JS1 || echo JS0', 15000);
+        hadCli = /CLI1/.test(probe); hadCreds = /CR1/.test(probe); hadJson = /JS1/.test(probe);
+      } catch {}
+      if (cred.oauth) {
+        // 1) the session store Claude Code reads for auth
+        const credsJson = JSON.stringify({ claudeAiOauth: {
+          accessToken: agentConfig.apiKey, refreshToken: agentConfig.refreshToken || '',
+          expiresAt: Date.now() + 8 * 3600e3, scopes: ['user:inference', 'user:profile'],
+        } });
+        if (!hadCreds) { try { await sftpWriteFile(client, '.claude/.credentials.json', credsJson, 0o600, '.claude'); } catch {} }
+        // 2) mark onboarding complete so the first-run wizard (which forces the login menu) is skipped
+        if (!hadJson) {
+          const cfg = JSON.stringify({ hasCompletedOnboarding: true, theme: 'dark', autoUpdates: false });
+          try { await sftpWriteFile(client, '.claude.json', cfg, 0o600, null); } catch {}
+        }
+      }
+      // also set the env var for the launched process (belt and suspenders)
+      const tmp = `.mau_${crypto.randomBytes(6).toString('hex')}`;
+      try {
+        await sftpWriteFile(client, tmp, cred.value, 0o600, null);
+        credPrefix = `export ${cred.env}="$(cat "$HOME/${tmp}" 2>/dev/null)"; rm -f "$HOME/${tmp}"; `;
+      } catch {}
+      // record what to undo on disconnect (only what we created)
+      if (sess) sess.remoteCleanup = {
+        removeCreds: cred.oauth && !hadCreds,
+        removeJson: cred.oauth && !hadJson,
+        uninstallClaude: !hadCli,
+        createdDotClaude: !hadCreds,
+      };
+    }
+    const startShell = (credPrefix) => client.shell({ term: 'xterm-256color', cols, rows }, (err, stream) => {
+      if (err) { say(`Shell failed: ${err.message}\r\n`); ws.close(); return; }
+      logEvent('info', `SSH terminal opened: ${sshCfg.user}@${sshCfg.host}${aiMode ? ` (AI: ${aiCli}${cred ? ', session forwarded' : ''})` : ''}`);
+      audit({ action: aiMode ? 'ssh-terminal-ai' : 'ssh-terminal-open', sshHost: sshCfg.host, sshUser: sshCfg.user, ...(aiMode ? { aiCli, sessionForwarded: !!cred } : {}) });
+      if (cred) say('Forwarding this tool session (no remote login needed)…\r\n');
+      if (aiMode) setTimeout(() => { try { stream.write((credPrefix || '') + aiBootstrap + '\n'); } catch {} }, 400); // let the shell prompt settle first
+      // register so disconnecting the server tears this terminal (and its AI CLI) down
+      const termProfileId = wantProfile || activeProfile().id;
+      const entry = { close: () => { try { stream.end(); } catch {} try { client.end(); } catch {} try { ws.close(); } catch {} } };
+      if (!sshTerminals.has(termProfileId)) sshTerminals.set(termProfileId, new Set());
+      sshTerminals.get(termProfileId).add(entry);
+      const unregister = () => { sshTerminals.get(termProfileId)?.delete(entry); };
+      stream.on('data', (d) => { try { ws.send(d); } catch {} });         // shell → browser (binary)
+      stream.stderr.on('data', (d) => { try { ws.send(d); } catch {} });
+      stream.on('close', () => { unregister(); try { ws.close(); } catch {} client.end(); });
+      ws.on('message', (msg, isBinary) => {
+        if (!isBinary) {
+          // text frame = control JSON (resize); anything else is ignored
+          try { const c = JSON.parse(msg.toString()); if (c.type === 'resize') return stream.setWindow(c.rows, c.cols, 0, 0); } catch {}
+          return;
+        }
+        stream.write(msg); // keystrokes → shell
+      });
+      ws.on('close', () => { unregister(); try { stream.end(); } catch {} client.end(); logEvent('info', `SSH terminal closed: ${sshCfg.host}`); });
+    });
+    startShell(credPrefix);
+  });
+  client.on('error', (err) => { say(`SSH connection failed: ${err.message}\r\n`); try { ws.close(); } catch {} });
+  client.connect(opts);
+});
+
+const server = app.listen(PORT, '127.0.0.1', () => {
+  console.log(`server-tools listening on http://localhost:${PORT} (localhost only)`);
   const db = currentDb(), ssh = currentSsh();
   console.log(`Connection profile: "${activeProfile().name}" — ${db.database} @ ${db.host}:${db.port}${ssh ? ` via SSH tunnel ${ssh.host}` : ' (direct)'}`);
   console.log('No database connection is opened until you load the schema or run a preview.');
@@ -1945,4 +2450,12 @@ app.listen(PORT, '127.0.0.1', () => {
     // double-click convenience: open the UI in the default browser
     require('child_process').exec(`start http://localhost:${PORT}`, () => {});
   }
+});
+
+// upgrade only our terminal path, and only from loopback (the whole app is localhost-only)
+server.on('upgrade', (req, socket, head) => {
+  const remote = req.socket.remoteAddress || '';
+  const isLocal = remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1';
+  if (!isLocal || !req.url.startsWith('/api/ssh-term')) { socket.destroy(); return; }
+  termWss.handleUpgrade(req, socket, head, (ws) => termWss.emit('connection', ws, req));
 });

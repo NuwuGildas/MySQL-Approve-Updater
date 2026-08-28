@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <!-- Robot logo — blue original. Usage: <svg><use href="sprite.svg#robot-blue"/></svg> -->
+    <symbol id="robot-blue" viewBox="0 0 180 200">
+      <g fill="none" stroke="#00449F" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M89.5 16 V40" stroke-width="12"/>
+        <path d="M16 106
+                 C16 62 42 40 89.5 40
+                 C137 40 163 62 163 106
+                 C163 137 139 151 89.5 151
+                 C40 151 16 137 16 106 Z" stroke-width="12"/>
+        <path d="M54 86.5 V104.5" stroke-width="11"/>
+        <path d="M122 86.5 V104.5" stroke-width="11"/>
+        <path d="M28 182 Q89.5 172.5 151 182" stroke-width="12"/>
+      </g>
+    </symbol>
+
+    <!-- Same mark, inherits CSS `color` — recolor freely with `color: ...` on the <svg> -->
+    <symbol id="robot" viewBox="0 0 180 200">
+      <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M89.5 16 V40" stroke-width="12"/>
+        <path d="M16 106
+                 C16 62 42 40 89.5 40
+                 C137 40 163 62 163 106
+                 C163 137 139 151 89.5 151
+                 C40 151 16 137 16 106 Z" stroke-width="12"/>
+        <path d="M54 86.5 V104.5" stroke-width="11"/>
+        <path d="M122 86.5 V104.5" stroke-width="11"/>
+        <path d="M28 182 Q89.5 172.5 151 182" stroke-width="12"/>
+      </g>
+    </symbol>
+  </defs>
+</svg>

@@ -1,0 +1,14 @@
+{
+  "name": "Server Tools",
+  "short_name": "Server Tools",
+  "description": "Rule-based MySQL updates with per-row human approval, plus SSH tools.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f1419",
+  "theme_color": "#0f1419",
+  "icons": [
+    { "src": "/assets/favicon/favicon.svg", "type": "image/svg+xml", "sizes": "any" },
+    { "src": "/assets/favicon/icon-192.png", "type": "image/png", "sizes": "192x192" },
+    { "src": "/assets/favicon/icon-512.png", "type": "image/png", "sizes": "512x512", "purpose": "any maskable" }
+  ]
+}

@@ -1,0 +1,170 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -46 180 246" width="180" height="246" role="img" aria-label="Animated robot logo">
+  <style>
+    g, path { transform-box: fill-box; }
+
+    /* master timeline: 10s loop
+       0-8%    idle
+       12-22%  look left
+       28%     center + blink
+       32-42%  look right
+       48%     center
+       50-56%  antenna zap, sparks pop out
+       53-60%  look up (noticing the sparks)
+       66%     center
+       70-79%  look down + squish
+       85-92%  center + double blink
+       100%    idle */
+
+    #head-grp {
+      transform-origin: 50% 65%;
+      animation: head 10s ease-in-out infinite;
+    }
+    @keyframes head {
+      0%, 8%   { transform: none; }
+      12%, 22% { transform: translate(-7px, 2px) rotate(-5deg); }
+      28%      { transform: none; }
+      32%, 42% { transform: translate(7px, 2px) rotate(5deg); }
+      48%      { transform: none; }
+      53%, 60% { transform: translateY(-6px); }
+      66%      { transform: none; }
+      70%, 79% { transform: translateY(5px) scale(1.05, 0.9); }
+      85%, 100%{ transform: none; }
+    }
+
+    #eyes {
+      animation: eyes 10s ease-in-out infinite;
+    }
+    @keyframes eyes {
+      0%, 8%   { transform: none; }
+      12%, 22% { transform: translate(-9px, 1px); }
+      28%      { transform: none; }
+      32%, 42% { transform: translate(9px, 1px); }
+      48%      { transform: none; }
+      53%, 60% { transform: translateY(-5px); }
+      66%      { transform: none; }
+      70%, 79% { transform: translateY(4px); }
+      85%, 100%{ transform: none; }
+    }
+
+    .eye {
+      transform-origin: 50% 50%;
+      animation: blink 10s ease-in-out infinite;
+    }
+    @keyframes blink {
+      0%, 26%       { transform: scaleY(1); }
+      27.5%         { transform: scaleY(0.08); }  /* blink at center */
+      29%, 69%      { transform: scaleY(1); }
+      72%, 78%      { transform: scaleY(0.45); }  /* squint during squish */
+      81%, 85.5%    { transform: scaleY(1); }
+      87%           { transform: scaleY(0.08); }  /* double blink */
+      88.5%         { transform: scaleY(1); }
+      90%           { transform: scaleY(0.08); }
+      91.5%, 100%   { transform: scaleY(1); }
+    }
+
+    #antenna {
+      transform-origin: 50% 100%;   /* pivot where it meets the head */
+      animation: antenna 10s ease-in-out infinite;
+    }
+    @keyframes antenna {
+      0%, 8%   { transform: none; }
+      14%, 22% { transform: rotate(9deg); }   /* lags behind the turn */
+      28%      { transform: rotate(-3deg); }
+      34%, 42% { transform: rotate(-9deg); }
+      48%      { transform: rotate(3deg); }
+      49.5%    { transform: none; }
+      51%      { transform: rotate(8deg) scaleY(1.08); }   /* zap twitch */
+      53%      { transform: rotate(-7deg); }
+      55%      { transform: rotate(4deg); }
+      57%, 60% { transform: translateY(-1px); }
+      70%, 79% { transform: translateY(2px) scaleY(0.8); }
+      85%, 100%{ transform: none; }
+    }
+
+    #smile {
+      transform-origin: 50% 50%;
+      animation: smile 10s ease-in-out infinite;
+    }
+    @keyframes smile {
+      0%, 8%   { transform: none; }
+      12%, 22% { transform: translateX(-3px); }
+      28%      { transform: none; }
+      32%, 42% { transform: translateX(3px); }
+      48%, 66% { transform: none; }
+      70%, 79% { transform: scale(1.07, 0.75) translateY(1px); }
+      85%, 100%{ transform: none; }
+    }
+
+    /* sparks — pop out of the antenna tip, drift up, twinkle out */
+    .spark-anim {
+      transform-origin: 50% 50%;
+      opacity: 0;
+      animation-duration: 10s;
+      animation-timing-function: ease-out;
+      animation-iteration-count: infinite;
+    }
+    #s1 .spark-anim { animation-name: spark1; }
+    #s2 .spark-anim { animation-name: spark2; }
+    #s3 .spark-anim { animation-name: spark3; }
+
+    @keyframes spark1 {
+      0%, 48.5% { opacity: 0; transform: translate(0, 8px) scale(0.1); }
+      51%       { opacity: 1; transform: translate(2px, -2px) scale(0.95) rotate(15deg); }
+      57%       { opacity: 1; transform: translate(9px, -14px) scale(1.1) rotate(45deg); }
+      62%       { opacity: 0; transform: translate(13px, -21px) scale(0.5) rotate(70deg); }
+      63%, 100% { opacity: 0; transform: translate(0, 8px) scale(0.1); }
+    }
+    @keyframes spark2 {
+      0%, 50.5% { opacity: 0; transform: translate(2px, 8px) scale(0.1); }
+      53%       { opacity: 1; transform: translate(-2px, -2px) scale(1) rotate(-15deg); }
+      59%       { opacity: 0.9; transform: translate(-9px, -12px) scale(1.05) rotate(-50deg); }
+      64%       { opacity: 0; transform: translate(-13px, -18px) scale(0.4) rotate(-75deg); }
+      65%, 100% { opacity: 0; transform: translate(2px, 8px) scale(0.1); }
+    }
+    @keyframes spark3 {
+      0%, 53.5% { opacity: 0; transform: translate(0, 10px) scale(0.1); }
+      56%       { opacity: 1; transform: translate(0, 0) scale(1) rotate(20deg); }
+      61%       { opacity: 0.9; transform: translate(2px, -13px) scale(0.9) rotate(60deg); }
+      66%       { opacity: 0; transform: translate(3px, -20px) scale(0.3) rotate(90deg); }
+      67%, 100% { opacity: 0; transform: translate(0, 10px) scale(0.1); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      #head-grp, #eyes, .eye, #antenna, #smile, .spark-anim { animation: none; }
+      .spark-anim { opacity: 0; }
+    }
+  </style>
+
+  <g fill="none" stroke="#00449F" stroke-linecap="round" stroke-linejoin="round">
+    <g id="head-grp">
+      <path id="antenna" d="M89.5 16 V40" stroke-width="12"/>
+      <path id="head" d="M16 106
+               C16 62 42 40 89.5 40
+               C137 40 163 62 163 106
+               C163 137 139 151 89.5 151
+               C40 151 16 137 16 106 Z" stroke-width="12"/>
+      <g id="eyes">
+        <path class="eye" d="M54 86.5 V104.5" stroke-width="11"/>
+        <path class="eye" d="M122 86.5 V104.5" stroke-width="11"/>
+      </g>
+    </g>
+    <path id="smile" d="M28 182 Q89.5 172.5 151 182" stroke-width="12"/>
+
+    <!-- sparks (your spark glyph), anchored at the antenna tip -->
+    <g id="s1" transform="translate(74.8 -14) scale(1.6)">
+      <g class="spark-anim">
+        <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9Z" stroke-width="3"/>
+      </g>
+    </g>
+    <g id="s2" transform="translate(67 -8.5) scale(1.25)">
+      <g class="spark-anim">
+        <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9Z" stroke-width="3.4"/>
+      </g>
+    </g>
+    <g id="s3" transform="translate(79.2 -11) scale(0.9)">
+      <g class="spark-anim">
+        <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9Z" stroke-width="4.2"/>
+      </g>
+    </g>
+  </g>
+</svg>

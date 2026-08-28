@@ -11,10 +11,40 @@ async function api(url, opts) {
   if (!res.ok) throw new Error(body.error || res.statusText);
   return body;
 }
+/* ---------- toast (gooey-toast, themed to the app) ---------- */
 let toastTimer;
-function toast(msg) {
+let _toasterReady = false;
+const TOAST_FILL = '#1b222c'; // matches app panel tone; see style.css overrides
+function ensureToaster() {
+  const g = window.gooeyToast;
+  if (!g || _toasterReady) return g;
+  try { g.mountToaster({ position: 'bottom-center', options: { fill: TOAST_FILL } }); } catch {}
+  _toasterReady = true;
+  return g;
+}
+// classify a plain message so single-string calls still get a sensible colour/badge
+function toastState(text) {
+  if (/\b(fail(ed|s)?|error|unavailable|invalid|cannot|can't|denied|unable|no such|not loaded|not connected)\b/i.test(text)) return 'error';
+  if (/\b(copied|loaded|added|saved|approved|imported|exported|done|created|updated|removed|deleted|set to|connected|success|complete)\b/i.test(text)) return 'success';
+  return 'info';
+}
+const TOAST_TITLES = { error: 'Error', success: 'Done', warning: 'Warning', info: 'Notice', loading: 'Working' };
+// toast(message) — backwards-compatible single-string API. toast(message, state) to force a state.
+function toast(msg, state) {
+  const text = String(msg == null ? '' : msg);
+  const g = ensureToaster();
+  if (g && g.toast) {
+    const st = state || toastState(text);
+    const fn = g.toast[st] || g.toast.info;
+    try {
+      fn({ title: TOAST_TITLES[st] || 'Notice', description: text, fill: TOAST_FILL, duration: st === 'error' ? 7000 : 5000 });
+      return;
+    } catch {}
+  }
+  // fallback: legacy inline strip if the library failed to load
   const t = $('toast');
-  t.textContent = msg; t.style.display = 'block';
+  if (!t) return;
+  t.textContent = text; t.style.display = 'block';
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => t.style.display = 'none', 4500);
 }
@@ -405,13 +435,19 @@ $('btnCancelEdit').addEventListener('click', () => $('ruleModal').close());
 $('btnAddTransform').addEventListener('click', () => addTransformRow());
 
 /* ---------- Schema autocomplete ---------- */
+// Fetch schema, refresh datalists + SQL autocomplete. Shared by the button and
+// the AI SQL prompt (which loads schema first when it isn't cached yet).
+async function loadSchema() {
+  state.schema = await api('/api/schema');
+  $('tableList').innerHTML = Object.keys(state.schema.tables).map((t) => `<option value="${esc(t)}">`).join('');
+  updateColDatalist();
+  updateSqlHints();
+  return state.schema;
+}
 $('btnLoadSchema').addEventListener('click', async () => {
   try {
     $('btnLoadSchema').textContent = 'Loading…';
-    state.schema = await api('/api/schema');
-    $('tableList').innerHTML = Object.keys(state.schema.tables).map((t) => `<option value="${esc(t)}">`).join('');
-    updateColDatalist();
-    updateSqlHints();
+    await loadSchema();
     toast(`Schema loaded: ${Object.keys(state.schema.tables).length} tables - SQL console autocomplete active`);
   } catch (err) { toast('Schema load failed: ' + err.message); }
   finally { $('btnLoadSchema').textContent = 'Load schema'; }
@@ -693,15 +729,17 @@ function renderQueue() {
   updateToolbar();
 }
 
-const AI_SPARK = '<svg class="spark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9Z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8Z"/></svg>';
+// robot logo (same assets as the header button): rest = idle, focus = working
+const AI_LOGO_REST = '<img class="ai-mini" src="/assets/robot-logo-animated_1.svg" alt="" aria-hidden="true">';
+const AI_LOGO_FOCUS = '<img class="ai-mini" src="/assets/robot-logo-focused.svg" alt="" aria-hidden="true">';
 
 function aiReviewStrip(c) {
   const r = c.aiReview;
   if (!r) return '';
-  if (r.status === 'pending') return `<div class="ai-review pending">${AI_SPARK}<span>AI review running…</span></div>`;
-  if (r.status === 'error') return `<div class="ai-review bad">${AI_SPARK}<span>AI review failed: ${esc(r.summary || '')}</span></div>`;
+  if (r.status === 'pending') return `<div class="ai-review pending">${AI_LOGO_FOCUS}<span>AI review running…</span></div>`;
+  if (r.status === 'error') return `<div class="ai-review bad">${AI_LOGO_REST}<span>AI review failed: ${esc(r.summary || '')}</span></div>`;
   const send = `<button type="button" class="ai-send" data-sendreview="${c.id}" title="Send this review to the AI chat as context">Send to chat</button>`;
-  return `<div class="ai-review ${esc(r.verdict)}">${AI_SPARK}<span class="airv-verdict">${esc(r.verdict)}</span><span class="airv-text">${esc(r.summary || '')}</span>${send}</div>`;
+  return `<div class="ai-review ${esc(r.verdict)}">${AI_LOGO_REST}<span class="airv-verdict">${esc(r.verdict)}</span><span class="airv-text">${esc(r.summary || '')}</span>${send}</div>`;
 }
 
 /* wire the AI-review + send-to-chat buttons inside a container (card list or modal) */
@@ -735,7 +773,7 @@ function wireAiReviewButtons(root) {
 function aiReviewButton(c) {
   if (c.status !== 'pending') return '';
   const busy = c.aiReview?.status === 'pending';
-  return `<button type="button" class="aireview glossy" data-review="${c.id}" ${busy ? 'disabled' : ''} title="Ask the connected AI to review this change">${AI_SPARK}<span>${busy ? 'Reviewing…' : 'AI review'}</span></button>`;
+  return `<button type="button" class="aireview glossy" data-review="${c.id}" ${busy ? 'disabled' : ''} title="Ask the connected AI to review this change">${busy ? AI_LOGO_FOCUS : AI_LOGO_REST}<span>${busy ? 'Reviewing…' : 'AI review'}</span></button>`;
 }
 
 function cardHtml(c, s, active) {
@@ -1694,6 +1732,8 @@ function toggleSqlConsole() {
     sqlTableRedraw(); // box may have changed while the drawer was closed
     if (sqlEditor) { sqlEditor.refresh(); sqlEditor.focus(); } // CM cannot measure itself while hidden
     else $('sqlInput').focus();
+  } else if (aiSqlPromptOpen()) {
+    closeAiSqlPrompt(); // don't orphan the prompt bar above a closed drawer
   }
 }
 $('sqlBar').addEventListener('click', (e) => { if (e.target.tagName !== 'BUTTON') toggleSqlConsole(); });
@@ -1741,6 +1781,128 @@ function updateSqlHints() {
   for (const [t, cols] of Object.entries(state.schema?.tables || {})) tables[t] = cols.map((c) => c.name);
   sqlEditor.setOption('hintOptions', { completeSingle: false, tables });
 }
+
+/* ---------- inline AI SQL (Ctrl+/): JetBrains-style prompt -> follow-up ----------
+   Two phases share one bar docked above the editor:
+   - prompt:   type a request, Enter generates. ArrowUp/Down walks prompt history.
+   - followup: the SQL is in the editor; refine via a follow-up message, cycle
+               variants, Accept All (Enter) to keep, Discard All (Esc) to revert.
+   The database schema is attached to the request ONLY after the user agrees each
+   time (see aiAskAttach). */
+const aiSql = {
+  busy: false, phase: 'prompt',
+  history: [], histIdx: -1, histDraft: '',
+  variants: [], varIdx: -1,
+  preContent: '', inserted: false, baseAsk: '',
+};
+const AI_HIST_KEY = 'servertools-aisql-hist';
+const aiHistLoad = () => { try { return JSON.parse(localStorage.getItem(AI_HIST_KEY)) || []; } catch { return []; } };
+function aiHistSave(q) { if (!q) return; aiSql.history = [q, ...aiHistLoad().filter((x) => x !== q)].slice(0, 50); try { localStorage.setItem(AI_HIST_KEY, JSON.stringify(aiSql.history)); } catch {} }
+const aiSqlPutSql = (v) => { if (sqlEditor) sqlEditor.setValue(v); else $('sqlInput').value = v; }; // set editor WITHOUT stealing focus
+function aiSetPhase(p) { aiSql.phase = p; $('aiSqlRowPrompt').hidden = p !== 'prompt'; $('aiSqlRowFollow').hidden = p !== 'followup'; }
+function aiBusy(on) { aiSql.busy = on; $('aiSqlSpin').hidden = !(on && aiSql.phase === 'prompt'); $('aiSqlSpin2').hidden = !(on && aiSql.phase === 'followup'); }
+function aiVarUpdate() {
+  const m = aiSql.variants.length, n = aiSql.varIdx + 1;
+  $('aiSqlVarCount').textContent = m ? `${n}/${m}` : '0/0';
+  $('btnAiVarPrev').disabled = aiSql.varIdx <= 0;
+  $('btnAiVarNext').disabled = aiSql.varIdx >= m - 1;
+}
+function aiVarShow(i) { if (i < 0 || i >= aiSql.variants.length) return; aiSql.varIdx = i; aiSqlPutSql(aiSql.variants[i].sql); aiVarUpdate(); }
+function aiHistNav(dir) { // dir<0 older (ArrowUp), dir>0 newer (ArrowDown)
+  const h = aiSql.history; if (!h.length) return;
+  const inp = $('aiSqlInput');
+  if (aiSql.histIdx === -1) aiSql.histDraft = inp.value;
+  let i = aiSql.histIdx;
+  i = dir < 0 ? (i === -1 ? 0 : Math.min(i + 1, h.length - 1)) : (i <= 0 ? -1 : i - 1);
+  aiSql.histIdx = i;
+  inp.value = i === -1 ? aiSql.histDraft : h[i];
+  requestAnimationFrame(() => inp.setSelectionRange(inp.value.length, inp.value.length));
+}
+function aiAskAttach() { // ALWAYS asked before the schema is attached to a request
+  return confirmDialog({
+    title: 'Attach database schema?',
+    message: 'Send this database\'s table &amp; column names to the AI as context for the query?'
+      + '<br><span class="hint" style="margin:0">Choose "Without schema" to generate from your prompt alone.</span>',
+    okLabel: 'Attach schema', okClass: 'primary', cancelLabel: 'Without schema',
+  });
+}
+async function aiGenerate(instruction, previousSql) {
+  if (aiSql.busy || !instruction) return;
+  if (!document.body.classList.contains('agent-on')) { toast('AI not connected — connect a provider (top-right)', 'error'); return; }
+  const attach = await aiAskAttach(); // ask every time
+  aiBusy(true);
+  try {
+    const r = await api('/api/agent/sql', { method: 'POST', body: JSON.stringify({ prompt: instruction, attachSchema: attach, previousSql: previousSql || '' }) });
+    aiSql.variants.push({ sql: r.sql, prompt: instruction });
+    aiSql.varIdx = aiSql.variants.length - 1;
+    aiSql.inserted = true;
+    aiSqlPutSql(r.sql);            // the result lands directly in the console editor
+    aiVarUpdate();
+    aiHistSave(instruction);
+    if (aiSql.phase !== 'followup') { aiSql.baseAsk = instruction; aiSetPhase('followup'); }
+    const f = $('aiSqlFollow'); f.value = ''; f.focus();
+    if (r.tablesOmitted) toast(`Schema truncated: ${r.tablesOmitted} tables not sent as context`, 'info');
+  } catch (e) {
+    toast('AI SQL: ' + e.message, 'error');
+  } finally { aiBusy(false); }
+}
+const aiSubmitPrompt = () => { const v = $('aiSqlInput').value.trim(); if (v) aiGenerate(v, ''); };
+const aiSubmitFollow = () => { const v = $('aiSqlFollow').value.trim(); const cur = aiSql.variants[aiSql.varIdx]; if (v) aiGenerate(v, cur ? cur.sql : sqlGetValue()); };
+const aiRegenerate = () => { const base = aiSql.baseAsk || (aiSql.variants[0] && aiSql.variants[0].prompt); if (base) aiGenerate(base, ''); };
+function aiReset(discard) {
+  if (aiSql.busy) return;
+  if (discard && aiSql.inserted) aiSqlPutSql(aiSql.preContent); // revert the editor to its pre-AI content
+  $('aiSqlPrompt').hidden = true;
+  aiSetPhase('prompt');
+  $('aiSqlInput').value = ''; $('aiSqlFollow').value = '';
+  aiSql.variants = []; aiSql.varIdx = -1; aiSql.histIdx = -1; aiSql.inserted = false; aiSql.baseAsk = '';
+  if ($('sqlConsole').classList.contains('open')) { if (sqlEditor) sqlEditor.focus(); else $('sqlInput').focus(); }
+}
+const aiAccept = () => aiReset(false);   // keep the generated SQL in the editor
+const aiDiscard = () => aiReset(true);    // revert the editor
+const aiSqlPromptOpen = () => !$('aiSqlPrompt').hidden;
+const closeAiSqlPrompt = () => aiReset(false); // drawer-close / prompt-phase Esc: keep whatever is in the editor
+function openAiSqlPrompt() {
+  if (!$('sqlConsole').classList.contains('open')) toggleSqlConsole(); // ensure the console is visible
+  if (aiSqlPromptOpen()) { (aiSql.phase === 'followup' ? $('aiSqlFollow') : $('aiSqlInput')).focus(); return; }
+  aiSql.history = aiHistLoad();
+  aiSql.histIdx = -1; aiSql.histDraft = '';
+  aiSql.preContent = sqlGetValue(); aiSql.inserted = false;
+  aiSql.variants = []; aiSql.varIdx = -1; aiSql.baseAsk = '';
+  aiSetPhase('prompt');
+  $('aiSqlPrompt').hidden = false;
+  if (!document.body.classList.contains('agent-on')) toast('AI not connected — connect a provider (top-right)', 'error');
+  const inp = $('aiSqlInput'); inp.value = ''; inp.focus();
+}
+
+$('aiSqlInput').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); aiSubmitPrompt(); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); aiHistNav(-1); }
+  else if (e.key === 'ArrowDown') { e.preventDefault(); aiHistNav(1); }
+});
+$('aiSqlInput').addEventListener('input', () => { aiSql.histIdx = -1; });
+$('aiSqlFollow').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); if ($('aiSqlFollow').value.trim()) aiSubmitFollow(); else aiAccept(); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); aiVarShow(aiSql.varIdx - 1); }
+  else if (e.key === 'ArrowDown') { e.preventDefault(); aiVarShow(aiSql.varIdx + 1); }
+});
+$('btnAiAccept').addEventListener('click', aiAccept);
+$('btnAiDiscard').addEventListener('click', aiDiscard);
+$('btnAiRegen').addEventListener('click', aiRegenerate);
+$('btnAiVarPrev').addEventListener('click', () => aiVarShow(aiSql.varIdx - 1));
+$('btnAiVarNext').addEventListener('click', () => aiVarShow(aiSql.varIdx + 1));
+// Ctrl+Shift+/ (open) and Esc (close/discard) at the document level so they work
+// regardless of focus — e.g. after the SQL drawer was toggled shut underneath.
+// Ctrl+/ is left free for the editor's line-comment. We match the physical Slash
+// key (e.code) because Shift turns "/" into "?" in e.key.
+// Ignored while a modal dialog (e.g. the schema-attach confirm) is open.
+document.addEventListener('keydown', (e) => {
+  if (document.querySelector('dialog[open]')) return;
+  // the physical slash key (main or numpad); Shift turns "/" into "?" in e.key
+  const isSlash = e.code === 'Slash' || e.code === 'NumpadDivide' || e.key === '/' || e.key === '?';
+  if (isSlash && e.shiftKey && (e.ctrlKey || e.metaKey)) { e.preventDefault(); openAiSqlPrompt(); }
+  else if (e.key === 'Escape' && aiSqlPromptOpen()) { e.preventDefault(); aiSql.phase === 'followup' ? aiDiscard() : closeAiSqlPrompt(); }
+});
 
 async function runSql(page = 0) {
   const sql = page === 0 ? sqlGetValue().trim() : sqlState.sql;
@@ -2275,7 +2437,7 @@ async function agentSend() {
   pending.className = 'agent-working';
   pending.innerHTML = `
     <div class="aw-head">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9Z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8Z"/></svg>
+      <img class="ai-logo" src="/assets/robot-logo-focused.svg" alt="" aria-hidden="true">
       <span>Working…</span>
     </div>
     <div class="agent-feed"></div>`;
@@ -2338,55 +2500,347 @@ $('moreMenu').addEventListener('change', async () => {
   $('moreMenu').value = '';
   if (action === 'tour') startTour();
   else if (action === 'audit') openAudit();
+  else if (action === 'ssh') openSsh();
+  else if (action === 'servers') openServers();
 });
 
-/* ---------- audit log viewer ---------- */
+/* ---------- SSH servers (cards with live VM meta) ---------- */
+const closeServers = () => $('serversDrawer').classList.remove('open');
+async function openServers() {
+  $('serversDrawer').classList.add('open');
+  await loadServers();
+}
+async function loadServers() {
+  const list = $('serversList');
+  try {
+    const d = await api('/api/ssh/sessions');
+    $('serversCount').textContent = d.sessions.length ? `- ${d.sessions.filter((s) => s.connected).length}/${d.sessions.length} connected` : '';
+    if (!d.sessions.length) { list.innerHTML = '<div class="empty" style="padding:1rem">No SSH-enabled connection profiles. Enable SSH on a profile in Connections.</div>'; return; }
+    list.innerHTML = '';
+    d.sessions.forEach((s) => list.appendChild(serverCard(s)));
+  } catch (e) { list.innerHTML = `<div class="empty" style="padding:1rem;color:var(--red)">${esc(e.message)}</div>`; }
+}
+
+const meterClass = (pct) => (pct >= 90 ? 'bad' : pct >= 75 ? 'warn' : 'ok');
+function meter(label, pct, valueText) {
+  const p = Math.max(0, Math.min(100, Math.round(pct)));
+  return `<div class="meter-row">
+    <div class="meter-top"><span>${label}</span><span class="meter-val">${esc(valueText)}</span></div>
+    <div class="meter"><i class="${meterClass(p)}" style="width:${p}%"></i></div>
+  </div>`;
+}
+
+function serverCard(s) {
+  const el = document.createElement('div');
+  el.className = 'srv-card' + (s.connected ? ' connected' : '');
+  const m = s.meta;
+  let body = '';
+  if (s.connected && m && !m.error) {
+    // parse the meters
+    const mem = /(\d+)\s*\/\s*(\d+)/.exec(m.mem || '');
+    const memPct = mem ? (+mem[1] / +mem[2]) * 100 : 0;
+    const memTxt = mem ? `${(+mem[1] / 1024).toFixed(1)} / ${(+mem[2] / 1024).toFixed(1)} GB` : (m.mem || '?');
+    const diskPctM = /(\d+)%/.exec(m.disk || '');
+    const diskPct = diskPctM ? +diskPctM[1] : 0;
+    const diskTxt = (m.disk || '?').replace(/\s*\d+%$/, '') + (diskPctM ? ` · ${diskPct}%` : '');
+    const load1 = parseFloat((m.load || '').split(/\s+/)[0]);
+    const cpus = +m.cpus || 1;
+    const loadPct = isFinite(load1) ? (load1 / cpus) * 100 : 0;
+    body = `
+      <div class="srv-os">${esc(m.distro || m.kernel || '?')}</div>
+      <div class="srv-metaline">${esc(m.kernel || '')} · ${esc(m.arch || '')} · up ${esc(m.uptime || '?')}</div>
+      <div class="srv-meters">
+        ${meter('Memory', memPct, memTxt)}
+        ${meter('Disk /', diskPct, diskTxt)}
+        ${meter(`Load (${esc(String(cpus))} CPU${cpus > 1 ? 's' : ''})`, loadPct, m.load || '?')}
+      </div>`;
+  } else if (m?.error) {
+    body = `<div class="srv-err">Could not read VM info: ${esc(m.error)}</div>`;
+  } else if (!s.connected) {
+    body = `<div class="srv-metaline">Not connected — connect to pull live VM stats.</div>`;
+  }
+  el.innerHTML = `
+    <div class="srv-head">
+      <span class="srv-dot ${s.connected ? 'on' : ''}"></span>
+      <span class="srv-name">${esc(s.connected && m && !m.error ? (m.host || s.name) : s.name)}</span>
+      ${s.active ? '<span class="badge approved">active DB</span>' : ''}
+      <span class="spacer"></span>
+      <span class="srv-sub">${esc(s.user)}@${esc(s.host)}</span>
+    </div>
+    ${body}
+    <div class="srv-actions">
+      ${s.connected
+        ? `<button data-act="refresh">Refresh</button><button data-act="terminal" class="primary">Terminal</button><button data-act="terminal-ai" class="aireview glossy" title="Open a terminal and launch the connected AI CLI on this server">${AI_LOGO_REST}<span>Terminal + AI</span></button><span class="spacer"></span><button data-act="disconnect" class="warn">Disconnect</button>`
+        : `<button data-act="connect" class="primary">Connect</button><span class="spacer"></span>${s.sshOnly ? '<button data-act="remove" class="iconbtn danger" title="Remove this SSH server">' + RULE_ICONS.trash + '</button>' : ''}`}
+    </div>`;
+  el.querySelectorAll('.srv-actions [data-act]').forEach((b) => b.addEventListener('click', async () => {
+    const act = b.dataset.act;
+    if (act === 'terminal') { openSsh(s.id); return; }
+    if (act === 'terminal-ai') { openSsh(s.id, { ai: true }); return; }
+    if (act === 'remove') {
+      const ok = await confirmDialog({ title: 'Remove SSH server', message: `Remove the SSH server <b>${esc(s.name)}</b>? Its stored credentials are deleted from connections.json.`, okLabel: 'Remove', okClass: 'reject' });
+      if (!ok) return;
+      try { await api(`/api/connections/${s.id}`, { method: 'DELETE' }); await loadServers(); } catch (e) { toast(e.message); }
+      return;
+    }
+    b.disabled = true;
+    const orig = b.textContent;
+    if (act === 'connect') b.textContent = 'Connecting…';
+    if (act === 'refresh') b.textContent = 'Refreshing…';
+    try {
+      await api(`/api/ssh/sessions/${s.id}/${act}`, { method: 'POST' });
+      await loadServers();
+    } catch (e) { toast(e.message); b.disabled = false; b.textContent = orig; }
+  }));
+  return el;
+}
+
+/* add SSH server (creates an ssh-only connection profile) */
+$('btnAddServer').addEventListener('click', () => { $('addServerForm').hidden = false; $('asName').focus(); });
+$('btnAddServerCancel').addEventListener('click', () => { $('addServerForm').hidden = true; $('addServerForm').reset(); });
+$('addServerForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const body = {
+    name: $('asName').value.trim(),
+    sshOnly: true,
+    db: {},
+    ssh: {
+      enabled: true, host: $('asHost').value.trim(), port: Number($('asPort').value) || 22,
+      user: $('asUser').value.trim(), password: $('asPass').value,
+      privateKeyPath: $('asKey').value.trim(), passphrase: $('asPhrase').value,
+    },
+  };
+  try {
+    await api('/api/connections', { method: 'POST', body: JSON.stringify(body) });
+    $('addServerForm').hidden = true; $('addServerForm').reset();
+    await loadServers();
+    toast(`SSH server "${body.name}" added`);
+  } catch (err) { toast(err.message); }
+});
+$('btnServersClose').addEventListener('click', closeServers);
+$('btnServersRefresh').addEventListener('click', loadServers);
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && $('serversDrawer').classList.contains('open') && !document.querySelector('dialog[open]')) closeServers();
+});
+
+/* ---------- SSH terminal (xterm.js + WebSocket PTY) ---------- */
+let term = null, termFit = null, termWs = null, termRO = null;
+function sshStatus(msg, cls) { $('sshTermStatus').className = 'hint ' + (cls || ''); $('sshTermStatus').textContent = msg; }
+const closeSsh = () => { $('sshDrawer').classList.remove('open'); teardownTerm(); };
+
+function teardownTerm() {
+  if (termWs) { try { termWs.close(); } catch {} termWs = null; }
+  if (termRO) { try { termRO.disconnect(); } catch {} termRO = null; }
+  if (term) { try { term.dispose(); } catch {} term = null; termFit = null; }
+  $('sshTerm').innerHTML = '';
+}
+
+let sshTermProfile = null; // when set, the terminal targets this profile instead of the active connection
+let sshTermAi = false;
+async function openSsh(profileId, opts = {}) {
+  sshTermProfile = (typeof profileId === 'string') ? profileId : null;
+  sshTermAi = !!opts.ai;
+  if (!sshTermProfile) {
+    try {
+      const st = await api('/api/state');
+      if (!st.config.sshTunnel) { toast('The active connection has no SSH tunnel — enable one in Connections'); return; }
+    } catch (e) { toast(e.message); return; }
+  }
+  $('sshHostInfo').textContent = '';
+  if (typeof Terminal === 'undefined') { toast('Terminal library not loaded'); return; }
+  $('sshDrawer').classList.add('open');
+  teardownTerm();
+  term = new Terminal({
+    cursorBlink: true, fontSize: 13, fontFamily: 'ui-monospace, Consolas, monospace',
+    theme: { background: '#0b0f13', foreground: '#dce3ea', cursor: '#4da3ff' },
+  });
+  termFit = new FitAddon.FitAddon();
+  term.loadAddon(termFit);
+  term.open($('sshTerm'));
+  setTimeout(() => { termFit.fit(); connectTerm(); term.focus(); }, 30);
+  // refit when the drawer/window resizes, pushing the new size to the PTY
+  termRO = new ResizeObserver(() => { try { termFit.fit(); } catch {} });
+  termRO.observe($('sshTerm'));
+}
+
+function connectTerm() {
+  const { cols, rows } = term;
+  sshStatus('connecting…');
+  const ws = new WebSocket(`ws://${location.host}/api/ssh-term?cols=${cols}&rows=${rows}${sshTermProfile ? '&profile=' + encodeURIComponent(sshTermProfile) : ''}${sshTermAi ? '&ai=1' : ''}`);
+  ws.binaryType = 'arraybuffer';
+  termWs = ws;
+  ws.onopen = () => sshStatus('connected', 'ok');
+  ws.onmessage = (e) => {
+    if (typeof e.data === 'string') {
+      if (e.data[0] === '\x00') { term.write(e.data.slice(1)); return; } // server status line
+      term.write(e.data);
+    } else {
+      term.write(new Uint8Array(e.data));
+    }
+  };
+  ws.onclose = () => sshStatus('disconnected — reopen the console to reconnect', 'err');
+  ws.onerror = () => sshStatus('connection error', 'err');
+  // keystrokes → server (binary), resize → server (JSON text)
+  term.onData((d) => { if (ws.readyState === 1) ws.send(new TextEncoder().encode(d)); });
+  term.onResize(({ cols, rows }) => { if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'resize', cols, rows })); });
+}
+
+$('btnSshClose').addEventListener('click', closeSsh);
+$('btnSshClear').addEventListener('click', () => { if (term) term.clear(); });
+document.addEventListener('keydown', (e) => {
+  // don't let Esc close while typing in the terminal; only when focus is elsewhere
+  if (e.key === 'Escape' && $('sshDrawer').classList.contains('open') && !document.querySelector('dialog[open]') && !$('sshTerm').contains(document.activeElement)) closeSsh();
+});
+
+/* SSH console drawer: drag the left edge to resize (persisted). The terminal
+ * refits automatically via the ResizeObserver on #sshTerm; we also fit once at
+ * release so the final PTY size is exact. Widths are coalesced to one write per
+ * frame during the drag. */
+(() => {
+  const drawer = $('sshDrawer'), handle = $('sshResize');
+  if (!drawer || !handle) return;
+  const KEY = 'mau-ssh-w';
+  const saved = localStorage.getItem(KEY);
+  if (saved) drawer.style.setProperty('--ssh-w', saved);
+  handle.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    let pending = null, rafId = 0;
+    const flush = () => { rafId = 0; if (pending !== null) { drawer.style.setProperty('--ssh-w', pending); pending = null; } };
+    const move = (ev) => {
+      const w = Math.min(window.innerWidth * 0.96, Math.max(360, window.innerWidth - ev.clientX));
+      pending = w + 'px';
+      if (!rafId) rafId = requestAnimationFrame(flush);
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      if (rafId) cancelAnimationFrame(rafId);
+      flush();
+      localStorage.setItem(KEY, drawer.style.getPropertyValue('--ssh-w'));
+      try { if (termFit) termFit.fit(); } catch {}
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  });
+})();
+
+/* ---------- History (timeline of app + SSH + AI activity) ---------- */
 let auditData = [];
+let auditCat = 'all';
 const closeAudit = () => $('auditDrawer').classList.remove('open');
 async function openAudit() {
   $('auditDrawer').classList.add('open');
   $('auditBody').innerHTML = '<div class="empty" style="padding:1rem">Loading…</div>';
   try {
-    const d = await api('/api/audit');
-    auditData = d.entries;
-    $('auditFilter').innerHTML = '<option value="">all actions</option>' +
-      d.actions.map((a) => `<option value="${esc(a)}">${esc(a)}</option>`).join('');
+    auditData = (await api('/api/audit')).entries;
     renderAudit();
   } catch (e) {
     $('auditBody').innerHTML = `<div class="empty" style="padding:1rem;color:var(--red)">${esc(e.message)}</div>`;
   }
 }
-function renderAudit() {
-  const filter = $('auditFilter').value;
-  const rows = auditData.filter((e) => !filter || e.action === filter);
-  $('auditCount').textContent = `- ${rows.length}${filter ? ' ' + filter : ''} of ${auditData.length}`;
-  if (!rows.length) { $('auditBody').innerHTML = '<div class="empty" style="padding:1rem">No audit entries yet.</div>'; return; }
-  const short = (v) => { const s = String(v ?? ''); return s.length > 70 ? s.slice(0, 70) + '…' : s; };
-  const detailFor = (e) => {
-    if (e._raw) return `<span class="a-detail">${esc(e._raw)}</span>`;
-    const bits = [];
-    if (e.pk !== undefined) bits.push(`pk=${esc(String(e.pk))}`);
-    if (e.column) bits.push(esc(e.column));
-    // approve/reject decision: show a compact before→after per column
-    if (Array.isArray(e.columns)) {
-      for (const c of e.columns) bits.push(`<span class="a-diff">${esc(short(c.oldValue))}<del></del> → ${esc(short(c.newValue))}</span>`.replace('<del></del>', ''));
-    }
-    if (e.matchedRows !== undefined) bits.push(`${e.matchedRows} matched, ${e.proposedChanges} proposed`);
-    if (e.discardedPending !== undefined) bits.push(`${e.discardedPending} discarded`);
-    if (e.sqlResult) bits.push(`sql: ${esc(short(JSON.stringify(e.sqlResult)))}`);
-    const full = `<details><summary>raw</summary><pre>${esc(JSON.stringify(e, (k, v) => (k === '_n' ? undefined : v), 2))}</pre></details>`;
-    return `<span class="a-detail">${bits.join(' · ') || ''} ${full}</span>`;
-  };
-  $('auditBody').innerHTML = `<table>
-    <thead><tr><th>Time</th><th>Action</th><th>Rule / table</th><th>Detail</th></tr></thead>
-    <tbody>${rows.map((e) => `<tr>
-      <td class="a-time">${esc((e.ts || '').replace('T', ' ').replace(/\.\d+Z$/, ''))}</td>
-      <td class="a-act">${e.action ? `<span class="a-tag ${esc(e.action.split('-')[0])}" data-a="${esc(e.action)}">${esc(e.action)}</span>` : '-'}</td>
-      <td>${esc(e.rule || '')}${e.table ? `<br><span class="a-time">${esc(e.table)}</span>` : ''}</td>
-      <td>${detailFor(e)}</td>
-    </tr>`).join('')}</tbody></table>`;
+
+// classify each entry into a friendly category
+function auditCategory(a) {
+  if (!a) return 'other';
+  if (a === 'ai-chat') return 'ai';
+  if (a === 'approve') return 'approvals';
+  if (a.startsWith('ssh')) return 'ssh';
+  if (a.startsWith('agent-rule') || ['preview', 'reject', 'skip', 'edit', 'abort', 'clear'].includes(a)) return 'rules';
+  return 'rules';
 }
-$('auditFilter').addEventListener('change', renderAudit);
+const CAT_META = {
+  ai: { label: 'AI', icon: '🤖', cls: 'ai' },
+  approvals: { label: 'Approvals', icon: '✓', cls: 'approve' },
+  rules: { label: 'Rules', icon: '▤', cls: 'rules' },
+  ssh: { label: 'SSH', icon: '›_', cls: 'ssh' },
+  other: { label: 'Other', icon: '•', cls: 'other' },
+};
+const CAT_ICON_SVG = {
+  ai: RULE_ICONS ? '' : '',
+};
+
+// one-line human description per entry
+function auditDescribe(e) {
+  const a = e.action, tbl = e.table ? ` on <b>${esc(e.table)}</b>` : '';
+  const rule = e.rule ? ` "${esc(e.rule)}"` : '';
+  switch (a) {
+    case 'ai-chat': return null; // rendered as a chat bubble instead
+    case 'preview': return `Previewed${rule}${tbl} — ${e.matchedRows} matched, ${e.proposedChanges} would change`;
+    case 'approve': return `Approved a change${tbl}${e.pk !== undefined ? ` (id ${esc(String(e.pk))})` : ''}`;
+    case 'reject': return `Rejected a change${tbl}${e.pk !== undefined ? ` (id ${esc(String(e.pk))})` : ''}`;
+    case 'skip': return `Skipped a change${tbl}${e.pk !== undefined ? ` (id ${esc(String(e.pk))})` : ''}`;
+    case 'edit': return `Hand-edited a proposed value${tbl}${e.column ? ` · ${esc(e.column)}` : ''}`;
+    case 'abort': return `Aborted the session${rule} — ${e.discardedPending ?? 0} discarded`;
+    case 'clear': return `Cleared the preview${rule} — ${e.discardedPending ?? 0} discarded`;
+    case 'agent-rule-approved': return `Approved the AI's rule proposal${rule}`;
+    case 'agent-rule-rejected': return `Rejected the AI's rule proposal${rule}`;
+    case 'ssh-session-connect': return `Connected SSH — ${esc(e.sshUser || '')}@${esc(e.sshHost || '')}`;
+    case 'ssh-session-cleanup': return `Cleaned up ${esc(e.sshHost || '')} (${esc((e.cleaned || []).join(', '))})`;
+    case 'ssh-terminal-open': return `Opened a terminal on ${esc(e.sshHost || '')}`;
+    case 'ssh-terminal-ai': return `Opened an AI terminal (${esc(e.aiCli || '')}) on ${esc(e.sshHost || '')}${e.sessionForwarded ? ' — session forwarded' : ''}`;
+    default: return `${esc(a || 'event')}${rule}${tbl}`;
+  }
+}
+
+function dayLabel(iso) {
+  if (!iso) return 'Earlier';
+  const d = iso.slice(0, 10);
+  const today = new Date().toISOString().slice(0, 10);
+  const yest = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  if (d === today) return 'Today';
+  if (d === yest) return 'Yesterday';
+  return d;
+}
+const hhmm = (iso) => (iso || '').slice(11, 16);
+
+function renderAuditChips() {
+  const counts = { all: auditData.length };
+  for (const e of auditData) { const c = auditCategory(e.action); counts[c] = (counts[c] || 0) + 1; }
+  const cats = ['all', 'ai', 'approvals', 'rules', 'ssh'].filter((c) => c === 'all' || counts[c]);
+  $('auditChips').innerHTML = cats.map((c) => {
+    const label = c === 'all' ? 'All' : CAT_META[c].label;
+    return `<button class="chip-btn ${auditCat === c ? 'on' : ''}" data-cat="${c}">${esc(label)} <span class="chip-n">${counts[c] || 0}</span></button>`;
+  }).join('');
+  $('auditChips').querySelectorAll('[data-cat]').forEach((b) => b.addEventListener('click', () => { auditCat = b.dataset.cat; renderAudit(); }));
+}
+
+function renderAudit() {
+  renderAuditChips();
+  const rows = auditData.filter((e) => auditCat === 'all' || auditCategory(e.action) === auditCat);
+  $('auditCount').textContent = `- ${rows.length}${auditCat !== 'all' ? ' ' + CAT_META[auditCat].label.toLowerCase() : ''}`;
+  const hasChat = auditData.some((e) => e.action === 'ai-chat');
+  $('btnAuditResume').style.display = hasChat ? '' : 'none';
+  if (!rows.length) { $('auditBody').innerHTML = '<div class="empty" style="padding:1rem">Nothing here yet.</div>'; return; }
+
+  let html = '', lastDay = null;
+  for (const e of rows) {
+    const day = dayLabel(e.ts);
+    if (day !== lastDay) { html += `<div class="tl-day">${esc(day)}</div>`; lastDay = day; }
+    if (e.action === 'ai-chat') {
+      const mine = e.role === 'user';
+      const tools = e.tools && e.tools.length ? `<div class="tl-tools">used: ${esc(e.tools.join(', '))}</div>` : '';
+      html += `<div class="tl-chat ${mine ? 'me' : 'ai'}" data-resume="1">
+        <div class="tl-who">${mine ? 'You' : 'AI'} <span class="tl-time">${esc(hhmm(e.ts))}</span></div>
+        <div class="tl-bubble">${esc(String(e.text || ''))}</div>${tools}</div>`;
+      continue;
+    }
+    const desc = auditDescribe(e);
+    const cat = CAT_META[auditCategory(e.action)] || CAT_META.other;
+    const raw = `<details class="tl-raw"><summary>details</summary><pre>${esc(JSON.stringify(e, (k, v) => (k === '_n' ? undefined : v), 2))}</pre></details>`;
+    html += `<div class="tl-item">
+      <span class="tl-ic ${cat.cls}">${esc(cat.icon)}</span>
+      <div class="tl-body"><div class="tl-desc">${desc}</div>${raw}</div>
+      <span class="tl-time">${esc(hhmm(e.ts))}</span>
+    </div>`;
+  }
+  $('auditBody').innerHTML = html;
+  $('auditBody').querySelectorAll('.tl-chat[data-resume]').forEach((el) => el.addEventListener('click', (ev) => {
+    if (ev.target.closest('summary')) return;
+    closeAudit(); openAgent();
+  }));
+}
+
+$('btnAuditResume').addEventListener('click', () => { closeAudit(); openAgent(); });
 $('btnAuditRefresh').addEventListener('click', openAudit);
 $('btnAuditClose').addEventListener('click', closeAudit);
 document.addEventListener('keydown', (e) => {

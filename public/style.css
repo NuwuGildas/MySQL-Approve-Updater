@@ -17,6 +17,7 @@ body { margin: 0; background: var(--bg); color: var(--text); font-family: ui-san
 ::-webkit-scrollbar-corner { background: transparent; }
 header { display: flex; align-items: center; gap: 1rem; padding: .7rem 1.2rem; background: var(--panel); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 5; flex-wrap: wrap; }
 header h1 { font-size: 1.05rem; margin: 0; font-weight: 600; }
+.app-logo { height: 30px; width: auto; flex: none; margin-right: -.4rem; }
 header .sub { color: var(--muted); font-size: .8rem; }
 .spacer { flex: 1; }
 /* AI agent button (adapted from Uiverse.io by SelfMadeSystem):
@@ -28,8 +29,11 @@ header .sub { color: var(--muted); font-size: .8rem; }
 .ai-spin { position: absolute; inset: -2px; opacity: .6; overflow: hidden; transition: .3s; border-radius: inherit; z-index: 0; }
 .ai-real:active ~ .ai-border .ai-spin { opacity: 1; }
 .ai-spin-inside { filter: blur(2px) url(#unopaq3); }
-.ai-btn { position: relative; z-index: 1; display: flex; align-items: center; gap: .4rem; height: 28px; padding: 0 .75rem; border-radius: 7px; background: var(--panel2); color: var(--text); font-size: .85rem; white-space: nowrap; user-select: none; }
-.ai-btn svg { width: 14px; height: 14px; color: var(--accent); flex: none; }
+.ai-btn { position: relative; z-index: 1; display: flex; align-items: center; gap: .4rem; height: 28px; padding: 0 .6rem 0 .5rem; border-radius: 7px; background: var(--panel2); color: var(--text); font-size: .85rem; white-space: nowrap; user-select: none; }
+.ai-logo { height: 24px; width: auto; flex: none; display: block; margin-top: -5px; filter: brightness(0) invert(1); }
+.ai-logo.focus { display: none; } /* rest logo by default; swap to focused while the agent is working */
+body.agent-busy .ai-logo.rest { display: none; }
+body.agent-busy .ai-logo.focus { display: block; }
 .ai-real:hover ~ .ai-border .ai-btn { background: #26303d; }
 .ai-spin::before { content: ""; position: absolute; inset: -150%; animation: ai-speen 8s cubic-bezier(.56, .15, .28, .86) infinite, ai-woah 4s infinite; animation-play-state: paused; }
 .ai-real:hover ~ .ai-border .ai-spin::before { animation-play-state: running; }
@@ -44,6 +48,62 @@ header .sub { color: var(--muted); font-size: .8rem; }
   50% { scale: .75; }
 }
 
+/* SSH servers drawer + cards */
+#serversDrawer {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 19;
+  width: min(560px, 96vw);
+  display: flex; flex-direction: column; overflow: hidden;
+  background: var(--panel); border-left: 1px solid var(--border);
+  box-shadow: -12px 0 32px rgba(0, 0, 0, .45); padding: .8rem 1rem;
+  transform: translateX(103%); transition: transform .25s ease;
+}
+#serversDrawer.open { transform: translateX(0); }
+#serversList { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+#addServerForm { border: 1px solid var(--border); border-radius: 10px; background: var(--panel2); padding: .6rem .75rem; margin-bottom: .7rem; }
+#addServerForm[hidden] { display: none; }
+#addServerForm > input { margin-bottom: .3rem; }
+.srv-card { border: 1px solid var(--border); border-radius: 12px; background: linear-gradient(180deg, #1e2630, #191f27); padding: .75rem .85rem; margin-bottom: .7rem; }
+.srv-card.connected { border-color: #2f5d43; }
+.srv-head { display: flex; align-items: center; gap: .5rem; }
+.srv-dot { width: 9px; height: 9px; border-radius: 50%; background: #55677a; flex: none; box-shadow: 0 0 0 3px #55677a22; }
+.srv-dot.on { background: var(--green); box-shadow: 0 0 0 3px var(--green); box-shadow: 0 0 6px 1px #3fb96b88, 0 0 0 3px #3fb96b33; }
+.srv-name { font-weight: 700; font-size: .95rem; overflow-wrap: anywhere; }
+.srv-sub { color: var(--muted); font-size: .72rem; font-family: ui-monospace, Consolas, monospace; }
+.srv-os { margin-top: .5rem; font-size: .82rem; color: var(--text); font-weight: 600; }
+.srv-metaline { color: var(--muted); font-size: .7rem; font-family: ui-monospace, Consolas, monospace; margin-top: .15rem; overflow-wrap: anywhere; }
+.srv-meters { display: flex; flex-direction: column; gap: .5rem; margin-top: .65rem; }
+.meter-row { font-size: .72rem; }
+.meter-top { display: flex; justify-content: space-between; color: var(--muted); margin-bottom: .2rem; }
+.meter-top .meter-val { color: var(--text); font-family: ui-monospace, Consolas, monospace; }
+.meter { height: 7px; background: #0b0f13; border-radius: 5px; overflow: hidden; border: 1px solid var(--border); }
+.meter > i { display: block; height: 100%; border-radius: 5px 0 0 5px; transition: width .3s; }
+.meter > i.ok { background: linear-gradient(90deg, #2f8f52, var(--green)); }
+.meter > i.warn { background: linear-gradient(90deg, #b98a2a, var(--amber)); }
+.meter > i.bad { background: linear-gradient(90deg, #a83232, var(--red)); }
+.srv-actions { display: flex; align-items: center; gap: .4rem; margin-top: .7rem; }
+.srv-actions button { padding: .22rem .6rem; font-size: .74rem; }
+.srv-err { color: var(--red); font-size: .76rem; margin-top: .5rem; }
+
+/* SSH console drawer (right side, terminal-style) */
+#sshDrawer {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 19;
+  width: var(--ssh-w, min(680px, 96vw)); min-width: 360px; max-width: 96vw;
+  display: flex; flex-direction: column; overflow: hidden;
+  background: var(--panel); border-left: 1px solid var(--border);
+  box-shadow: -12px 0 32px rgba(0, 0, 0, .45); padding: .8rem 1rem;
+  transform: translateX(103%); transition: transform .25s ease;
+}
+#sshDrawer.open { transform: translateX(0); }
+/* left-edge drag handle to resize the drawer */
+#sshResize { position: absolute; left: 0; top: 0; bottom: 0; width: 7px; cursor: ew-resize; z-index: 2; touch-action: none; }
+#sshResize:hover { background: var(--accent); }
+.ssh-head { display: flex; align-items: center; gap: .5rem; flex: none; }
+.ssh-head button { padding: .2rem .55rem; font-size: .75rem; }
+#sshTerm { flex: 1; min-height: 0; background: #0b0f13; border: 1px solid var(--border); border-radius: 8px; padding: .4rem; overflow: hidden; }
+#sshTerm .xterm { height: 100%; }
+#sshTermStatus { flex: none; }
+#sshTermStatus.ok { color: var(--green); } #sshTermStatus.err { color: var(--red); }
+
 /* audit log drawer (slides from the right; wider, for tabular data) */
 #auditDrawer {
   position: fixed; top: 0; right: 0; bottom: 0; z-index: 19;
@@ -54,23 +114,35 @@ header .sub { color: var(--muted); font-size: .8rem; }
   transform: translateX(103%); transition: transform .25s ease;
 }
 #auditDrawer.open { transform: translateX(0); }
-.audit-head { display: flex; align-items: center; gap: .5rem; margin-bottom: .6rem; flex: none; flex-wrap: nowrap; }
+.audit-head { display: flex; align-items: center; gap: .5rem; margin-bottom: .5rem; flex: none; flex-wrap: nowrap; }
 .audit-head button { padding: .2rem .55rem; font-size: .75rem; }
-#auditBody { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; background: #0b0f13; border: 1px solid var(--border); border-radius: 8px; }
-#auditBody table { border-collapse: collapse; width: 100%; font-size: .74rem; }
-#auditBody th { position: sticky; top: 0; background: var(--panel2); color: var(--accent); text-align: left; padding: .35rem .5rem; border-bottom: 1px solid var(--border); white-space: nowrap; }
-#auditBody td { padding: .3rem .5rem; border-bottom: 1px solid rgba(255,255,255,.05); vertical-align: top; }
-#auditBody .a-time { color: var(--muted); font-family: ui-monospace, Consolas, monospace; white-space: nowrap; }
-#auditBody .a-act { font-family: ui-monospace, Consolas, monospace; }
-#auditBody .a-detail { font-family: ui-monospace, Consolas, monospace; overflow-wrap: anywhere; }
-.a-tag { display: inline-block; font-size: .64rem; padding: .02rem .4rem; border-radius: 99px; border: 1px solid var(--border); text-transform: uppercase; letter-spacing: .04em; }
-.a-tag.approve { color: var(--green); border-color: var(--green); }
-.a-tag.reject, .a-tag.abort, .a-tag.clear, .a-tag[data-a*="fail"], .a-tag[data-a*="stale"] { color: var(--red); border-color: var(--red); }
-.a-tag.skip, .a-tag.preview, .a-tag.edit { color: var(--amber); border-color: var(--amber); }
-#auditBody .a-diff del { background: #4a1d1d; color: #ff9d9d; border-radius: 3px; padding: 0 1px; }
-#auditBody .a-diff ins { background: #163d23; color: #7fe3a3; border-radius: 3px; padding: 0 1px; }
-.a-detail details summary { cursor: pointer; color: var(--accent); }
-.a-detail pre { margin: .2rem 0 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted); }
+#auditChips { display: flex; gap: .35rem; flex-wrap: wrap; margin-bottom: .5rem; flex: none; }
+.chip-btn { padding: .18rem .6rem; font-size: .74rem; border: 1px solid var(--border); border-radius: 99px; background: var(--panel2); color: var(--muted); cursor: pointer; }
+.chip-btn.on { color: #fff; background: #1c3a5e; border-color: #2d5f9e; }
+.chip-btn .chip-n { opacity: .6; font-size: .68rem; }
+#auditBody { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding-right: .2rem; }
+.tl-day { position: sticky; top: 0; background: var(--panel); color: var(--muted); font-size: .66rem; text-transform: uppercase; letter-spacing: .08em; padding: .35rem .1rem .25rem; z-index: 1; }
+.tl-item { display: flex; gap: .55rem; align-items: flex-start; padding: .4rem .2rem; border-bottom: 1px solid rgba(255,255,255,.04); }
+.tl-ic { flex: none; width: 22px; height: 22px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: .72rem; background: var(--panel2); border: 1px solid var(--border); color: var(--muted); }
+.tl-ic.approve { color: var(--green); border-color: #2f5d43; }
+.tl-ic.rules { color: var(--amber); border-color: #7a5c17; }
+.tl-ic.ai { color: var(--accent); border-color: #2d5f9e; }
+.tl-ic.ssh { color: var(--accent); border-color: #2d5f9e; font-family: ui-monospace, Consolas, monospace; }
+.tl-body { flex: 1; min-width: 0; }
+.tl-desc { font-size: .82rem; overflow-wrap: anywhere; }
+.tl-desc b { color: var(--text); }
+.tl-time { flex: none; color: #55677a; font-size: .68rem; font-family: ui-monospace, Consolas, monospace; margin-top: .1rem; }
+.tl-raw { margin-top: .15rem; }
+.tl-raw summary { cursor: pointer; color: var(--muted); font-size: .68rem; }
+.tl-raw pre { margin: .2rem 0 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted); font-size: .68rem; background: #0b0f13; border: 1px solid var(--border); border-radius: 6px; padding: .4rem; max-height: 220px; overflow: auto; }
+/* chat turns rendered as bubbles, clickable to resume */
+.tl-chat { margin: .35rem 0; max-width: 88%; cursor: pointer; }
+.tl-chat.me { margin-left: auto; }
+.tl-chat .tl-who { font-size: .62rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: .12rem; }
+.tl-chat .tl-bubble { font-size: .82rem; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; padding: .4rem .55rem; }
+.tl-chat.me .tl-bubble { background: #1c3a5e; border-color: #2d5f9e; }
+.tl-chat:hover .tl-bubble { border-color: var(--accent); }
+.tl-tools { font-size: .64rem; color: var(--muted); margin-top: .15rem; font-family: ui-monospace, Consolas, monospace; }
 
 /* AI agent drawer (slides in from the right; the app stays usable behind it) */
 #agentDrawer {
@@ -112,8 +184,7 @@ header .sub { color: var(--muted); font-size: .8rem; }
 /* in-flight indicator: animated icon + label, no bubble */
 .agent-working { margin: .2rem 0 .8rem; }
 .agent-working .aw-head { display: flex; align-items: center; gap: .45rem; color: var(--muted); font-size: .84rem; }
-.agent-working .aw-head svg { width: 15px; height: 15px; color: var(--accent); animation: ai-work 1.2s ease-in-out infinite; }
-body.agent-busy .ai-btn svg { animation: ai-work 1.2s ease-in-out infinite; }
+.agent-working .aw-head .ai-logo { height: 26px; }
 @keyframes ai-work {
   0%, 100% { transform: scale(1) rotate(0deg); opacity: 1; }
   50% { transform: scale(1.35) rotate(25deg); opacity: .55; }
@@ -185,6 +256,9 @@ body.agent-on .aireview { display: inline-flex; }
 .aireview.glossy::after { content: ""; position: absolute; inset: 0 0 55% 0; background: linear-gradient(180deg, #ffffff2e, #ffffff00); pointer-events: none; }
 .aireview.glossy:hover:not(:disabled) { border-color: var(--accent); box-shadow: inset 0 1px 0 #ffffff44, 0 0 10px #4da3ff55; }
 .aireview.glossy .spark { width: 13px; height: 13px; color: #bcd8ff; flex: none; }
+/* small robot logo used in AI review buttons/strips (animated via the SVG itself) */
+.ai-mini { height: 18px; width: auto; flex: none; display: inline-block; vertical-align: middle; filter: brightness(0) invert(1); margin-top: -4px;}
+.ai-review .ai-mini { height: 16px; }
 .ai-review { display: flex; align-items: center; gap: .4rem; margin: .35rem 0 .1rem; font-size: .76rem; border-left: 3px solid var(--border); padding: .3rem .55rem; background: var(--panel); border-radius: 0 6px 6px 0; color: var(--muted); overflow-wrap: anywhere; }
 .ai-review .spark { width: 14px; height: 14px; flex: none; }
 .ai-review .airv-verdict { text-transform: uppercase; letter-spacing: .05em; font-weight: 700; font-size: .66rem; padding: .05rem .35rem; border: 1px solid currentColor; border-radius: 99px; flex: none; }
@@ -291,6 +365,16 @@ body.agent-on .aireview { display: inline-flex; }
 .ql-step.ql-done { color: var(--green); }
 .ql-step.ql-done::before { content: '✓'; color: var(--green); }
 #toast { position: fixed; bottom: 1rem; left: 50%; transform: translateX(-50%); background: #3a1a1a; border: 1px solid var(--red); color: #f0b0b0; padding: .5rem 1rem; border-radius: 8px; display: none; z-index: 20; max-width: 80vw; }
+/* ---- gooey-toast: themed to the app dark palette (loaded before style.css so these win) ---- */
+[data-gooey-viewport] { z-index: 100000; font-family: inherit; }
+[data-gooey-title] { font-family: inherit; letter-spacing: .01em; }
+[data-gooey-description] { color: var(--text); font-family: inherit; }
+[data-gooey-badge] { background: color-mix(in oklch, var(--_tone) 22%, transparent); }
+:root {
+  /* accent-align the info tone, keep vivid success/error/warning; lift the pill off the dark page */
+  --gooey-state-info: oklch(0.70 0.15 245);
+  --gooey-shadow: drop-shadow(0 2px 3px rgba(0,0,0,.5)) drop-shadow(0 16px 34px rgba(0,0,0,.55));
+}
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: var(--red); }
 .dot.ok { background: var(--green); }
 .sess-status { font-size: .78rem; padding: .12rem .55rem; border: 1px solid var(--border); border-radius: 99px; color: var(--muted); }
@@ -305,6 +389,28 @@ dialog::backdrop { background: rgba(0, 0, 0, .55); }
 main { margin-bottom: 46px; } /* keep content clear of the collapsed console bar */
 #sqlConsole { position: fixed; left: 0; right: 0; bottom: 0; z-index: 15; background: var(--panel); border-top: 1px solid var(--border); box-shadow: 0 -6px 24px rgba(0, 0, 0, .35); }
 #sqlBar { display: flex; gap: .7rem; align-items: center; padding: .38rem 1.2rem; cursor: pointer; user-select: none; flex-wrap: wrap; }
+/* inline AI prompt (JetBrains-style): a slim bar docked above the SQL editor */
+#aiSqlPrompt { display: flex; flex-direction: column; gap: 4px; }
+#aiSqlPrompt[hidden] { display: none; }
+.ai-sql-row { display: flex; align-items: center; gap: .55rem; background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; padding: .34rem .55rem; min-height: 34px; }
+.ai-sql-row[hidden] { display: none; }
+.ai-sql-row .app-logo { width: 16px; height: 16px; opacity: .85; flex-shrink: 0; }
+#aiSqlInput, #aiSqlFollow { flex: 1; min-width: 0; background: transparent; border: 0; outline: none; color: var(--text); font-size: .85rem; font-family: inherit; }
+#aiSqlInput::placeholder, #aiSqlFollow::placeholder { color: var(--muted); }
+.ai-sql-kbd { color: var(--muted); font-size: .68rem; border: 1px solid var(--border); border-radius: 4px; padding: .02rem .32rem; }
+.ai-sql-act { background: transparent; border: 0; color: var(--text); font-size: .8rem; cursor: pointer; padding: .12rem .3rem; white-space: nowrap; }
+.ai-sql-act:hover { color: #fff; }
+.ai-sql-act.accept { color: var(--green); }
+.ai-sql-act kbd { color: var(--muted); font-size: .68rem; margin-left: .28rem; font-family: inherit; }
+.ai-sql-icon { background: transparent; border: 0; color: var(--muted); cursor: pointer; font-size: 1rem; line-height: 1; padding: .1rem .25rem; }
+.ai-sql-icon:hover { color: var(--accent); }
+.ai-sql-nav { display: flex; align-items: center; gap: .1rem; color: var(--muted); font-size: .74rem; white-space: nowrap; }
+.ai-sql-nav button { background: transparent; border: 0; color: var(--muted); cursor: pointer; font-size: .9rem; padding: 0 .15rem; }
+.ai-sql-nav button:hover:not(:disabled) { color: var(--text); }
+.ai-sql-nav button:disabled { opacity: .4; cursor: default; }
+.ai-sql-spin { width: 13px; height: 13px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: aiSqlSpin .7s linear infinite; flex-shrink: 0; }
+.ai-sql-spin[hidden] { display: none; }
+@keyframes aiSqlSpin { to { transform: rotate(360deg); } }
 #sqlConsole .body { display: none; }
 /* minmax(0, 1fr): a bare 1fr track's min-width is its CONTENT, so a wide
    result table would blow the pane (and the page) open instead of scrolling */

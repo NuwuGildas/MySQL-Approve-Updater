@@ -1,4 +1,4 @@
-# MySQL Approve Updater
+# Server Tools
 
 Rule-based batch updates for MySQL/MariaDB with a hard guarantee: **no row is ever
 written without your explicit, per-row approval in the web UI.**

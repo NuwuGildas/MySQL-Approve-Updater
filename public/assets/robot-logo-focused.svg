@@ -1,0 +1,128 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -46 180 246" width="180" height="246" role="img" aria-label="Focused robot logo, emitting stars">
+  <style>
+    g, path { transform-box: fill-box; }
+
+    /* LOCKED IN: no glancing around — just a slow breathing pulse,
+       squinted eyes, and a steady stream of stars from the antenna. */
+
+    #head-grp {
+      transform-origin: 50% 70%;
+      animation: breathe 3s ease-in-out infinite;
+    }
+    @keyframes breathe {
+      0%, 100% { transform: none; }
+      50%      { transform: translateY(1px) scale(1.015, 0.985); }
+    }
+
+    /* eyes: squinted + pulled slightly toward center = concentration */
+    .eye {
+      transform-origin: 50% 50%;
+      animation-duration: 3s;
+      animation-timing-function: ease-in-out;
+      animation-iteration-count: infinite;
+    }
+    .eye-l { animation-name: focus-l; }
+    .eye-r { animation-name: focus-r; }
+    @keyframes focus-l {
+      0%, 100% { transform: translateX(3px) scaleY(0.5); }
+      50%      { transform: translateX(3px) scaleY(0.42); }
+    }
+    @keyframes focus-r {
+      0%, 100% { transform: translateX(-3px) scaleY(0.5); }
+      50%      { transform: translateX(-3px) scaleY(0.42); }
+    }
+
+    /* antenna: pumping in time with the star stream */
+    #antenna {
+      transform-origin: 50% 100%;
+      animation: pump 1s ease-in-out infinite;
+    }
+    @keyframes pump {
+      0%, 100% { transform: scaleY(1); }
+      50%      { transform: scaleY(1.07) translateY(-0.5px); }
+    }
+
+    /* smile: flattened a touch — all business */
+    #smile {
+      transform-origin: 50% 50%;
+      animation: steady 3s ease-in-out infinite;
+    }
+    @keyframes steady {
+      0%, 100% { transform: scaleY(0.8); }
+      50%      { transform: scaleY(0.7); }
+    }
+
+    /* stars: continuous, evenly-spaced stream rising from the antenna tip.
+       Three sparks share one 3s cycle, offset by a third each. */
+    .spark-anim {
+      transform-origin: 50% 50%;
+      opacity: 0;
+      animation-duration: 3s;
+      animation-timing-function: linear;
+      animation-iteration-count: infinite;
+    }
+    #s1 .spark-anim { animation-name: rise1; }
+    #s2 .spark-anim { animation-name: rise2; animation-delay: -1s; }
+    #s3 .spark-anim { animation-name: rise3; animation-delay: -2s; }
+
+    @keyframes rise1 {
+      0%       { opacity: 0; transform: translate(0, 6px) scale(0.2); }
+      12%      { opacity: 1; transform: translate(1px, -1px) scale(0.9) rotate(10deg); }
+      75%      { opacity: 0.9; transform: translate(6px, -20px) scale(1.05) rotate(50deg); }
+      100%     { opacity: 0; transform: translate(9px, -28px) scale(0.5) rotate(70deg); }
+    }
+    @keyframes rise2 {
+      0%       { opacity: 0; transform: translate(0, 6px) scale(0.2); }
+      12%      { opacity: 1; transform: translate(-1px, -1px) scale(0.9) rotate(-10deg); }
+      75%      { opacity: 0.9; transform: translate(-6px, -19px) scale(1.05) rotate(-50deg); }
+      100%     { opacity: 0; transform: translate(-9px, -27px) scale(0.5) rotate(-70deg); }
+    }
+    @keyframes rise3 {
+      0%       { opacity: 0; transform: translate(0, 7px) scale(0.2); }
+      12%      { opacity: 1; transform: translate(0, 0) scale(0.85) rotate(15deg); }
+      75%      { opacity: 0.9; transform: translate(2px, -22px) scale(1) rotate(60deg); }
+      100%     { opacity: 0; transform: translate(3px, -30px) scale(0.45) rotate(85deg); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      #head-grp, .eye, #antenna, #smile, .spark-anim { animation: none; }
+      .eye-l { transform: translateX(3px) scaleY(0.5); }
+      .eye-r { transform: translateX(-3px) scaleY(0.5); }
+      #smile { transform: scaleY(0.8); }
+      .spark-anim { opacity: 0; }
+    }
+  </style>
+
+  <g fill="none" stroke="#00449F" stroke-linecap="round" stroke-linejoin="round">
+    <g id="head-grp">
+      <path id="antenna" d="M89.5 16 V40" stroke-width="12"/>
+      <path id="head" d="M16 106
+               C16 62 42 40 89.5 40
+               C137 40 163 62 163 106
+               C163 137 139 151 89.5 151
+               C40 151 16 137 16 106 Z" stroke-width="12"/>
+      <g id="eyes">
+        <path class="eye eye-l" d="M54 86.5 V104.5" stroke-width="11"/>
+        <path class="eye eye-r" d="M122 86.5 V104.5" stroke-width="11"/>
+      </g>
+    </g>
+    <path id="smile" d="M28 182 Q89.5 172.5 151 182" stroke-width="12"/>
+
+    <!-- star stream, anchored at the antenna tip -->
+    <g id="s1" transform="translate(74.8 -14) scale(1.6)">
+      <g class="spark-anim">
+        <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9Z" stroke-width="3"/>
+      </g>
+    </g>
+    <g id="s2" transform="translate(67 -8.5) scale(1.25)">
+      <g class="spark-anim">
+        <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9Z" stroke-width="3.4"/>
+      </g>
+    </g>
+    <g id="s3" transform="translate(79.2 -11) scale(0.9)">
+      <g class="spark-anim">
+        <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9Z" stroke-width="4.2"/>
+      </g>
+    </g>
+  </g>
+</svg>

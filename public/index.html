@@ -3,13 +3,24 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MySQL Approve Updater</title>
+<title>Server Tools</title>
+<link rel="icon" href="/assets/favicon/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/favicon/favicon-32.png" sizes="32x32" type="image/png">
+<link rel="icon" href="/assets/favicon/favicon-16.png" sizes="16x16" type="image/png">
+<link rel="icon" href="/assets/favicon/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="/assets/favicon/apple-touch-icon.png">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#0f1419">
+<link rel="stylesheet" href="/vendor/gooey-toast/styles.css">
 <link rel="stylesheet" href="style.css">
 <link rel="stylesheet" href="/vendor/introjs/introjs.min.css">
 <link rel="stylesheet" href="/vendor/tabulator/css/tabulator_midnight.min.css">
 <link rel="stylesheet" href="/vendor/codemirror/lib/codemirror.css">
 <link rel="stylesheet" href="/vendor/codemirror/theme/material-darker.css">
 <link rel="stylesheet" href="/vendor/codemirror/addon/hint/show-hint.css">
+<link rel="stylesheet" href="/vendor/xterm/css/xterm.css">
+<script src="/vendor/xterm/lib/xterm.js"></script>
+<script src="/vendor/xterm-addon-fit/lib/addon-fit.js"></script>
 <script src="/vendor/introjs/intro.min.js"></script>
 <script src="/vendor/tabulator/js/tabulator.min.js"></script>
 <script src="/vendor/codemirror/lib/codemirror.js"></script>
@@ -18,6 +29,7 @@
 <script src="/vendor/codemirror/addon/hint/show-hint.js"></script>
 <script src="/vendor/codemirror/addon/hint/sql-hint.js"></script>
 <script src="/vendor/codemirror/addon/display/placeholder.js"></script>
+<script src="/vendor/gooey-toast/gooey-toast.iife.js"></script>
 </head>
 <body>
 <!-- filters for the AI-agent button glow (adapted from Uiverse.io by SelfMadeSystem) -->
@@ -33,7 +45,8 @@
   </filter>
 </svg>
 <header>
-  <h1>MySQL Approve Updater</h1>
+  <img class="app-logo" src="/assets/logo/robot-logo.svg" alt="" aria-hidden="true">
+  <h1>Server Tools</h1>
   <span class="sub" id="dbInfo">…</span>
   <span class="sub"><span class="dot" id="sseDot"></span> live</span>
   <span class="spacer"></span>
@@ -42,7 +55,8 @@
     <div class="ai-border">
       <div class="ai-spin ai-spin-inside"></div>
       <div class="ai-btn">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9Z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8Z"/></svg>
+        <img class="ai-logo rest" src="/assets/robot-logo-animated_1.svg" alt="" aria-hidden="true">
+        <img class="ai-logo focus" src="/assets/robot-logo-focused.svg" alt="" aria-hidden="true">
         <span>AI agent</span>
       </div>
     </div>
@@ -55,7 +69,9 @@
   <select id="moreMenu" title="More actions">
     <option value="">More…</option>
     <option value="tour">Guided tour</option>
-    <option value="audit">Download audit log</option>
+    <option value="audit">History</option>
+    <option value="servers">SSH servers</option>
+    <option value="ssh">SSH console</option>
   </select>
 </header>
 
@@ -106,13 +122,14 @@
 
 <aside id="auditDrawer" aria-label="Audit log">
   <div class="audit-head">
-    <h2 style="margin:0;font-size:.85rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)">Audit log <span class="sec-hint" id="auditCount"></span></h2>
+    <h2 style="margin:0;font-size:.85rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)">History <span class="sec-hint" id="auditCount"></span></h2>
     <span class="spacer"></span>
-    <select id="auditFilter" title="Filter by action" style="width:auto"><option value="">all actions</option></select>
+    <button id="btnAuditResume" class="aireview glossy" title="Open the AI chat and continue the conversation">Resume AI chat</button>
     <button id="btnAuditRefresh" title="Reload">Refresh</button>
     <a href="/api/audit.log" download><button title="Download the raw JSON-lines file">Download</button></a>
     <button id="btnAuditClose" title="Close (Esc)">✕</button>
   </div>
+  <div id="auditChips"></div>
   <div id="auditBody"></div>
 </aside>
 
@@ -270,7 +287,7 @@
     </div>
     <div id="queueToolbar" style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-bottom:.7rem">
       <button id="btnSelAll">Select all pending</button>
-      <button id="btnReviewSel" class="aireview glossy" title="Run an AI review on the selected changes"><svg class="spark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9Z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8Z"/></svg><span>AI review selected</span></button>
+      <button id="btnReviewSel" class="aireview glossy" title="Run an AI review on the selected changes"><img class="ai-mini" src="/assets/robot-logo-animated_1.svg" alt="" aria-hidden="true"><span>AI review selected</span></button>
       <button id="btnSelNone">Clear selection</button>
       <span class="hint" id="selCount" style="margin:0"></span>
       <span class="spacer"></span>
@@ -302,7 +319,7 @@
   <div id="sqlResize" title="Drag to resize the console"></div>
   <div id="sqlBar">
     <b style="font-size:.78rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)">SQL console</b>
-    <span class="hint" style="margin:0">read-only: SELECT / SHOW / DESCRIBE / EXPLAIN · Ctrl+Enter runs · results capped at 200 rows</span>
+    <span class="hint" style="margin:0">read-only: SELECT / SHOW / DESCRIBE / EXPLAIN · Ctrl+Enter runs · Ctrl+Shift+/ asks AI · results capped at 200 rows</span>
     <span class="spacer"></span>
     <span class="hint" id="sqlMeta" style="margin:0"></span>
     <button id="btnLoadSchema" title="Connects to the database to load table/column names for autocomplete (rule editor and console)">Load schema</button>
@@ -311,6 +328,29 @@
   </div>
   <div class="body">
     <div style="display:flex;flex-direction:column;gap:.5rem;min-height:0">
+      <!-- inline AI prompt (Ctrl+/). Two phases: prompt, then follow-up -->
+      <div id="aiSqlPrompt" hidden>
+        <div class="ai-sql-row" id="aiSqlRowPrompt">
+          <img class="app-logo" src="/assets/logo/robot-logo.svg" alt="" aria-hidden="true">
+          <input id="aiSqlInput" type="text" spellcheck="false" autocomplete="off"
+                 placeholder="Prompt to generate SQL. Use ↑↓ for history.">
+          <span class="ai-sql-spin" id="aiSqlSpin" hidden></span>
+          <span class="ai-sql-kbd">Esc</span>
+        </div>
+        <div class="ai-sql-row" id="aiSqlRowFollow" hidden>
+          <img class="app-logo" src="/assets/logo/robot-logo.svg" alt="" aria-hidden="true">
+          <input id="aiSqlFollow" type="text" spellcheck="false" autocomplete="off" placeholder="Follow-up message">
+          <span class="ai-sql-spin" id="aiSqlSpin2" hidden></span>
+          <button class="ai-sql-act accept" id="btnAiAccept">Accept All <kbd>Enter</kbd></button>
+          <button class="ai-sql-act" id="btnAiDiscard">Discard All <kbd>Esc</kbd></button>
+          <button class="ai-sql-icon" id="btnAiRegen" title="Regenerate">&#8635;</button>
+          <span class="ai-sql-nav">
+            <button id="btnAiVarPrev" title="Previous result">&#8593;</button>
+            <span id="aiSqlVarCount">0/0</span>
+            <button id="btnAiVarNext" title="Next result">&#8595;</button>
+          </span>
+        </div>
+      </div>
       <textarea id="sqlInput" spellcheck="false" placeholder="SELECT id, page_url FROM jeuxcom_site WHERE maintext LIKE '%font-family%' LIMIT 20"></textarea>
       <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
         <button id="btnSqlRun" class="primary">Run</button>
@@ -353,6 +393,50 @@
   </div>
   <div id="exportPreview"></div>
 </dialog>
+
+<aside id="serversDrawer" aria-label="SSH servers">
+  <div class="ssh-head">
+    <h2 style="margin:0;font-size:.85rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)">SSH servers <span class="sec-hint" id="serversCount"></span></h2>
+    <span class="spacer"></span>
+    <button id="btnAddServer" class="primary">+ Add server</button>
+    <button id="btnServersRefresh" title="Reload the list">Refresh</button>
+    <button id="btnServersClose" title="Close (Esc)">✕</button>
+  </div>
+  <div class="hint" style="margin:.2rem 0 .5rem">Connect to any SSH-enabled connection profile independently of the active database, and see live VM stats.</div>
+  <form id="addServerForm" hidden>
+    <input id="asName" required placeholder="Name (e.g. web-01)">
+    <div class="row">
+      <div style="flex:2"><label>SSH host</label><input id="asHost" required placeholder="1.2.3.4 or host.example.com"></div>
+      <div><label>Port</label><input id="asPort" type="number" placeholder="22"></div>
+    </div>
+    <div class="row">
+      <div><label>User</label><input id="asUser" required placeholder="root"></div>
+      <div><label>Password</label><input id="asPass" type="password" autocomplete="new-password"></div>
+    </div>
+    <div class="row">
+      <div style="flex:2"><label>Private key path (optional, overrides password)</label><input id="asKey" placeholder="C:\\Users\\you\\.ssh\\id_ed25519"></div>
+      <div><label>Passphrase</label><input id="asPhrase" type="password" autocomplete="new-password"></div>
+    </div>
+    <div style="display:flex;gap:.5rem;margin-top:.6rem">
+      <button type="submit" class="primary">Save server</button>
+      <button type="button" id="btnAddServerCancel">Cancel</button>
+    </div>
+  </form>
+  <div id="serversList"></div>
+</aside>
+
+<aside id="sshDrawer" aria-label="SSH console">
+  <div id="sshResize" title="Drag to resize"></div>
+  <div class="ssh-head">
+    <h2 style="margin:0;font-size:.85rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)">SSH console <span class="sec-hint" id="sshHostInfo"></span></h2>
+    <span class="spacer"></span>
+    <button id="btnSshClear" title="Clear the output">Clear</button>
+    <button id="btnSshClose" title="Close (Esc)">✕</button>
+  </div>
+  <div class="hint" style="margin:.2rem 0 .4rem">Live interactive shell on the SSH server (full PTY — vim, top, mysql, etc. work). Session open/close is logged to the audit trail.</div>
+  <div id="sshTerm"></div>
+  <div class="hint" id="sshTermStatus" style="margin:.3rem 0 0"></div>
+</aside>
 
 <dialog id="confirmModal">
   <h2 id="confirmTitle" style="margin:0 0 .6rem;font-size:.85rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)"></h2>
