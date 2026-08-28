@@ -58,17 +58,20 @@ body.agent-busy .ai-logo.focus { display: block; }
   transform: translateX(103%); transition: transform .25s ease;
 }
 #serversDrawer.open { transform: translateX(0); }
-#serversList { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+#serversList { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: .8rem; align-content: start; align-items: start; }
 #addServerForm { border: 1px solid var(--border); border-radius: 10px; background: var(--panel2); padding: .6rem .75rem; margin-bottom: .7rem; }
 #addServerForm[hidden] { display: none; }
 #addServerForm > input { margin-bottom: .3rem; }
-.srv-card { border: 1px solid var(--border); border-radius: 12px; background: linear-gradient(180deg, #1e2630, #191f27); padding: .75rem .85rem; margin-bottom: .7rem; }
+.srv-card { border: 1px solid var(--border); border-radius: 12px; background: linear-gradient(180deg, #1e2630, #191f27); padding: .8rem .9rem; max-width: 460px; width: 100%; }
 .srv-card.connected { border-color: #2f5d43; }
-.srv-head { display: flex; align-items: center; gap: .5rem; }
-.srv-dot { width: 9px; height: 9px; border-radius: 50%; background: #55677a; flex: none; box-shadow: 0 0 0 3px #55677a22; }
-.srv-dot.on { background: var(--green); box-shadow: 0 0 0 3px var(--green); box-shadow: 0 0 6px 1px #3fb96b88, 0 0 0 3px #3fb96b33; }
-.srv-name { font-weight: 700; font-size: .95rem; overflow-wrap: anywhere; }
-.srv-sub { color: var(--muted); font-size: .72rem; font-family: ui-monospace, Consolas, monospace; }
+.srv-head { display: flex; align-items: flex-start; gap: .55rem; }
+.srv-dot { width: 9px; height: 9px; border-radius: 50%; background: #55677a; flex: none; margin-top: .28rem; box-shadow: 0 0 0 3px #55677a22; }
+.srv-dot.on { background: var(--green); box-shadow: 0 0 6px 1px #3fb96b88, 0 0 0 3px #3fb96b33; }
+.srv-id { flex: 1; min-width: 0; }
+.srv-nameRow { display: flex; align-items: center; gap: .4rem; min-width: 0; }
+.srv-name { font-weight: 700; font-size: .95rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.srv-nameRow .badge { flex: none; white-space: nowrap; }
+.srv-sub { display: block; color: var(--muted); font-size: .72rem; font-family: ui-monospace, Consolas, monospace; margin-top: .12rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .srv-os { margin-top: .5rem; font-size: .82rem; color: var(--text); font-weight: 600; }
 .srv-metaline { color: var(--muted); font-size: .7rem; font-family: ui-monospace, Consolas, monospace; margin-top: .15rem; overflow-wrap: anywhere; }
 .srv-meters { display: flex; flex-direction: column; gap: .5rem; margin-top: .65rem; }
@@ -80,7 +83,7 @@ body.agent-busy .ai-logo.focus { display: block; }
 .meter > i.ok { background: linear-gradient(90deg, #2f8f52, var(--green)); }
 .meter > i.warn { background: linear-gradient(90deg, #b98a2a, var(--amber)); }
 .meter > i.bad { background: linear-gradient(90deg, #a83232, var(--red)); }
-.srv-actions { display: flex; align-items: center; gap: .4rem; margin-top: .7rem; }
+.srv-actions { display: flex; align-items: center; gap: .4rem; margin-top: .7rem; flex-wrap: wrap; }
 .srv-actions button { padding: .22rem .6rem; font-size: .74rem; }
 .srv-err { color: var(--red); font-size: .76rem; margin-top: .5rem; }
 
@@ -97,12 +100,72 @@ body.agent-busy .ai-logo.focus { display: block; }
 /* left-edge drag handle to resize the drawer */
 #sshResize { position: absolute; left: 0; top: 0; bottom: 0; width: 7px; cursor: ew-resize; z-index: 2; touch-action: none; }
 #sshResize:hover { background: var(--accent); }
+
+/* ===== drawer orientation: vertical (right, default) vs horizontal (bottom) =====
+   The dock toggle flips the docked drawers (History, SSH servers, SSH console).
+   The AI drawer is exempt — it is a free-floating window (see below). */
+.btn-dock { padding: .12rem .35rem; display: inline-flex; align-items: center; }
+.btn-dock svg { width: 15px; height: 15px; display: block; }
+/* before the saved orientation is applied, suppress the slide transition so the
+   drawer doesn't visibly sweep from the vertical to the horizontal dock on load */
+body:not(.drawers-ready) #sshDrawer,
+body:not(.drawers-ready) #serversDrawer,
+body:not(.drawers-ready) #auditDrawer { transition: none !important; }
+body.drawers-h #auditDrawer,
+body.drawers-h #serversDrawer,
+body.drawers-h #sshDrawer {
+  top: auto; left: 0; right: 0; bottom: 0;
+  width: auto; min-width: 0; max-width: none;
+  height: 55vh; max-height: 92vh;
+  border-left: 0; border-top: 1px solid var(--border);
+  box-shadow: 0 -12px 32px rgba(0, 0, 0, .45);
+  transform: translateY(103%);
+}
+body.drawers-h #sshDrawer { height: var(--ssh-h, 55vh); }
+body.drawers-h #auditDrawer.open,
+body.drawers-h #serversDrawer.open,
+body.drawers-h #sshDrawer.open { transform: translateY(0); }
+/* the ssh resize handle moves to the top edge when docked horizontally */
+body.drawers-h #sshResize { left: 0; right: 0; top: 0; bottom: auto; width: auto; height: 7px; cursor: ns-resize; }
 .ssh-head { display: flex; align-items: center; gap: .5rem; flex: none; }
 .ssh-head button { padding: .2rem .55rem; font-size: .75rem; }
-#sshTerm { flex: 1; min-height: 0; background: #0b0f13; border: 1px solid var(--border); border-radius: 8px; padding: .4rem; overflow: hidden; }
-#sshTerm .xterm { height: 100%; }
-#sshTermStatus { flex: none; }
-#sshTermStatus.ok { color: var(--green); } #sshTermStatus.err { color: var(--red); }
+/* console tabs (docked consoles) */
+#sshTabs { display: flex; gap: .35rem; flex-wrap: wrap; flex: none; margin: .3rem 0 .45rem; }
+.ssh-tab { display: inline-flex; align-items: center; gap: .4rem; max-width: 200px; padding: .22rem .5rem; font-size: .74rem; background: var(--panel2); border: 1px solid var(--border); border-radius: 8px 8px 0 0; color: var(--muted); cursor: pointer; }
+.ssh-tab.active { color: var(--text); border-color: var(--accent); background: var(--panel); }
+.ssh-tab-dot { width: 7px; height: 7px; border-radius: 50%; background: #55677a; flex: none; }
+.ssh-tab-dot.ok { background: var(--green); }
+.ssh-tab-dot.err { background: var(--red); }
+.ssh-tab-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ssh-tab-x { color: var(--muted); border-radius: 4px; padding: 0 .15rem; }
+.ssh-tab-x:hover { color: var(--red); background: #ffffff10; }
+/* the host holds docked consoles (one visible at a time) */
+#sshConsoleHost { flex: 1; min-height: 0; position: relative; }
+.ssh-console { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+#sshConsoleHost > .ssh-console { display: none; }
+#sshConsoleHost > .ssh-console.active { display: flex; }
+.ssh-console-bar { display: flex; align-items: center; gap: .4rem; flex: none; padding: .1rem 0 .4rem; }
+.ssh-console-title { font-weight: 600; font-size: .78rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ssh-console-status { color: var(--muted); font-size: .72rem; }
+.ssh-console-status.ok { color: var(--green); }
+.ssh-console-status.err { color: var(--red); }
+.ssh-console-bar .iconbtn { padding: .2rem .32rem; }
+/* docked: the tab already shows the name and a close, so drop them from the bar */
+.ssh-console:not(.floating) .ssh-console-title,
+.ssh-console:not(.floating) [data-cact="close"] { display: none; }
+.ssh-console-term { flex: 1; min-height: 0; background: #0b0f13; border: 1px solid var(--border); border-radius: 8px; padding: .4rem; overflow: hidden; }
+.ssh-console-term .xterm { height: 100%; }
+/* popped-out floating console window */
+.ssh-console.floating { position: fixed; z-index: 41; width: 520px; height: 360px; min-width: 320px; min-height: 200px; max-width: 96vw; max-height: 92vh; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 18px 48px rgba(0, 0, 0, .55); padding: .55rem .7rem; resize: both; overflow: hidden; }
+.ssh-console.floating .ssh-console-bar { cursor: move; user-select: none; touch-action: none; }
+.ssh-console.floating .ssh-console-bar button { cursor: pointer; }
+/* dropdown Terminal button on server cards */
+.term-dd { position: relative; display: inline-block; }
+.term-dd [data-act="terminal-menu"] { display: inline-flex; align-items: center; gap: .3rem; }
+.term-dd .caret { width: 13px; height: 13px; opacity: .85; }
+.term-dd-menu { position: absolute; bottom: calc(100% + 4px); left: 0; z-index: 5; display: flex; flex-direction: column; gap: .2rem; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, .5); padding: .3rem; min-width: max-content; }
+.term-dd-menu[hidden] { display: none; }
+.term-dd-menu button { width: 100%; justify-content: flex-start; }
 
 /* audit log drawer (slides from the right; wider, for tabular data) */
 #auditDrawer {
@@ -145,18 +208,21 @@ body.agent-busy .ai-logo.focus { display: block; }
 .tl-tools { font-size: .64rem; color: var(--muted); margin-top: .15rem; font-family: ui-monospace, Consolas, monospace; }
 
 /* AI agent drawer (slides in from the right; the app stays usable behind it) */
+/* AI assistant: a free-floating window — drag by its header, resize from the corner */
 #agentDrawer {
-  position: fixed; top: 0; right: 0; bottom: 0; z-index: 18;
-  width: min(460px, 94vw);
-  display: flex; flex-direction: column; overflow: hidden;
-  background: var(--panel); border-left: 1px solid var(--border);
-  box-shadow: -12px 0 32px rgba(0, 0, 0, .45);
+  position: fixed; z-index: 40;
+  top: var(--ai-top, 68px); right: var(--ai-right, 18px); left: var(--ai-left, auto); bottom: auto;
+  width: var(--ai-w, 440px); height: var(--ai-h, 68vh);
+  min-width: 320px; min-height: 260px; max-width: 96vw; max-height: 92vh;
+  display: none; flex-direction: column; overflow: hidden;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, .55);
   padding: .8rem 1rem;
-  transform: translateX(103%);
-  transition: transform .25s ease;
+  resize: both; /* native corner grip; drag handled via the header */
 }
-#agentDrawer.open { transform: translateX(0); }
-#agentDrawer > div:first-child { flex-wrap: nowrap; }
+#agentDrawer.open { display: flex; }
+#agentDrawer > div:first-child { flex-wrap: nowrap; cursor: move; user-select: none; touch-action: none; }
+#agentDrawer > div:first-child button { cursor: pointer; } /* controls aren't drag targets */
 #agentDrawer h2 { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #agentDrawer h2 + .spacer { display: none; }
 #agentChatWrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
@@ -411,6 +477,89 @@ main { margin-bottom: 46px; } /* keep content clear of the collapsed console bar
 .ai-sql-spin { width: 13px; height: 13px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: aiSqlSpin .7s linear infinite; flex-shrink: 0; }
 .ai-sql-spin[hidden] { display: none; }
 @keyframes aiSqlSpin { to { transform: rotate(360deg); } }
+
+/* ===== Compass hub + view switching (compass | mysql); Settings is a modal ===== */
+#compass { display: none; }
+body.view-compass #compass { display: block; }
+/* the MySQL workspace + SQL console show only in the mysql view */
+body:not(.view-mysql) main,
+body:not(.view-mysql) #sqlConsole { display: none !important; }
+/* tool-only header controls show only in the mysql view */
+body:not(.view-mysql) .tool-only { display: none !important; }
+/* the back button + crumb show in every view except the hub */
+body.view-compass #btnCompass,
+body.view-compass .tool-crumb { display: none; }
+#compass { padding: 1.6rem clamp(1rem, 4vw, 3rem) 3rem; max-width: 1180px; margin: 0 auto; }
+.compass-hero { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.4rem; }
+.compass-title { display: flex; align-items: center; gap: .85rem; }
+.compass-title .app-logo { width: 40px; height: 40px; }
+.compass-title h2 { margin: 0; font-size: 1.5rem; letter-spacing: .01em; }
+#compassSearch { margin-left: auto; min-width: 200px; flex: 0 1 320px; background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); padding: .5rem .7rem; font-size: .9rem; font-family: inherit; }
+#compassSearch:focus { outline: none; border-color: var(--accent); }
+#compassGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 1rem; }
+.compass-card { text-align: left; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 1.1rem; cursor: pointer; display: flex; flex-direction: column; gap: .55rem; min-height: 156px; color: var(--text); font: inherit; transition: border-color .15s, transform .12s, box-shadow .15s; }
+.compass-card:hover { border-color: var(--tool-accent, var(--accent)); transform: translateY(-2px); box-shadow: 0 10px 30px rgba(0, 0, 0, .4); }
+.compass-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.compass-card .cc-icon { width: 36px; height: 36px; border-radius: 10px; display: flex; align-items: center; justify-content: center; background: color-mix(in oklab, var(--tool-accent, var(--accent)) 16%, transparent); color: var(--tool-accent, var(--accent)); }
+.compass-card .cc-icon svg { width: 20px; height: 20px; }
+.compass-card .cc-icon img { width: 22px; height: 22px; }
+.compass-card .cc-name { font-weight: 600; font-size: 1rem; }
+.compass-card .cc-desc { color: var(--muted); font-size: .82rem; line-height: 1.4; flex: 1; }
+.compass-card .cc-foot { display: flex; align-items: center; gap: .5rem; font-size: .74rem; color: var(--muted); }
+.compass-card .cc-tag { border: 1px solid var(--border); border-radius: 99px; padding: .05rem .5rem; }
+.compass-card .cc-status.on { color: var(--green); }
+.compass-card .cc-open { margin-left: auto; color: var(--tool-accent, var(--accent)); font-weight: 600; }
+.tool-crumb { color: var(--text); font-size: .85rem; font-weight: 600; }
+#btnCompass { display: inline-flex; align-items: center; gap: .28rem; font-size: .8rem; padding: .3rem .7rem .3rem .5rem; border-radius: 99px; }
+#btnCompass svg { width: 14px; height: 14px; }
+#btnCompass:hover { border-color: var(--accent); color: var(--accent); }
+#btnSettings svg { width: 16px; height: 16px; }
+#btnSettings:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ===== Settings modal: title bar + master-detail (nav sidebar + content pane) ===== */
+#settingsModal { width: min(940px, 94vw); max-width: 94vw; height: min(660px, 88vh); max-height: 88vh; padding: 0; overflow: hidden; }
+#settingsModal[open] { display: flex; flex-direction: column; }
+.settings-titlebar { display: flex; align-items: center; gap: .55rem; padding: .7rem 1rem; border-bottom: 1px solid var(--border); flex: none; }
+.settings-titlebar .app-logo { width: 18px; height: 18px; }
+.settings-titlebar b { font-size: .9rem; }
+.settings-shell { display: grid; grid-template-columns: 250px 1fr; flex: 1; min-height: 0; }
+.settings-nav { background: var(--panel2); border-right: 1px solid var(--border); padding: .8rem; display: flex; flex-direction: column; gap: .6rem; min-width: 0; }
+#settingsSearch { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; color: var(--text); padding: .45rem .6rem; font: inherit; font-size: .82rem; }
+#settingsSearch:focus { outline: none; border-color: var(--accent); }
+.settings-nav-list { display: flex; flex-direction: column; gap: .15rem; overflow: auto; }
+.nav-item { text-align: left; background: transparent; border: 0; color: var(--muted); padding: .45rem .6rem; border-radius: 8px; cursor: pointer; font: inherit; font-size: .84rem; }
+.nav-item:hover { background: #ffffff08; color: var(--text); }
+.nav-item.active { background: color-mix(in oklab, var(--accent) 18%, transparent); color: var(--text); }
+.nav-item[hidden] { display: none; }
+.settings-main { padding: 1.1rem 1.4rem 1.4rem; overflow: auto; min-width: 0; min-height: 0; }
+.settings-crumb { display: flex; align-items: center; gap: .5rem; font-size: .92rem; font-weight: 600; padding-bottom: .8rem; margin-bottom: 1rem; border-bottom: 1px solid var(--border); }
+.settings-crumb span:first-child { color: var(--muted); font-weight: 500; }
+.settings-crumb .sep { color: var(--muted); font-weight: 400; }
+.settings-section { display: none; }
+.settings-section.active { display: block; }
+.settings-group { max-width: 560px; }
+.sg-row { display: flex; align-items: center; gap: 1rem; margin: .7rem 0; }
+.sg-row label { flex: 0 0 200px; font-size: .84rem; color: var(--text); margin: 0; }
+.sg-row input[type=number], .sg-row select { flex: 1; min-width: 0; max-width: 260px; background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); padding: .45rem .6rem; font: inherit; }
+.sg-row input:focus, .sg-row select:focus { outline: none; border-color: var(--accent); }
+.sg-hint { color: var(--muted); font-size: .76rem; margin: .1rem 0 1rem; }
+.sg-hint.warn { color: var(--amber); }
+.sg-hint.warn b { color: var(--amber); }
+.sg-head { font-weight: 600; font-size: .88rem; margin-bottom: .6rem; }
+label.chk { display: flex; align-items: center; gap: .5rem; color: var(--text); font-size: .84rem; margin: 1rem 0 .2rem; }
+label.chk input { width: auto; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.seg button { background: var(--panel2); border: 0; color: var(--muted); padding: .38rem .9rem; cursor: pointer; font: inherit; font-size: .82rem; }
+.seg button + button { border-left: 1px solid var(--border); }
+.seg button.on { background: var(--accent); color: #fff; }
+.settings-list { display: flex; flex-direction: column; gap: .4rem; max-height: 46vh; overflow: auto; }
+.settings-list .empty { padding: .3rem; }
+.settings-row { display: flex; align-items: center; gap: .5rem; font-size: .8rem; padding: .5rem .6rem; border: 1px solid var(--border); border-radius: 8px; background: var(--panel2); }
+.settings-row .sr-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.settings-row .sr-sub { color: var(--muted); font-family: ui-monospace, Consolas, monospace; font-size: .72rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.settings-row .badge { flex: none; }
+.settings-actions { margin-top: 1.2rem; display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+@media (max-width: 720px) { .settings-shell { grid-template-columns: 1fr; } .settings-nav { border-right: 0; border-bottom: 1px solid var(--border); } .settings-nav-list { flex-direction: row; flex-wrap: wrap; } }
 #sqlConsole .body { display: none; }
 /* minmax(0, 1fr): a bare 1fr track's min-width is its CONTENT, so a wide
    result table would blow the pane (and the page) open instead of scrolling */

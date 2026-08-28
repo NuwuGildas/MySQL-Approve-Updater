@@ -38,7 +38,22 @@ const RULES_FILE = path.join(DATA_DIR, 'rules.json');
 const AUDIT_FILE = path.join(DATA_DIR, 'audit.log');
 const BACKUPS_DIR = path.join(DATA_DIR, 'backups');
 const PORT = Number(process.env.PORT || 3000);
-const MAX_PREVIEW_ROWS = Math.max(1, Number(process.env.MAX_PREVIEW_ROWS || 500));
+const MAX_PREVIEW_ROWS = Math.max(1, Number(process.env.MAX_PREVIEW_ROWS || 500)); // hard ceiling for the read limit
+
+/* ---- user-editable tool settings (persisted to settings.json) ---- */
+const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
+const SETTINGS_MAX = { maxPreviewRows: 100000, sqlConsoleMaxRows: 5000 };
+const settings = {
+  maxPreviewRows: MAX_PREVIEW_ROWS,        // read: rows scanned per preview
+  sqlConsoleMaxRows: 200,                  // read: rows per SQL console page
+  requireBackupBeforeApprove: false,       // write: block rule approvals until a backup is taken
+  allowWrites: false,                      // write: permit INSERT/UPDATE/DELETE/DDL in the SQL console
+};
+try { Object.assign(settings, JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'))); } catch {}
+function saveSettings() {
+  try { fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2), 'utf8'); } catch (e) { console.error('Could not write settings.json:', e.message); }
+}
+function clampInt(v, min, max, fallback) { const n = Math.round(Number(v)); return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback; }
 
 /* ------------------------------------------------------------------ */
 /* Database connectivity (lazy — nothing touches the DB at startup)    */
@@ -423,8 +438,8 @@ function sanitizeRuleInput(body) {
   const displayColumns = String(body.displayColumns || '')
     .split(',').map((s) => s.trim()).filter(Boolean);
   let limit = Number(body.limit);
-  if (!Number.isInteger(limit) || limit < 1) limit = MAX_PREVIEW_ROWS;
-  limit = Math.min(limit, MAX_PREVIEW_ROWS);
+  if (!Number.isInteger(limit) || limit < 1) limit = settings.maxPreviewRows;
+  limit = Math.min(limit, settings.maxPreviewRows);
   if (!name) throw httpError(400, 'Rule name is required');
   if (!table) throw httpError(400, 'Target table is required');
   if (!pkColumn) throw httpError(400, 'Primary-key column is required');
@@ -545,7 +560,7 @@ async function buildRuleQuery(rule) {
   const where = rule.where || '1=1';
   if (where.includes(';')) throw httpError(400, 'WHERE condition must not contain ";"');
 
-  const limit = Math.min(Math.max(1, rule.limit || MAX_PREVIEW_ROWS), MAX_PREVIEW_ROWS);
+  const limit = Math.min(Math.max(1, rule.limit || settings.maxPreviewRows), settings.maxPreviewRows);
   const selectCols = [...new Set([rule.pkColumn, ...rule.displayColumns, ...rule.transforms.map((t) => t.column)])];
   const sql = `SELECT ${selectCols.map(quoteIdent).join(', ')} FROM ${quoteIdent(rule.table)} WHERE (${where}) LIMIT ${limit}`;
 
@@ -687,6 +702,9 @@ async function decideChange(changeId, action) {
   if (!session) throw httpError(409, 'No active session');
   if (session.status === 'aborted' || session.status === 'done') throw httpError(409, `Session is ${session.status}`);
   if (session.status === 'paused' && action === 'approve') throw httpError(409, 'Session is paused — resume before approving');
+  if (action === 'approve' && settings.requireBackupBeforeApprove && !session.backupDownloaded) {
+    throw httpError(409, 'A backup is required before approving (see Settings). Take a backup of this session first.');
+  }
   const change = session.changes.find((c) => c.id === changeId);
   if (!change) throw httpError(404, 'Change not found');
   if (change.status !== 'pending') throw httpError(409, `Change is already ${change.status}`);
@@ -759,10 +777,25 @@ app.get('/api/state', (req, res) => {
   res.json({
     session: sessionSnapshot(),
     recentLog,
-    config: { database: currentDb().database, sshTunnel: !!currentSsh(), profile: activeProfile().name, maxPreviewRows: MAX_PREVIEW_ROWS },
+    config: { database: currentDb().database, sshTunnel: !!currentSsh(), profile: activeProfile().name, maxPreviewRows: settings.maxPreviewRows, sqlConsoleMaxRows: settings.sqlConsoleMaxRows, requireBackupBeforeApprove: settings.requireBackupBeforeApprove, allowWrites: settings.allowWrites },
     transformTypes: Object.fromEntries(Object.entries(TRANSFORMS).map(([k, v]) => [k, v.label])),
   });
 });
+
+/* ---- user-editable tool limits ---- */
+app.get('/api/settings', (req, res) => {
+  res.json({ ...settings, ceilings: SETTINGS_MAX });
+});
+app.put('/api/settings', wrap(async (req, res) => {
+  const b = req.body || {};
+  if (b.maxPreviewRows !== undefined) settings.maxPreviewRows = clampInt(b.maxPreviewRows, 1, SETTINGS_MAX.maxPreviewRows, settings.maxPreviewRows);
+  if (b.sqlConsoleMaxRows !== undefined) settings.sqlConsoleMaxRows = clampInt(b.sqlConsoleMaxRows, 1, SETTINGS_MAX.sqlConsoleMaxRows, settings.sqlConsoleMaxRows);
+  if (b.requireBackupBeforeApprove !== undefined) settings.requireBackupBeforeApprove = !!b.requireBackupBeforeApprove;
+  if (b.allowWrites !== undefined) settings.allowWrites = !!b.allowWrites;
+  saveSettings();
+  logEvent('info', `Settings updated: preview<=${settings.maxPreviewRows}, sqlPage=${settings.sqlConsoleMaxRows}, requireBackup=${settings.requireBackupBeforeApprove}, allowWrites=${settings.allowWrites}`);
+  res.json({ ...settings, ceilings: SETTINGS_MAX });
+}));
 
 app.get('/api/schema', wrap(async (req, res) => {
   const pool = await getPool();
@@ -780,29 +813,50 @@ app.get('/api/schema', wrap(async (req, res) => {
   res.json({ database: currentDb().database, tables });
 }));
 
-/* ---- read-only SQL console ----
-   Writes are deliberately refused here: the ONLY write path in this tool is
-   executeApprovedChange(). Use a rule + approval for changes.               */
-const SQL_CONSOLE_MAX_ROWS = 200;
-
-function validateConsoleSql(raw) {
+/* ---- SQL console ----
+   Reads (SELECT/SHOW/DESCRIBE/EXPLAIN/WITH) are always allowed. Writes
+   (INSERT/UPDATE/DELETE/DDL) run only when the user has enabled them in
+   Settings; callers that must stay read-only (export, AI generation) pass
+   { readOnly: true } regardless of the setting.                            */
+const SQL_READ_KW = ['SELECT', 'SHOW', 'DESCRIBE', 'DESC', 'EXPLAIN', 'WITH'];
+function validateConsoleSql(raw, opts = {}) {
   let sql = String(raw || '').trim();
   if (!sql) throw httpError(400, 'Empty query');
   sql = sql.replace(/;\s*$/, '');
   if (sql.includes(';')) throw httpError(400, 'Only a single statement is allowed');
   const kw = (sql.match(/^[\s(]*([a-zA-Z]+)/) || [])[1]?.toUpperCase();
-  if (!['SELECT', 'SHOW', 'DESCRIBE', 'DESC', 'EXPLAIN', 'WITH'].includes(kw)) {
-    throw httpError(400, `This console is read-only (SELECT / SHOW / DESCRIBE / EXPLAIN): "${kw || '?'}" is not allowed. Writes go through rules and per-row approval.`);
+  const isWrite = !SQL_READ_KW.includes(kw);
+  if (isWrite) {
+    if (opts.readOnly) throw httpError(400, `This is read-only: "${kw || '?'}" is not allowed here.`);
+    if (!settings.allowWrites) throw httpError(403, `Write statements are disabled. Enable "Allow write statements" in Settings to run ${kw || 'this'}.`);
   }
-  return { sql, kw };
+  return { sql, kw, isWrite };
 }
 
 app.post('/api/sql', wrap(async (req, res) => {
-  const { sql, kw } = validateConsoleSql(req.body?.sql);
+  const { sql, kw, isWrite } = validateConsoleSql(req.body?.sql);
   const page = Math.max(0, Math.min(100000, Number(req.body?.page) || 0));
-  const cap = SQL_CONSOLE_MAX_ROWS;
+  const cap = settings.sqlConsoleMaxRows;
   const pool = await getPool();
   const started = Date.now();
+
+  // write statement: execute directly and report the outcome (no result grid)
+  if (isWrite) {
+    let result;
+    try { [result] = await pool.query({ sql, timeout: 60000 }); }
+    catch (e) { audit({ action: 'console-write', sql, error: e.message }); throw httpError(400, e.message); }
+    const ms = Date.now() - started;
+    const info = {
+      affectedRows: result?.affectedRows ?? null,
+      changedRows: result?.changedRows ?? null,
+      insertId: result?.insertId || null,
+      warningStatus: result?.warningStatus ?? null,
+    };
+    audit({ action: 'console-write', kw, sql, ...info });
+    logEvent('warn', `Console WRITE (${kw}, ${ms}ms, affected=${info.affectedRows}): ${sql.slice(0, 160)}`);
+    return res.json({ write: true, kw, info, ms });
+  }
+
   let rows, fields, hasMore;
   if (kw === 'SELECT' || kw === 'WITH') {
     // wrap to enforce the page window inside MySQL; fall back to the raw query
@@ -834,7 +888,7 @@ app.post('/api/sql', wrap(async (req, res) => {
 
 /* ---- full-result export: streams ALL rows (no page cap), read-only ---- */
 app.post('/api/sql/export', wrap(async (req, res) => {
-  const { sql } = validateConsoleSql(req.body?.sql);
+  const { sql } = validateConsoleSql(req.body?.sql, { readOnly: true });
   const format = ['updates', 'inserts', 'csv', 'json'].includes(req.body?.format) ? req.body.format : 'json';
   const table = String(req.body?.table || 'my_table');
   const pkWanted = String(req.body?.pk || '');
@@ -1634,6 +1688,13 @@ const AGENT_TOOLS = {
       } catch { return []; }
     },
   },
+  list_servers: {
+    desc: 'The configured connection profiles / SSH servers, with secrets masked and the active one flagged. Use for questions about the SSH Servers or Connections modules. Input: none.',
+    run: async () => ({
+      activeId: activeProfile().id,
+      servers: connStore.profiles.map((p) => ({ ...maskProfile(p), sshOnly: !!p.sshOnly, active: p.id === activeProfile().id })),
+    }),
+  },
   propose_rule: {
     desc: 'Propose creating or updating a RULE (requires explicit user approval in the UI before it is saved; nothing happens without it). ' +
       'Input: {"action":"create"|"update","ruleId":"<existing rule id, update only>","rule":{"name","table","pkColumn","where","limit",' +
@@ -1662,10 +1723,18 @@ const agentProposals = []; // rule change proposals awaiting explicit user decis
 
 function agentSystemPrompt() {
   const toolLines = Object.entries(AGENT_TOOLS).map(([k, v]) => `- ${k}: ${v.desc}`).join('\n');
-  return `You are the embedded AI assistant of "Server Tools", a tool that runs rule-based MySQL updates where every row change needs explicit human approval.
-STRICT SCOPE: only this tool and the currently connected database "${currentDb().database}". Politely refuse anything outside that scope (general coding help, other systems, the wider filesystem, etc).
-DATABASE access is strictly READ-ONLY: you can never write to the database. Row changes only happen through rules whose previewed changes the USER approves.
-You MAY create or update RULES via the propose_rule tool — but every proposal requires the user's explicit approval in the UI before it is saved; never claim a rule exists until a system note confirms approval.
+  return `You are the AI assistant built into "Server Tools", a DevOps toolbox. Your role is GLOBAL: you help across ALL of its modules, not just rule-writing. The modules are:
+- MySQL Update Tool — rule-based batch updates where every row change needs explicit human approval.
+- SQL Console — a strictly read-only query console (SELECT / SHOW / DESCRIBE / EXPLAIN).
+- Schema Map — the tables, columns and relations of the connected database.
+- SSH Servers — the configured servers / connection profiles (visible via list_servers; secrets are masked).
+- History — the audit timeline of decisions, edits, SSH sessions and AI actions.
+Help the user with whatever module they are in: answer questions, inspect data, draft and explain SQL, interpret the audit history, describe the schema and servers, and propose rules. Prefer doing the safe, useful thing over refusing.
+SAFETY (non-negotiable):
+- DATABASE access is strictly READ-ONLY. You can NEVER write to the database. Row changes happen ONLY through rules whose previewed changes the USER approves.
+- You have no shell or SSH command execution and no filesystem access. You may read connection/server metadata but never secrets (passwords, keys are masked).
+- You MAY create or update RULES via propose_rule, but every proposal requires the user's explicit approval in the UI; never claim a rule exists until a system note confirms it.
+Connected database: "${currentDb().database}".
 To gather information, reply with ONLY one JSON object on a single line, nothing else: {"tool":"<name>","input":{...}}
 Available tools:
 ${toolLines}
@@ -1893,12 +1962,14 @@ app.post('/api/agent/chat', wrap(async (req, res) => {
   const propBefore = agentProposals.length;
   let transcriptExtra = '';
   let reply = null;
+  // the browser tells us which module the user is looking at, so replies can be contextual
+  const moduleNote = req.body?.module ? `\n\nContext: the user is currently in the "${String(req.body.module).slice(0, 60)}" module — tailor your help to it.` : '';
   for (let step = 0; step < 6; step++) {
     const who = AGENT_PROVIDERS[agentConfig.provider].short + (agentConfig.model ? ` (${agentConfig.model})` : '');
     sseBroadcast('agent', { type: 'step', step: step + 1, msg: `thinking with ${who}` });
     // only the recent tail is sent to the model (full history is kept for resume/review)
     const recent = agentChat.slice(-16);
-    const prompt = agentSystemPrompt() + '\n\n--- Conversation ---\n' +
+    const prompt = agentSystemPrompt() + moduleNote + '\n\n--- Conversation ---\n' +
       recent.map((m) => `${m.role === 'user' ? 'User' : m.role === 'note' ? 'System note' : 'Assistant'}: ${m.text}`).join('\n\n') +
       transcriptExtra + '\n\nAssistant:';
     let outRaw;
@@ -2025,7 +2096,7 @@ SQL:`;
   const m = sql.match(/\b(WITH|SELECT|SHOW|DESCRIBE|DESC|EXPLAIN)\b/i);
   if (m) sql = sql.slice(sql.indexOf(m[0]));
   sql = sql.replace(/;\s*$/, '').trim();
-  try { validateConsoleSql(sql); }
+  try { validateConsoleSql(sql, { readOnly: true }); }
   catch (e) { throw httpError(422, `The model produced SQL the read-only console rejects (${e.message}). Rephrase your request.`); }
   audit({ action: 'ai-sql', prompt: ask, sql, schemaAttached: attachSchema, followUp: !!previousSql });
   logEvent('info', `AI generated SQL from prompt: "${ask.slice(0, 90)}"${attachSchema ? '' : ' (no schema)'}${previousSql ? ' (follow-up)' : ''}`);

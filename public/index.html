@@ -45,13 +45,15 @@
   </filter>
 </svg>
 <header>
-  <img class="app-logo" src="/assets/logo/robot-logo.svg" alt="" aria-hidden="true">
-  <h1>Server Tools</h1>
+  <img class="app-logo" id="homeLogo" src="/assets/logo/robot-logo.svg" alt="Back to Compass" title="Back to Compass" style="cursor:pointer">
+  <h1 id="homeTitle" title="Back to Compass" style="cursor:pointer">Server Tools</h1>
+  <button id="btnCompass" title="Back to Compass"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg><span>Compass</span></button>
+  <span class="tool-crumb" id="toolCrumb"></span>
   <span class="sub" id="dbInfo">…</span>
   <span class="sub"><span class="dot" id="sseDot"></span> live</span>
   <span class="spacer"></span>
-  <div class="ai-agent">
-    <button class="ai-real" id="btnAiAgent" title="AI agent" aria-label="AI agent"></button>
+  <div class="ai-agent" title="AI assistant — works across every module">
+    <button class="ai-real" id="btnAiAgent" title="AI assistant" aria-label="AI assistant"></button>
     <div class="ai-border">
       <div class="ai-spin ai-spin-inside"></div>
       <div class="ai-btn">
@@ -61,12 +63,13 @@
       </div>
     </div>
   </div>
-  <span class="sess-status" id="sessStatus">no session</span>
-  <button id="btnPause">Pause</button>
-  <button id="btnResume">Resume</button>
-  <button id="btnAbort" class="warn">Abort</button>
+  <span class="sess-status tool-only" id="sessStatus">no session</span>
+  <button id="btnPause" class="tool-only">Pause</button>
+  <button id="btnResume" class="tool-only">Resume</button>
+  <button id="btnAbort" class="warn tool-only">Abort</button>
   <button id="btnConns" title="Manage database / SSH connection profiles">Connections</button>
-  <select id="moreMenu" title="More actions">
+  <button id="btnSettings" class="iconbtn" title="Settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+  <select id="moreMenu" class="tool-only" title="More actions">
     <option value="">More…</option>
     <option value="tour">Guided tour</option>
     <option value="audit">History</option>
@@ -74,6 +77,111 @@
     <option value="ssh">SSH console</option>
   </select>
 </header>
+
+<!-- Compass: the orchestrator hub. Tiles are rendered from the TOOLS registry in app.js -->
+<section id="compass" aria-label="Compass">
+  <div class="compass-hero">
+    <div class="compass-title">
+      <img class="app-logo" src="/assets/logo/robot-logo.svg" alt="" aria-hidden="true">
+      <div>
+        <h2>Compass</h2>
+        <p class="hint" style="margin:.15rem 0 0">Your DevOps toolbox — pick a tool to get started.</p>
+      </div>
+    </div>
+    <input id="compassSearch" type="search" spellcheck="false" autocomplete="off" placeholder="Search tools…">
+  </div>
+  <div id="compassGrid"></div>
+</section>
+
+<!-- Settings modal (JetBrains-style: title bar + nav sidebar + content pane) -->
+<dialog id="settingsModal" aria-label="Settings">
+  <div class="settings-titlebar">
+    <img class="app-logo" src="/assets/logo/robot-logo.svg" alt="" aria-hidden="true">
+    <b>Settings</b>
+    <span class="spacer"></span>
+    <button id="btnSettingsClose" class="iconbtn" style="padding: .6rem" title="Close (Esc)">✕</button>
+  </div>
+  <div class="settings-shell">
+  <aside class="settings-nav">
+    <input id="settingsSearch" type="search" spellcheck="false" autocomplete="off" placeholder="Search settings…">
+    <div class="settings-nav-list" id="settingsNav">
+      <button class="nav-item active" data-sec="appearance">Appearance &amp; view</button>
+      <button class="nav-item" data-sec="sql">SQL console</button>
+      <button class="nav-item" data-sec="rules">Rules &amp; preview</button>
+      <button class="nav-item" data-sec="ai">AI assistant</button>
+      <button class="nav-item" data-sec="db">Database connections</button>
+      <button class="nav-item" data-sec="ssh">SSH servers</button>
+    </div>
+  </aside>
+  <div class="settings-main">
+    <div class="settings-crumb"><span>Settings</span><span class="sep">›</span><span id="settingsCrumb">Appearance &amp; view</span></div>
+    <div class="settings-body">
+      <div class="settings-section active" data-sec="appearance">
+        <div class="settings-group">
+          <div class="sg-row"><label>Drawer orientation</label>
+            <div class="seg" id="setOrient">
+              <button type="button" data-orient="vertical">Vertical</button>
+              <button type="button" data-orient="horizontal">Horizontal</button>
+            </div>
+          </div>
+          <p class="sg-hint">Vertical docks the side drawers (SSH, History) to the right; horizontal docks them to the bottom.</p>
+          <div class="sg-row"><label for="setStartup">Startup view</label>
+            <select id="setStartup"><option value="compass">Compass hub</option><option value="mysql">MySQL Update Tool</option><option value="last">Last used tool</option></select>
+          </div>
+          <p class="sg-hint">Which screen opens when you launch the app.</p>
+        </div>
+      </div>
+
+      <div class="settings-section" data-sec="sql">
+        <div class="settings-group">
+          <label class="chk"><input type="checkbox" id="setAllowWrites"> Allow write statements <span class="hint" style="margin:0">INSERT · UPDATE · DELETE · CREATE · ALTER · DROP · TRUNCATE</span></label>
+          <p class="sg-hint warn">When enabled, the SQL console runs writes <b>directly</b> against <b id="setDbName">the database</b> — no per-row approval. Reads are always allowed; the AI query generator stays read-only.</p>
+          <label class="chk"><input type="checkbox" id="setConfirmDestructive"> Confirm before destructive statements (DROP, DELETE, TRUNCATE, ALTER, UPDATE)</label>
+          <div class="sg-row"><label for="setSqlPage">Result page size <span class="hint" id="setSqlPageCeil"></span></label>
+            <input id="setSqlPage" type="number" min="1" step="1">
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-section" data-sec="rules">
+        <div class="settings-group">
+          <div class="sg-row"><label for="setPreview">Preview row cap <span class="hint" id="setPreviewCeil"></span></label>
+            <input id="setPreview" type="number" min="1" step="1">
+          </div>
+          <p class="sg-hint">Maximum rows a rule preview scans and stages for one-by-one approval.</p>
+          <label class="chk"><input type="checkbox" id="setReqBackup"> Require a backup before approving changes</label>
+          <p class="sg-hint">Blocks approvals until a backup of the current session has been taken.</p>
+        </div>
+      </div>
+
+      <div class="settings-section" data-sec="ai">
+        <div class="settings-group">
+          <div class="sg-row"><label for="setAiSchema">Attach database schema</label>
+            <select id="setAiSchema"><option value="ask">Ask every time</option><option value="always">Always attach</option><option value="never">Never attach</option></select>
+          </div>
+          <p class="sg-hint">Whether the AI SQL prompt (Ctrl+Shift+/) sends table/column names as context.</p>
+        </div>
+      </div>
+
+      <div class="settings-section" data-sec="db">
+        <div class="settings-group">
+          <div class="sg-head">Configured connections <span class="hint" id="setConnCount" style="margin:0"></span></div>
+          <div id="setConnList" class="settings-list"></div>
+          <div class="settings-actions"><button id="btnManageConns" class="primary">Manage / add connections</button></div>
+        </div>
+      </div>
+
+      <div class="settings-section" data-sec="ssh">
+        <div class="settings-group">
+          <div class="sg-head">SSH servers <span class="hint" id="setSrvCount" style="margin:0"></span></div>
+          <div id="setSrvList" class="settings-list"></div>
+          <div class="settings-actions"><button id="btnManageServers" class="primary">Open SSH servers</button></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  </div>
+</dialog>
 
 <dialog id="connModal">
   <h2 style="margin:0 0 .8rem;font-size:.85rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)">Connections</h2>
@@ -127,6 +235,7 @@
     <button id="btnAuditResume" class="aireview glossy" title="Open the AI chat and continue the conversation">Resume AI chat</button>
     <button id="btnAuditRefresh" title="Reload">Refresh</button>
     <a href="/api/audit.log" download><button title="Download the raw JSON-lines file">Download</button></a>
+    <button class="btn-dock" title="Drawer orientation — vertical (right) or horizontal (bottom); applies to all drawers">Vertical</button>
     <button id="btnAuditClose" title="Close (Esc)">✕</button>
   </div>
   <div id="auditChips"></div>
@@ -319,7 +428,7 @@
   <div id="sqlResize" title="Drag to resize the console"></div>
   <div id="sqlBar">
     <b style="font-size:.78rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)">SQL console</b>
-    <span class="hint" style="margin:0">read-only: SELECT / SHOW / DESCRIBE / EXPLAIN · Ctrl+Enter runs · Ctrl+Shift+/ asks AI · results capped at 200 rows</span>
+    <span class="hint" id="sqlModeHint" style="margin:0">read-only: SELECT / SHOW / DESCRIBE / EXPLAIN · Ctrl+Enter runs · Ctrl+Shift+/ asks AI</span>
     <span class="spacer"></span>
     <span class="hint" id="sqlMeta" style="margin:0"></span>
     <button id="btnLoadSchema" title="Connects to the database to load table/column names for autocomplete (rule editor and console)">Load schema</button>
@@ -400,6 +509,7 @@
     <span class="spacer"></span>
     <button id="btnAddServer" class="primary">+ Add server</button>
     <button id="btnServersRefresh" title="Reload the list">Refresh</button>
+    <button class="btn-dock" title="Drawer orientation — vertical (right) or horizontal (bottom); applies to all drawers">Vertical</button>
     <button id="btnServersClose" title="Close (Esc)">✕</button>
   </div>
   <div class="hint" style="margin:.2rem 0 .5rem">Connect to any SSH-enabled connection profile independently of the active database, and see live VM stats.</div>
@@ -428,14 +538,13 @@
 <aside id="sshDrawer" aria-label="SSH console">
   <div id="sshResize" title="Drag to resize"></div>
   <div class="ssh-head">
-    <h2 style="margin:0;font-size:.85rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)">SSH console <span class="sec-hint" id="sshHostInfo"></span></h2>
+    <h2 style="margin:0;font-size:.85rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)">SSH consoles <span class="sec-hint" id="sshHostInfo"></span></h2>
     <span class="spacer"></span>
-    <button id="btnSshClear" title="Clear the output">Clear</button>
-    <button id="btnSshClose" title="Close (Esc)">✕</button>
+    <button class="btn-dock" title="Drawer orientation — vertical (right) or horizontal (bottom); applies to all drawers">Vertical</button>
+    <button id="btnSshClose" title="Close docked consoles (Esc)">✕</button>
   </div>
-  <div class="hint" style="margin:.2rem 0 .4rem">Live interactive shell on the SSH server (full PTY — vim, top, mysql, etc. work). Session open/close is logged to the audit trail.</div>
-  <div id="sshTerm"></div>
-  <div class="hint" id="sshTermStatus" style="margin:.3rem 0 0"></div>
+  <div id="sshTabs" hidden></div>
+  <div id="sshConsoleHost"></div>
 </aside>
 
 <dialog id="confirmModal">

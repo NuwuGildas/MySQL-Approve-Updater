@@ -1740,7 +1740,7 @@ $('sqlBar').addEventListener('click', (e) => { if (e.target.tagName !== 'BUTTON'
 $('btnSqlToggle').addEventListener('click', toggleSqlConsole);
 
 const sqlState = { sql: '', page: 0, result: null, transposed: false };
-const SQL_PAGE = 200;
+let SQL_PAGE = 200; // server SQL console page size; synced from /api/state and Settings
 
 /* CodeMirror-backed SQL editor (falls back to the plain textarea if the
  * vendor bundle is missing) */
@@ -1818,7 +1818,10 @@ function aiHistNav(dir) { // dir<0 older (ArrowUp), dir>0 newer (ArrowDown)
   inp.value = i === -1 ? aiSql.histDraft : h[i];
   requestAnimationFrame(() => inp.setSelectionRange(inp.value.length, inp.value.length));
 }
-function aiAskAttach() { // ALWAYS asked before the schema is attached to a request
+function aiAskAttach() { // honors the Settings default: always / never / ask each time
+  let pref = 'ask'; try { pref = localStorage.getItem('st-ai-schema') || 'ask'; } catch {}
+  if (pref === 'always') return Promise.resolve(true);
+  if (pref === 'never') return Promise.resolve(false);
   return confirmDialog({
     title: 'Attach database schema?',
     message: 'Send this database\'s table &amp; column names to the AI as context for the query?'
@@ -1904,9 +1907,26 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === 'Escape' && aiSqlPromptOpen()) { e.preventDefault(); aiSql.phase === 'followup' ? aiDiscard() : closeAiSqlPrompt(); }
 });
 
+const SQL_READ_KW = ['SELECT', 'SHOW', 'DESCRIBE', 'DESC', 'EXPLAIN', 'WITH'];
+const SQL_DESTRUCTIVE_KW = ['DROP', 'DELETE', 'TRUNCATE', 'ALTER', 'UPDATE'];
+function updateSqlModeHint() {
+  const el = $('sqlModeHint'); if (!el) return;
+  el.innerHTML = state.allowWrites
+    ? '<span style="color:var(--amber)">writes enabled</span> — reads + INSERT/UPDATE/DELETE/DDL · Ctrl+Enter runs · Ctrl+Shift+/ asks AI'
+    : 'read-only: SELECT / SHOW / DESCRIBE / EXPLAIN · Ctrl+Enter runs · Ctrl+Shift+/ asks AI';
+}
 async function runSql(page = 0) {
   const sql = page === 0 ? sqlGetValue().trim() : sqlState.sql;
   if (!sql) return;
+  // confirm destructive writes before executing (when writes are enabled)
+  if (page === 0) {
+    const kw = (sql.match(/^[\s(]*([a-zA-Z]+)/) || [])[1]?.toUpperCase();
+    const isWrite = kw && !SQL_READ_KW.includes(kw);
+    if (isWrite && state.allowWrites && prefConfirmDestructive() && SQL_DESTRUCTIVE_KW.includes(kw)) {
+      const ok = await confirmDialog({ title: `Run ${esc(kw)}?`, message: `This executes a <b>${esc(kw)}</b> statement directly against <b>${esc(state.config?.database || 'the database')}</b>. The tool cannot undo it.`, okLabel: `Run ${esc(kw)}`, okClass: 'reject' });
+      if (!ok) return;
+    }
+  }
   $('btnSqlRun').disabled = true;
   $('sqlResults').innerHTML = '<div class="empty" style="padding:.8rem">Running…</div>';
   $('sqlMeta').textContent = '';
@@ -1935,6 +1955,14 @@ function destroySqlTable() {
 function renderSqlResult() {
   const r = sqlState.result;
   if (!r) return;
+  if (r.write) { // write statement outcome (no result grid)
+    destroySqlTable();
+    $('sqlPager').hidden = true;
+    const i = r.info || {};
+    $('sqlMeta').textContent = `${r.kw} OK · ${i.affectedRows ?? 0} affected · ${r.ms} ms`;
+    $('sqlResults').innerHTML = `<div class="empty" style="padding:.8rem;color:var(--green)">Query OK — ${i.affectedRows ?? 0} row(s) affected${i.changedRows != null ? `, ${i.changedRows} changed` : ''}${i.insertId ? `, insert id ${i.insertId}` : ''}${i.warningStatus ? ` · ${i.warningStatus} warning(s)` : ''}.</div>`;
+    return;
+  }
   const page = r.page ?? 0; // tolerate a server still running the pre-pagination code
   const from = page * SQL_PAGE + 1;
   $('sqlMeta').textContent = `${r.rowCount} row(s), ${r.ms} ms`;
@@ -2239,6 +2267,7 @@ document.addEventListener('keydown', (e) => {
 
 async function openAgent() {
   $('agentDrawer').classList.add('open');
+  restoreAgentGeom(); // place/size the floating window from the last saved geometry
   $('agentConnect').hidden = true;
   $('agentChatWrap').hidden = true;
   $('btnAgentReset').hidden = $('btnAgentDisconnect').hidden = true;
@@ -2446,7 +2475,7 @@ async function agentSend() {
   agentFeedEl = pending.querySelector('.agent-feed'); // the SSE 'agent' listener streams progress lines into it
   document.body.classList.add('agent-busy'); // pulses the header button icon too
   try {
-    const r = await api('/api/agent/chat', { method: 'POST', body: JSON.stringify({ message: msg }) });
+    const r = await api('/api/agent/chat', { method: 'POST', body: JSON.stringify({ message: msg, module: currentModuleLabel() }) });
     pending.remove();
     appendAgentMsg('ai', r.reply, r.actions);
     (r.proposals || []).forEach(appendAgentProposal);
@@ -2562,21 +2591,34 @@ function serverCard(s) {
   el.innerHTML = `
     <div class="srv-head">
       <span class="srv-dot ${s.connected ? 'on' : ''}"></span>
-      <span class="srv-name">${esc(s.connected && m && !m.error ? (m.host || s.name) : s.name)}</span>
-      ${s.active ? '<span class="badge approved">active DB</span>' : ''}
-      <span class="spacer"></span>
-      <span class="srv-sub">${esc(s.user)}@${esc(s.host)}</span>
+      <div class="srv-id">
+        <div class="srv-nameRow">
+          <span class="srv-name" title="${esc(s.name)}">${esc(s.connected && m && !m.error ? (m.host || s.name) : s.name)}</span>
+          ${s.active ? '<span class="badge approved">active DB</span>' : ''}
+        </div>
+        <span class="srv-sub">${esc(s.user)}@${esc(s.host)}</span>
+      </div>
     </div>
     ${body}
     <div class="srv-actions">
       ${s.connected
-        ? `<button data-act="refresh">Refresh</button><button data-act="terminal" class="primary">Terminal</button><button data-act="terminal-ai" class="aireview glossy" title="Open a terminal and launch the connected AI CLI on this server">${AI_LOGO_REST}<span>Terminal + AI</span></button><span class="spacer"></span><button data-act="disconnect" class="warn">Disconnect</button>`
+        ? `<button data-act="refresh">Refresh</button><div class="term-dd"><button data-act="terminal-menu" class="primary">Terminal <svg class="caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button><div class="term-dd-menu" hidden><button data-act="terminal">Terminal</button><button data-act="terminal-ai" class="aireview glossy" title="Open a terminal and launch the connected AI CLI on this server">${AI_LOGO_REST}<span>Terminal + AI</span></button></div></div><span class="spacer"></span><button data-act="disconnect" class="warn">Disconnect</button>`
         : `<button data-act="connect" class="primary">Connect</button><span class="spacer"></span>${s.sshOnly ? '<button data-act="remove" class="iconbtn danger" title="Remove this SSH server">' + RULE_ICONS.trash + '</button>' : ''}`}
     </div>`;
-  el.querySelectorAll('.srv-actions [data-act]').forEach((b) => b.addEventListener('click', async () => {
+  const closeTermMenu = () => { const m = el.querySelector('.term-dd-menu'); if (m) m.hidden = true; };
+  el.querySelectorAll('.srv-actions [data-act]').forEach((b) => b.addEventListener('click', async (ev) => {
     const act = b.dataset.act;
-    if (act === 'terminal') { openSsh(s.id); return; }
-    if (act === 'terminal-ai') { openSsh(s.id, { ai: true }); return; }
+    if (act === 'terminal-menu') {
+      ev.stopPropagation();
+      const m = el.querySelector('.term-dd-menu');
+      const willOpen = m.hidden;
+      document.querySelectorAll('.term-dd-menu').forEach((x) => { x.hidden = true; }); // close others
+      m.hidden = !willOpen;
+      if (willOpen) setTimeout(() => document.addEventListener('click', function h() { closeTermMenu(); document.removeEventListener('click', h); }), 0);
+      return;
+    }
+    if (act === 'terminal') { closeTermMenu(); openSsh(s.id, { label: s.name }); return; }
+    if (act === 'terminal-ai') { closeTermMenu(); openSsh(s.id, { ai: true, label: s.name }); return; }
     if (act === 'remove') {
       const ok = await confirmDialog({ title: 'Remove SSH server', message: `Remove the SSH server <b>${esc(s.name)}</b>? Its stored credentials are deleted from connections.json.`, okLabel: 'Remove', okClass: 'reject' });
       if (!ok) return;
@@ -2589,6 +2631,7 @@ function serverCard(s) {
     if (act === 'refresh') b.textContent = 'Refreshing…';
     try {
       await api(`/api/ssh/sessions/${s.id}/${act}`, { method: 'POST' });
+      if (act === 'disconnect') closeConsolesForProfile(s.id); // tear down this server's open consoles too
       await loadServers();
     } catch (e) { toast(e.message); b.disabled = false; b.textContent = orig; }
   }));
@@ -2623,92 +2666,200 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && $('serversDrawer').classList.contains('open') && !document.querySelector('dialog[open]')) closeServers();
 });
 
-/* ---------- SSH terminal (xterm.js + WebSocket PTY) ---------- */
-let term = null, termFit = null, termWs = null, termRO = null;
-function sshStatus(msg, cls) { $('sshTermStatus').className = 'hint ' + (cls || ''); $('sshTermStatus').textContent = msg; }
-const closeSsh = () => { $('sshDrawer').classList.remove('open'); teardownTerm(); };
+/* ---------- SSH consoles (xterm.js + WebSocket PTY) ----------
+   Up to MAX_CONSOLES live at once. Each is a self-contained element that lives
+   docked in the drawer (shown one at a time via tabs) or popped out into a
+   free-floating, draggable, resizable window. Moving the element between the
+   two keeps its xterm alive. */
+const consoles = new Map();
+const MAX_CONSOLES = 3;
+let consoleSeq = 0;
+let activeConsoleId = null;
+const SSH_ICON = {
+  clear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M20 20H8.5L3 14.5a2 2 0 0 1 0-2.8l7-7a2 2 0 0 1 2.8 0l6 6a2 2 0 0 1 0 2.8L15 18"/><path d="M8.5 20 14 14.5"/></svg>',
+  popout: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M14 4h6v6"/><path d="M20 4l-8 8"/><path d="M18 13v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h5"/></svg>',
+  dock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 14h18" fill="none"/><rect x="3" y="14" width="18" height="6" rx="0" fill="currentColor" stroke="none"/></svg>',
+  close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+};
 
-function teardownTerm() {
-  if (termWs) { try { termWs.close(); } catch {} termWs = null; }
-  if (termRO) { try { termRO.disconnect(); } catch {} termRO = null; }
-  if (term) { try { term.dispose(); } catch {} term = null; termFit = null; }
-  $('sshTerm').innerHTML = '';
-}
+const refitConsole = (c) => { try { c.fit.fit(); } catch {} };
+const refitConsoles = () => consoles.forEach(refitConsole);
+const dockedConsoles = () => [...consoles.values()].filter((c) => !c.floating);
+const showSshDrawer = () => $('sshDrawer').classList.add('open');
+const hideSshDrawer = () => $('sshDrawer').classList.remove('open');
 
-let sshTermProfile = null; // when set, the terminal targets this profile instead of the active connection
-let sshTermAi = false;
-async function openSsh(profileId, opts = {}) {
-  sshTermProfile = (typeof profileId === 'string') ? profileId : null;
-  sshTermAi = !!opts.ai;
-  if (!sshTermProfile) {
-    try {
-      const st = await api('/api/state');
-      if (!st.config.sshTunnel) { toast('The active connection has no SSH tunnel — enable one in Connections'); return; }
-    } catch (e) { toast(e.message); return; }
-  }
-  $('sshHostInfo').textContent = '';
-  if (typeof Terminal === 'undefined') { toast('Terminal library not loaded'); return; }
-  $('sshDrawer').classList.add('open');
-  teardownTerm();
-  term = new Terminal({
-    cursorBlink: true, fontSize: 13, fontFamily: 'ui-monospace, Consolas, monospace',
-    theme: { background: '#0b0f13', foreground: '#dce3ea', cursor: '#4da3ff' },
+function renderSshTabs() {
+  $('sshHostInfo').textContent = consoles.size ? `— ${consoles.size}/${MAX_CONSOLES}` : '';
+  const host = $('sshTabs'); host.innerHTML = '';
+  const docked = dockedConsoles();
+  docked.forEach((c) => {
+    const t = document.createElement('button');
+    t.className = 'ssh-tab' + (c.id === activeConsoleId ? ' active' : '');
+    t.innerHTML = `<span class="ssh-tab-dot ${c.statusCls || ''}"></span><span class="ssh-tab-label">${esc(c.label)}</span><span class="ssh-tab-x" title="Close">✕</span>`;
+    t.addEventListener('click', (e) => { if (e.target.closest('.ssh-tab-x')) closeConsole(c.id); else activateConsole(c.id); });
+    host.appendChild(t);
   });
-  termFit = new FitAddon.FitAddon();
-  term.loadAddon(termFit);
-  term.open($('sshTerm'));
-  setTimeout(() => { termFit.fit(); connectTerm(); term.focus(); }, 30);
-  // refit when the drawer/window resizes, pushing the new size to the PTY
-  termRO = new ResizeObserver(() => { try { termFit.fit(); } catch {} });
-  termRO.observe($('sshTerm'));
+  host.hidden = !docked.length;
 }
 
-function connectTerm() {
-  const { cols, rows } = term;
-  sshStatus('connecting…');
-  const ws = new WebSocket(`ws://${location.host}/api/ssh-term?cols=${cols}&rows=${rows}${sshTermProfile ? '&profile=' + encodeURIComponent(sshTermProfile) : ''}${sshTermAi ? '&ai=1' : ''}`);
-  ws.binaryType = 'arraybuffer';
-  termWs = ws;
-  ws.onopen = () => sshStatus('connected', 'ok');
+function activateConsole(id) {
+  const c = consoles.get(id); if (!c || c.floating) return;
+  activeConsoleId = id;
+  $('sshConsoleHost').querySelectorAll('.ssh-console').forEach((el) => el.classList.toggle('active', el.dataset.id === id));
+  renderSshTabs();
+  refitConsole(c); c.term.focus();
+}
+
+function setConsoleStatus(c, msg, cls) {
+  c.statusCls = cls || '';
+  if (c.statusEl) { c.statusEl.textContent = msg; c.statusEl.className = 'ssh-console-status ' + (cls || ''); }
+  renderSshTabs();
+}
+
+function buildConsoleEl(c) {
+  const el = document.createElement('div');
+  el.className = 'ssh-console'; el.dataset.id = c.id;
+  el.innerHTML = `
+    <div class="ssh-console-bar">
+      <span class="ssh-console-title">${esc(c.label)}</span>
+      <span class="ssh-console-status">connecting…</span>
+      <span class="spacer"></span>
+      <button class="iconbtn" data-cact="clear" title="Clear output">${SSH_ICON.clear}</button>
+      <button class="iconbtn" data-cact="popout" title="Pop out to a floating window">${SSH_ICON.popout}</button>
+      <button class="iconbtn danger" data-cact="close" title="Close console">${SSH_ICON.close}</button>
+    </div>
+    <div class="ssh-console-term"></div>`;
+  c.el = el;
+  c.statusEl = el.querySelector('.ssh-console-status');
+  c.termHost = el.querySelector('.ssh-console-term');
+  el.querySelector('[data-cact="clear"]').addEventListener('click', () => c.term.clear());
+  el.querySelector('[data-cact="popout"]').addEventListener('click', () => toggleFloat(c.id));
+  el.querySelector('[data-cact="close"]').addEventListener('click', () => closeConsole(c.id));
+  const bar = el.querySelector('.ssh-console-bar'); // drag handle when floating
+  bar.addEventListener('pointerdown', (e) => {
+    if (!c.floating || e.target.closest('button')) return;
+    const r = el.getBoundingClientRect(); const ox = e.clientX - r.left, oy = e.clientY - r.top;
+    // pin the current position as left/top BEFORE dropping the right anchor, or
+    // the switch from right- to left-anchored jumps the window on the first click
+    el.style.left = r.left + 'px'; el.style.top = r.top + 'px'; el.style.right = 'auto';
+    const move = (ev) => {
+      el.style.left = Math.min(Math.max(0, ev.clientX - ox), window.innerWidth - 60) + 'px';
+      el.style.top = Math.min(Math.max(0, ev.clientY - oy), window.innerHeight - 40) + 'px';
+    };
+    const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up); e.preventDefault();
+  });
+  c.ro = new ResizeObserver(() => refitConsole(c));
+  c.ro.observe(c.termHost);
+  return el;
+}
+
+function toggleFloat(id) {
+  const c = consoles.get(id); if (!c) return;
+  const popBtn = c.el.querySelector('[data-cact="popout"]');
+  if (!c.floating) {
+    // set the target geometry BEFORE going fixed so there is no offset-less frame
+    const n = [...consoles.values()].filter((x) => x.floating && x !== c).length; // stagger multiple floats
+    c.el.style.left = ''; c.el.style.right = (24 + n * 30) + 'px'; c.el.style.top = (72 + n * 30) + 'px';
+    c.el.style.width = '520px'; c.el.style.height = '360px';
+    c.floating = true; c.el.classList.add('floating');
+    document.body.appendChild(c.el);
+    popBtn.innerHTML = SSH_ICON.dock; popBtn.title = 'Dock back into the drawer';
+    if (activeConsoleId === id) activeConsoleId = null;
+    const next = dockedConsoles()[0];
+    if (next) activateConsole(next.id); else { renderSshTabs(); if (!dockedConsoles().length) hideSshDrawer(); }
+  } else {
+    // reparent into the host while STILL fixed (viewport-anchored, no reflow), THEN
+    // drop the floating class — otherwise it briefly lays out full-size in <body>
+    $('sshConsoleHost').appendChild(c.el);
+    c.floating = false; c.el.classList.remove('floating');
+    c.el.removeAttribute('style'); // drop floating geometry, back to docked layout
+    popBtn.innerHTML = SSH_ICON.popout; popBtn.title = 'Pop out to a floating window';
+    showSshDrawer(); activateConsole(id);
+  }
+  setTimeout(() => refitConsole(c), 40);
+}
+
+function closeConsole(id) {
+  const c = consoles.get(id); if (!c) return;
+  try { c.ws && c.ws.close(); } catch {}
+  try { c.ro && c.ro.disconnect(); } catch {}
+  try { c.term && c.term.dispose(); } catch {}
+  c.el.remove(); consoles.delete(id);
+  if (activeConsoleId === id) {
+    activeConsoleId = null;
+    const next = dockedConsoles()[0];
+    if (next) activateConsole(next.id);
+  }
+  renderSshTabs();
+  if (!dockedConsoles().length) hideSshDrawer();
+}
+
+function connectConsole(c) {
+  const { cols, rows } = c.term;
+  setConsoleStatus(c, 'connecting…');
+  const ws = new WebSocket(`ws://${location.host}/api/ssh-term?cols=${cols}&rows=${rows}${c.profileId ? '&profile=' + encodeURIComponent(c.profileId) : ''}${c.ai ? '&ai=1' : ''}`);
+  ws.binaryType = 'arraybuffer'; c.ws = ws;
+  ws.onopen = () => setConsoleStatus(c, 'connected', 'ok');
   ws.onmessage = (e) => {
-    if (typeof e.data === 'string') {
-      if (e.data[0] === '\x00') { term.write(e.data.slice(1)); return; } // server status line
-      term.write(e.data);
-    } else {
-      term.write(new Uint8Array(e.data));
-    }
+    if (typeof e.data === 'string') { if (e.data[0] === '\x00') { c.term.write(e.data.slice(1)); return; } c.term.write(e.data); }
+    else c.term.write(new Uint8Array(e.data));
   };
-  ws.onclose = () => sshStatus('disconnected — reopen the console to reconnect', 'err');
-  ws.onerror = () => sshStatus('connection error', 'err');
-  // keystrokes → server (binary), resize → server (JSON text)
-  term.onData((d) => { if (ws.readyState === 1) ws.send(new TextEncoder().encode(d)); });
-  term.onResize(({ cols, rows }) => { if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'resize', cols, rows })); });
+  ws.onclose = () => setConsoleStatus(c, 'disconnected', 'err');
+  ws.onerror = () => setConsoleStatus(c, 'connection error', 'err');
+  c.term.onData((d) => { if (ws.readyState === 1) ws.send(new TextEncoder().encode(d)); });
+  c.term.onResize(({ cols, rows }) => { if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'resize', cols, rows })); });
 }
 
-$('btnSshClose').addEventListener('click', closeSsh);
-$('btnSshClear').addEventListener('click', () => { if (term) term.clear(); });
+async function openSsh(profileId, opts = {}) {
+  const pid = (typeof profileId === 'string') ? profileId : null;
+  const ai = !!opts.ai;
+  if (!pid) { // active-connection terminal requires an SSH tunnel
+    try { const st = await api('/api/state'); if (!st.config.sshTunnel) { toast('The active connection has no SSH tunnel — enable one in Connections'); return; } }
+    catch (e) { toast(e.message); return; }
+  }
+  if (typeof Terminal === 'undefined') { toast('Terminal library not loaded'); return; }
+  if (consoles.size >= MAX_CONSOLES) { toast(`You can run at most ${MAX_CONSOLES} SSH consoles at once — close one first`); return; }
+  const id = 'c' + (++consoleSeq);
+  const label = (opts.label || (pid ? 'server' : 'active connection')) + (ai ? ' · AI' : '');
+  const c = { id, profileId: pid, ai, label, floating: false, statusCls: '' };
+  consoles.set(id, c);
+  $('sshConsoleHost').appendChild(buildConsoleEl(c));
+  c.term = new Terminal({ cursorBlink: true, fontSize: 13, fontFamily: 'ui-monospace, Consolas, monospace', theme: { background: '#0b0f13', foreground: '#dce3ea', cursor: '#4da3ff' } });
+  c.fit = new FitAddon.FitAddon(); c.term.loadAddon(c.fit);
+  c.term.open(c.termHost);
+  showSshDrawer(); activateConsole(id);
+  setTimeout(() => { refitConsole(c); connectConsole(c); c.term.focus(); }, 30);
+}
+
+// close every console (docked or floating) tied to a given server profile —
+// used when that server is disconnected so no dead consoles linger
+function closeConsolesForProfile(pid) { [...consoles.values()].filter((c) => c.profileId === pid).forEach((c) => closeConsole(c.id)); }
+function closeSshDrawer() { dockedConsoles().forEach((c) => closeConsole(c.id)); hideSshDrawer(); }
+$('btnSshClose').addEventListener('click', closeSshDrawer);
 document.addEventListener('keydown', (e) => {
-  // don't let Esc close while typing in the terminal; only when focus is elsewhere
-  if (e.key === 'Escape' && $('sshDrawer').classList.contains('open') && !document.querySelector('dialog[open]') && !$('sshTerm').contains(document.activeElement)) closeSsh();
+  // don't close while typing in a terminal; only when focus is elsewhere
+  if (e.key === 'Escape' && $('sshDrawer').classList.contains('open') && !document.querySelector('dialog[open]') && !document.activeElement?.closest('.ssh-console')) closeSshDrawer();
 });
 
-/* SSH console drawer: drag the left edge to resize (persisted). The terminal
- * refits automatically via the ResizeObserver on #sshTerm; we also fit once at
- * release so the final PTY size is exact. Widths are coalesced to one write per
- * frame during the drag. */
+/* SSH drawer: drag the left/top edge to resize (persisted). Consoles refit via
+ * their own ResizeObserver; we also fit once at release so the PTY size is exact. */
 (() => {
   const drawer = $('sshDrawer'), handle = $('sshResize');
   if (!drawer || !handle) return;
-  const KEY = 'mau-ssh-w';
-  const saved = localStorage.getItem(KEY);
-  if (saved) drawer.style.setProperty('--ssh-w', saved);
+  const KEY_W = 'mau-ssh-w', KEY_H = 'mau-ssh-h';
+  const savedW = localStorage.getItem(KEY_W); if (savedW) drawer.style.setProperty('--ssh-w', savedW);
+  const savedH = localStorage.getItem(KEY_H); if (savedH) drawer.style.setProperty('--ssh-h', savedH);
   handle.addEventListener('pointerdown', (e) => {
     e.preventDefault();
+    const horizontal = document.body.classList.contains('drawers-h'); // top-edge height vs left-edge width
+    const prop = horizontal ? '--ssh-h' : '--ssh-w', key = horizontal ? KEY_H : KEY_W;
     let pending = null, rafId = 0;
-    const flush = () => { rafId = 0; if (pending !== null) { drawer.style.setProperty('--ssh-w', pending); pending = null; } };
+    const flush = () => { rafId = 0; if (pending !== null) { drawer.style.setProperty(prop, pending); pending = null; } };
     const move = (ev) => {
-      const w = Math.min(window.innerWidth * 0.96, Math.max(360, window.innerWidth - ev.clientX));
-      pending = w + 'px';
+      pending = horizontal
+        ? Math.min(window.innerHeight * 0.92, Math.max(200, window.innerHeight - ev.clientY)) + 'px'
+        : Math.min(window.innerWidth * 0.96, Math.max(360, window.innerWidth - ev.clientX)) + 'px';
       if (!rafId) rafId = requestAnimationFrame(flush);
     };
     const up = () => {
@@ -2716,8 +2867,8 @@ document.addEventListener('keydown', (e) => {
       window.removeEventListener('pointerup', up);
       if (rafId) cancelAnimationFrame(rafId);
       flush();
-      localStorage.setItem(KEY, drawer.style.getPropertyValue('--ssh-w'));
-      try { if (termFit) termFit.fit(); } catch {}
+      localStorage.setItem(key, drawer.style.getPropertyValue(prop));
+      refitConsoles();
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
@@ -2848,12 +2999,261 @@ document.addEventListener('keydown', (e) => {
 });
 
 /* ---------- init ---------- */
+/* ================= Compass (orchestrator hub) =================
+   A registry-driven launcher. Each tool declares how it opens; adding a future
+   tool is just another entry here. "Workspace" tools reveal <main> (the MySQL
+   tool); "panel" tools slide their drawer over the hub. */
+const CC_ICON = {
+  db: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>',
+  console: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>',
+  schema: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="7" height="6" rx="1"/><rect x="14" y="15" width="7" height="6" rx="1"/><rect x="3" y="15" width="7" height="6" rx="1"/><path d="M6.5 9v3h11v3M6.5 15v-3"/></svg>',
+  server: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><path d="M7 7.5h.01M7 16.5h.01"/></svg>',
+  history: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>',
+  settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
+};
+const TOOLS = [
+  { id: 'mysql', name: 'MySQL Update Tool', tag: 'Database', accent: '--accent', icon: CC_ICON.db,
+    desc: 'Rule-based batch updates with preview, per-row human approval and backups.',
+    launch: () => revealWorkspace('MySQL Update Tool') },
+  { id: 'sql', name: 'SQL Console', tag: 'Database', accent: '--green', icon: CC_ICON.console,
+    desc: 'Read-only SQL console with schema autocomplete, export, and AI query generation.',
+    launch: () => { revealWorkspace('SQL Console'); if (!$('sqlConsole').classList.contains('open')) toggleSqlConsole(); } },
+  { id: 'schema', name: 'Schema Map', tag: 'Database', accent: '--purple', icon: CC_ICON.schema,
+    desc: 'Visualize tables and relations; inspect columns, row counts and CREATE TABLE.',
+    launch: () => { revealWorkspace('Schema Map'); $('btnSchemaMap').click(); } },
+  { id: 'servers', name: 'SSH Servers', tag: 'Infrastructure', accent: '--amber', icon: CC_ICON.server,
+    desc: 'Manage SSH servers, watch live VM stats, and open full terminals.',
+    launch: () => openServers() },
+  { id: 'history', name: 'History', tag: 'Audit', accent: '--red', icon: CC_ICON.history,
+    desc: 'Timeline of every decision, edit, SSH session and AI action.',
+    launch: () => openAudit() },
+  { id: 'settings', name: 'Settings', tag: 'Configure', accent: '--muted', icon: CC_ICON.settings,
+    desc: 'View preferences, database & SSH connections, and MySQL tool limits.',
+    launch: () => showSettings() },
+];
+// The AI assistant is intentionally NOT a tile: it lives in the navbar with a
+// global role and can intervene across every module (see the header button).
+function toolStatus() { return null; }
+function renderCompass() {
+  const q = ($('compassSearch')?.value || '').toLowerCase().trim();
+  const list = TOOLS.filter((t) => !q || `${t.name} ${t.desc} ${t.tag}`.toLowerCase().includes(q));
+  $('compassGrid').innerHTML = list.map((t) => {
+    const st = toolStatus(t);
+    return `<button class="compass-card" data-tool="${t.id}" style="--tool-accent:var(${t.accent})">
+      <span class="cc-icon">${t.icon}</span>
+      <span class="cc-name">${esc(t.name)}</span>
+      <span class="cc-desc">${esc(t.desc)}</span>
+      <span class="cc-foot"><span class="cc-tag">${esc(t.tag)}</span>${st ? `<span class="cc-status ${st.on ? 'on' : ''}">${esc(st.text)}</span>` : ''}<span class="cc-open">Open →</span></span>
+    </button>`;
+  }).join('') || `<div class="empty" style="padding:1rem">No tools match "${esc(q)}".</div>`;
+  $('compassGrid').querySelectorAll('[data-tool]').forEach((b) => b.addEventListener('click', () => { const t = TOOLS.find((x) => x.id === b.dataset.tool); if (t) t.launch(); }));
+}
+const compassVisible = () => document.body.classList.contains('view-compass');
+// which module the user is looking at — sent with each AI chat so replies are contextual
+function currentModuleLabel() {
+  if ($('serversDrawer').classList.contains('open')) return 'SSH Servers';
+  if ($('auditDrawer').classList.contains('open')) return 'History';
+  if ($('sshDrawer').classList.contains('open')) return 'SSH Console';
+  if ($('settingsModal').open) return 'Settings';
+  if ($('schemaModal').open) return 'Schema Map';
+  if (compassVisible()) return 'Compass (home)';
+  return $('toolCrumb').textContent || 'MySQL Update Tool';
+}
+function closeAllDrawers() {
+  ['agentDrawer', 'serversDrawer', 'sshDrawer', 'auditDrawer'].forEach((id) => $(id).classList.remove('open'));
+  ['schemaModal', 'ddlModal'].forEach((id) => { const d = $(id); if (d && d.open) d.close(); });
+}
+function setView(v) { // 'compass' | 'mysql' | 'settings'
+  document.body.classList.remove('view-compass', 'view-mysql', 'view-settings');
+  document.body.classList.add('view-' + v);
+  try { if (v !== 'settings') localStorage.setItem('st-last-view', v); } catch {}
+}
+function showCompass() {
+  closeAllDrawers();
+  if ($('sqlConsole').classList.contains('open')) toggleSqlConsole();
+  setView('compass');
+  $('toolCrumb').textContent = '';
+  renderCompass();
+  const s = $('compassSearch'); if (s) { s.value = ''; s.focus(); }
+}
+let tourOffered = false;
+function offerTourOnce() { if (tourOffered) return; tourOffered = true; if (!localStorage.getItem('mau-tour-seen')) setTimeout(startTour, 600); }
+function revealWorkspace(crumb) { // leave the hub, show the MySQL workspace
+  setView('mysql');
+  $('toolCrumb').textContent = crumb || '';
+  if (sqlEditor) sqlEditor.refresh();
+  sqlTableRedraw();
+  offerTourOnce();
+}
+function showSettings() { // Settings is a modal over the current view
+  renderSettings();
+  if (!$('settingsModal').open) $('settingsModal').showModal();
+}
+$('homeLogo').addEventListener('click', showCompass);
+$('homeTitle').addEventListener('click', showCompass);
+$('btnCompass').addEventListener('click', showCompass);
+$('btnSettings').addEventListener('click', showSettings);
+$('compassSearch').addEventListener('input', renderCompass);
+
+/* ---------- Settings (modal) ---------- */
+const prefStartup = () => { try { return localStorage.getItem('st-startup') || 'compass'; } catch { return 'compass'; } };
+const prefAiSchema = () => { try { return localStorage.getItem('st-ai-schema') || 'ask'; } catch { return 'ask'; } };
+const prefConfirmDestructive = () => { try { return localStorage.getItem('st-confirm-destructive') !== '0'; } catch { return true; } }; // default ON
+// persist one server setting and reflect it locally
+async function putSetting(patch) {
+  try {
+    const s = await api('/api/settings', { method: 'PUT', body: JSON.stringify(patch) });
+    SQL_PAGE = s.sqlConsoleMaxRows;
+    state.allowWrites = s.allowWrites;
+    updateSqlModeHint();
+    toast('Setting saved', 'success');
+    return s;
+  } catch (e) { toast('Save failed: ' + e.message, 'error'); throw e; }
+}
+async function renderSettings() {
+  const horiz = document.body.classList.contains('drawers-h');
+  $('setOrient').querySelectorAll('[data-orient]').forEach((b) => b.classList.toggle('on', (b.dataset.orient === 'horizontal') === horiz));
+  $('setStartup').value = prefStartup();
+  $('setAiSchema').value = prefAiSchema();
+  $('setConfirmDestructive').checked = prefConfirmDestructive();
+  try {
+    const s = await api('/api/settings');
+    $('setPreview').value = s.maxPreviewRows;
+    $('setSqlPage').value = s.sqlConsoleMaxRows;
+    $('setReqBackup').checked = !!s.requireBackupBeforeApprove;
+    $('setAllowWrites').checked = !!s.allowWrites;
+    $('setPreviewCeil').textContent = `(max ${s.ceilings.maxPreviewRows})`;
+    $('setSqlPageCeil').textContent = `(max ${s.ceilings.sqlConsoleMaxRows})`;
+    $('setDbName').textContent = state.config?.database || 'the database';
+  } catch (e) { toast('Settings load failed: ' + e.message, 'error'); }
+  try {
+    const d = await api('/api/connections');
+    $('setConnCount').textContent = `— ${d.profiles.length}`;
+    $('setConnList').innerHTML = d.profiles.length ? d.profiles.map((p) => `
+      <div class="settings-row">
+        <span class="sr-name">${esc(p.name)}</span>
+        ${p.id === d.activeId ? '<span class="badge approved">active</span>' : ''}
+        <span class="spacer"></span>
+        <span class="sr-sub">${esc(p.db.user || '')}@${esc(p.db.host || '')}/${esc(p.db.database || '')}${p.ssh.enabled ? ' · ssh' : ''}</span>
+      </div>`).join('') : '<div class="empty">No database connections.</div>';
+  } catch (e) { $('setConnList').innerHTML = `<div class="empty" style="color:var(--red)">${esc(e.message)}</div>`; }
+  try {
+    const d = await api('/api/ssh/sessions');
+    const conn = d.sessions.filter((s) => s.connected).length;
+    $('setSrvCount').textContent = d.sessions.length ? `— ${conn}/${d.sessions.length} connected` : '';
+    $('setSrvList').innerHTML = d.sessions.length ? d.sessions.map((s) => `
+      <div class="settings-row">
+        <span class="srv-dot ${s.connected ? 'on' : ''}"></span>
+        <span class="sr-name">${esc(s.name)}</span>
+        <span class="spacer"></span>
+        <span class="sr-sub">${esc(s.user)}@${esc(s.host)}</span>
+      </div>`).join('') : '<div class="empty">No SSH-enabled profiles.</div>';
+  } catch (e) { $('setSrvList').innerHTML = `<div class="empty" style="color:var(--red)">${esc(e.message)}</div>`; }
+}
+// client preferences (auto-save)
+$('setOrient').addEventListener('click', (e) => { const b = e.target.closest('[data-orient]'); if (!b) return; applyDrawerOrient(b.dataset.orient); renderSettings(); });
+$('setStartup').addEventListener('change', () => { try { localStorage.setItem('st-startup', $('setStartup').value); } catch {} });
+$('setAiSchema').addEventListener('change', () => { try { localStorage.setItem('st-ai-schema', $('setAiSchema').value); } catch {} });
+$('setConfirmDestructive').addEventListener('change', () => { try { localStorage.setItem('st-confirm-destructive', $('setConfirmDestructive').checked ? '1' : '0'); } catch {} });
+// server settings (auto-save on change)
+$('setAllowWrites').addEventListener('change', async () => {
+  const on = $('setAllowWrites').checked;
+  if (on) { const ok = await confirmDialog({ title: 'Enable write statements?', message: 'The SQL console will run <b>INSERT / UPDATE / DELETE / CREATE / DROP</b> directly against the connected database, with no per-row approval.<br>Only enable this if you know what you are doing.', okLabel: 'Enable writes', okClass: 'reject' }); if (!ok) { $('setAllowWrites').checked = false; return; } }
+  putSetting({ allowWrites: on });
+});
+$('setReqBackup').addEventListener('change', () => putSetting({ requireBackupBeforeApprove: $('setReqBackup').checked }));
+$('setSqlPage').addEventListener('change', () => putSetting({ sqlConsoleMaxRows: Number($('setSqlPage').value) }).then((s) => { if (s) $('setSqlPage').value = s.sqlConsoleMaxRows; }));
+$('setPreview').addEventListener('change', () => putSetting({ maxPreviewRows: Number($('setPreview').value) }).then((s) => { if (s) $('setPreview').value = s.maxPreviewRows; }));
+$('btnSettingsClose').addEventListener('click', () => $('settingsModal').close());
+$('btnManageConns').addEventListener('click', () => { $('settingsModal').close(); $('connForm').hidden = true; loadConns().catch((e) => toast(e.message)); $('connModal').showModal(); });
+$('btnManageServers').addEventListener('click', () => { $('settingsModal').close(); openServers(); });
+// nav sidebar: switch the visible section + breadcrumb
+const SETTINGS_SECTIONS = { appearance: 'Appearance & view', sql: 'SQL console', rules: 'Rules & preview', ai: 'AI assistant', db: 'Database connections', ssh: 'SSH servers' };
+function showSettingsSection(sec) {
+  if (!SETTINGS_SECTIONS[sec]) return;
+  document.querySelectorAll('#settingsNav .nav-item').forEach((b) => b.classList.toggle('active', b.dataset.sec === sec));
+  document.querySelectorAll('.settings-section').forEach((s) => s.classList.toggle('active', s.dataset.sec === sec));
+  $('settingsCrumb').textContent = SETTINGS_SECTIONS[sec];
+}
+$('settingsNav').addEventListener('click', (e) => { const b = e.target.closest('.nav-item'); if (b) showSettingsSection(b.dataset.sec); });
+$('settingsSearch').addEventListener('input', () => {
+  const q = $('settingsSearch').value.toLowerCase().trim();
+  let first = null;
+  document.querySelectorAll('#settingsNav .nav-item').forEach((b) => { const hit = !q || b.textContent.toLowerCase().includes(q); b.hidden = !hit; if (hit && !first) first = b; });
+  if (q && first) showSettingsSection(first.dataset.sec);
+});
+
+/* ---------- drawer orientation (vertical/right or horizontal/bottom) — docked drawers only ---------- */
+const DRAWER_ORIENT_KEY = 'st-drawer-orient';
+const DOCK_ICON = {
+  vertical: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="18" height="16" rx="2"/><rect x="14" y="5" width="6.5" height="14" rx="1" fill="currentColor" stroke="none"/></svg>',
+  horizontal: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="18" height="16" rx="2"/><rect x="4" y="13.5" width="16" height="5.5" rx="1" fill="currentColor" stroke="none"/></svg>',
+};
+function applyDrawerOrient(o) {
+  const horizontal = o === 'horizontal';
+  document.body.classList.toggle('drawers-h', horizontal);
+  document.querySelectorAll('.btn-dock').forEach((b) => {
+    b.innerHTML = horizontal ? DOCK_ICON.horizontal : DOCK_ICON.vertical;
+    b.title = horizontal ? 'Docked at the bottom (horizontal) — click to dock right' : 'Docked at the right (vertical) — click to dock at the bottom';
+  });
+  try { localStorage.setItem(DRAWER_ORIENT_KEY, horizontal ? 'horizontal' : 'vertical'); } catch {}
+  try { if (typeof refitConsoles === 'function') refitConsoles(); } catch {} // refit terminals to the new box
+}
+function toggleDrawerOrient() { applyDrawerOrient(document.body.classList.contains('drawers-h') ? 'vertical' : 'horizontal'); }
+document.querySelectorAll('.btn-dock').forEach((b) => b.addEventListener('click', toggleDrawerOrient));
+applyDrawerOrient(localStorage.getItem(DRAWER_ORIENT_KEY) || 'vertical'); // restore saved choice (no animation yet)
+// enable slide transitions only after the initial orientation is painted
+requestAnimationFrame(() => requestAnimationFrame(() => document.body.classList.add('drawers-ready')));
+
+/* ---------- AI assistant: free-floating window (drag by header, resize from corner) ---------- */
+const AI_GEOM_KEY = 'st-ai-geom';
+function saveAgentGeom() {
+  const r = $('agentDrawer').getBoundingClientRect();
+  try { localStorage.setItem(AI_GEOM_KEY, JSON.stringify({ left: r.left, top: r.top, w: r.width, h: r.height })); } catch {}
+}
+function restoreAgentGeom() { // called when the window opens
+  const el = $('agentDrawer');
+  let g = null; try { g = JSON.parse(localStorage.getItem(AI_GEOM_KEY)); } catch {}
+  if (!g) return;
+  el.style.width = Math.min(g.w, window.innerWidth * 0.96) + 'px';
+  el.style.height = Math.min(g.h, window.innerHeight * 0.92) + 'px';
+  el.style.left = Math.min(Math.max(0, g.left), window.innerWidth - 80) + 'px';
+  el.style.top = Math.min(Math.max(0, g.top), window.innerHeight - 60) + 'px';
+  el.style.right = 'auto';
+}
+(function initAgentFloat() {
+  const el = $('agentDrawer'); if (!el) return;
+  const header = el.querySelector(':scope > div'); // the title/controls row is the drag handle
+  header.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('button')) return; // clicking a control must not start a drag
+    const r = el.getBoundingClientRect();
+    const ox = e.clientX - r.left, oy = e.clientY - r.top;
+    // pin current position as left/top before dropping the right anchor (avoids a jump)
+    el.style.left = r.left + 'px'; el.style.top = r.top + 'px'; el.style.right = 'auto';
+    const move = (ev) => {
+      el.style.left = Math.min(Math.max(0, ev.clientX - ox), window.innerWidth - 60) + 'px';
+      el.style.top = Math.min(Math.max(0, ev.clientY - oy), window.innerHeight - 40) + 'px';
+    };
+    const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); saveAgentGeom(); };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    e.preventDefault();
+  });
+  let roTimer = 0; // persist size after the native corner-resize settles
+  new ResizeObserver(() => { if (el.classList.contains('open')) { clearTimeout(roTimer); roTimer = setTimeout(saveAgentGeom, 200); } }).observe(el);
+})();
+
 (async function init() {
+  setView('compass'); // safe default until the startup preference is applied
   try {
     const st = await api('/api/state');
     state.transformTypes = st.transformTypes;
     state.session = st.session;
+    state.config = st.config;
     state.maxPreviewRows = st.config.maxPreviewRows;
+    state.allowWrites = !!st.config.allowWrites;
+    if (st.config.sqlConsoleMaxRows) SQL_PAGE = st.config.sqlConsoleMaxRows; // sync console pagination
+    updateSqlModeHint();
     $('maxRows').textContent = st.config.maxPreviewRows;
     $('dbInfo').textContent = `profile: ${st.config.profile} · db: ${st.config.database || '(unset)'}${st.config.sshTunnel ? ' · via SSH tunnel' : ''}`;
     (st.recentLog || []).forEach(appendLog);
@@ -2862,5 +3262,9 @@ document.addEventListener('keydown', (e) => {
   await loadRules().catch((e) => toast(e.message));
   renderQueue(); renderDashboard();
   connectSSE();
-  if (!localStorage.getItem('mau-tour-seen')) setTimeout(startTour, 700); // first visit: offer the tour
+  // land on the preferred startup view
+  const startup = prefStartup();
+  const last = (() => { try { return localStorage.getItem('st-last-view'); } catch { return null; } })();
+  if (startup === 'mysql' || (startup === 'last' && last === 'mysql')) revealWorkspace('MySQL Update Tool');
+  else showCompass();
 })();

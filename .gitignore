@@ -7,3 +7,5 @@ rules.json
 .idea/
 /dist
 agent.json
+agent-chat.json
+settings.json
