@@ -28,6 +28,8 @@ const IS_PACKAGED = typeof process.pkg !== 'undefined';
 const ROOT = __dirname;
 const DATA_DIR = IS_PACKAGED ? path.dirname(process.execPath) : __dirname;
 require('dotenv').config({ path: path.join(DATA_DIR, '.env') });
+// `node server.js ship <target> …` runs the deploy CLI instead of the HTTP server (see the bottom of this file)
+const DEPLOY_CLI = require('./lib/deploy/cli').isCliInvocation(process.argv);
 
 const express = require('express');
 const mysql = require('mysql2/promise');
@@ -48,15 +50,29 @@ const settings = {
   sqlConsoleMaxRows: 200,                  // read: rows per SQL console page
   requireBackupBeforeApprove: false,       // write: block rule approvals until a backup is taken
   allowWrites: false,                      // write: permit INSERT/UPDATE/DELETE/DDL in the SQL console
+  aiAssist: {                              // AI assistant: opt-in deploy capabilities (all read-only / advisory)
+    repoFiles: false,      // whitelisted repo files (ship.json, Dockerfile, package.json, composer.json, .env.example...)
+    planDiff: false,       // plan output includes what changes versus the last successful ship
+    healthProbe: false,    // health URL + stored current-release probe exposed to the assistant
+    logSearch: false,      // grep a run's redacted log, not just its tail
+    templates: false,      // manifest templates with guardrails; proposals must pass the guardrail check
+    preShipReview: false,  // the assistant reviews manifest + last run before Ship
+    autoExplain: false,    // a failed run is analysed automatically; fixes are proposed as approve-able chat cards
+  },
 };
-try { Object.assign(settings, JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'))); } catch {}
+const AI_ASSIST_KEYS = Object.keys(settings.aiAssist);
+try {
+  const loaded = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
+  const aiAssist = { ...settings.aiAssist, ...(loaded.aiAssist && typeof loaded.aiAssist === 'object' ? loaded.aiAssist : {}) };
+  Object.assign(settings, loaded, { aiAssist });
+} catch {}
 function saveSettings() {
   try { fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2), 'utf8'); } catch (e) { console.error('Could not write settings.json:', e.message); }
 }
 function clampInt(v, min, max, fallback) { const n = Math.round(Number(v)); return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback; }
 
 /* ------------------------------------------------------------------ */
-/* Database connectivity (lazy — nothing touches the DB at startup)    */
+/* Database connectivity (lazy: nothing touches the DB at startup)    */
 /* ------------------------------------------------------------------ */
 
 // ---- connection profiles (multiple named DB+SSH configs, one active) ----
@@ -119,7 +135,7 @@ function currentSsh() {
   return s && s.enabled && s.host ? s : null;
 }
 
-let poolPromise = null; // Promise<{pool, close()}> — lazy singleton
+let poolPromise = null; // Promise<{pool, close()}>lazy singleton
 
 function resetPool(reason) {
   if (poolPromise) {
@@ -288,7 +304,7 @@ function assertColumn(columns, table, name, role) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Transforms — add new types by adding an entry here                  */
+/* Transforms: add new types by adding an entry here                  */
 /* ------------------------------------------------------------------ */
 
 const TRANSFORMS = {
@@ -448,7 +464,7 @@ function sanitizeRuleInput(body) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Session state (in memory — pending changes do not survive restart)  */
+/* Session state (in memory: pending changes do not survive restart)  */
 /* ------------------------------------------------------------------ */
 
 let session = null;
@@ -512,7 +528,7 @@ function audit(entry) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Backup — snapshot of preview-time values, as a restore script       */
+/* Backup: snapshot of preview-time values, as a restore script       */
 /* ------------------------------------------------------------------ */
 
 function buildBackup(s, format) {
@@ -650,7 +666,7 @@ async function runPreview(rule) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Approval — THE ONLY WRITE PATH                                      */
+/* Approval · THE ONLY WRITE PATH                                      */
 /* ------------------------------------------------------------------ */
 
 async function executeApprovedChange(change) {
@@ -681,7 +697,7 @@ async function executeApprovedChange(change) {
   if (result.affectedRows === 1) {
     const verified = currentRow && change.cols.every((c) => valuesEqual(currentRow[c.column], c.after));
     change.status = 'approved';
-    change.note = verified ? 'written & verified' : 'written (re-read differs — row changed again after update)';
+    change.note = verified ? 'written & verified' : 'written (re-read differs: row changed again after update)';
     return { sqlResult: { affectedRows: result.affectedRows, changedRows: result.changedRows ?? result.affectedRows }, verified };
   }
 
@@ -692,7 +708,7 @@ async function executeApprovedChange(change) {
     return { sqlResult: { affectedRows: 0 }, verified: false };
   }
   change.status = 'stale';
-  change.note = 'value changed in DB since preview — not updated';
+  change.note = 'value changed in DB since preview: not updated';
   change.currentValues = {};
   for (const c of change.cols) change.currentValues[c.column] = currentRow[c.column] ?? null;
   return { sqlResult: { affectedRows: 0 }, verified: false };
@@ -701,7 +717,7 @@ async function executeApprovedChange(change) {
 async function decideChange(changeId, action) {
   if (!session) throw httpError(409, 'No active session');
   if (session.status === 'aborted' || session.status === 'done') throw httpError(409, `Session is ${session.status}`);
-  if (session.status === 'paused' && action === 'approve') throw httpError(409, 'Session is paused — resume before approving');
+  if (session.status === 'paused' && action === 'approve') throw httpError(409, 'Session is paused: resume before approving');
   if (action === 'approve' && settings.requireBackupBeforeApprove && !session.backupDownloaded) {
     throw httpError(409, 'A backup is required before approving (see Settings). Take a backup of this session first.');
   }
@@ -720,7 +736,7 @@ async function decideChange(changeId, action) {
     change.status = action === 'reject' ? 'rejected' : 'skipped';
     change.note = 'no write performed';
     audit({ action, ...base, sqlResult: null });
-    logEvent('info', `${action === 'reject' ? 'Rejected' : 'Skipped'} pk=${change.pk} — nothing written`);
+    logEvent('info', `${action === 'reject' ? 'Rejected' : 'Skipped'} pk=${change.pk}: nothing written`);
   } else if (action === 'approve') {
     let outcome;
     try {
@@ -792,8 +808,9 @@ app.put('/api/settings', wrap(async (req, res) => {
   if (b.sqlConsoleMaxRows !== undefined) settings.sqlConsoleMaxRows = clampInt(b.sqlConsoleMaxRows, 1, SETTINGS_MAX.sqlConsoleMaxRows, settings.sqlConsoleMaxRows);
   if (b.requireBackupBeforeApprove !== undefined) settings.requireBackupBeforeApprove = !!b.requireBackupBeforeApprove;
   if (b.allowWrites !== undefined) settings.allowWrites = !!b.allowWrites;
+  if (b.aiAssist && typeof b.aiAssist === 'object') for (const k of AI_ASSIST_KEYS) if (b.aiAssist[k] !== undefined) settings.aiAssist[k] = !!b.aiAssist[k];
   saveSettings();
-  logEvent('info', `Settings updated: preview<=${settings.maxPreviewRows}, sqlPage=${settings.sqlConsoleMaxRows}, requireBackup=${settings.requireBackupBeforeApprove}, allowWrites=${settings.allowWrites}`);
+  logEvent('info', `Settings updated: preview<=${settings.maxPreviewRows}, sqlPage=${settings.sqlConsoleMaxRows}, requireBackup=${settings.requireBackupBeforeApprove}, allowWrites=${settings.allowWrites}, aiAssist=${AI_ASSIST_KEYS.filter((k) => settings.aiAssist[k]).join('+') || 'none'}`);
   res.json({ ...settings, ceilings: SETTINGS_MAX });
 }));
 
@@ -953,7 +970,7 @@ app.post('/api/sql/export', wrap(async (req, res) => {
     } else if (format === 'json') {
       await write('\n]\n');
     }
-    logEvent('info', `Console export ${format}: ${count} rows in ${Date.now() - started}ms — ${sql.slice(0, 120)}`);
+    logEvent('info', `Console export ${format}: ${count} rows in ${Date.now() - started}ms: ${sql.slice(0, 120)}`);
     res.end();
   } finally {
     conn.release();
@@ -979,8 +996,7 @@ app.get('/api/schema/graph', wrap(async (req, res) => {
   const matched = matchedAll.slice(0, maxTables);
   const matchedSet = new Set(matched);
 
-  // With a filter active, pull in relation partners of the matches too —
-  // via declared FKs (both directions) and *_id naming inference.
+  // With a filter active, pull in relation partners of the matches too · // via declared FKs (both directions) and *_id naming inference.
   let chosen = [...matched];
   if (q && matched.length) {
     const neighbors = new Set();
@@ -1072,7 +1088,7 @@ app.get('/api/schema/graph', wrap(async (req, res) => {
   res.json({ database: db, totalTables, tables, relations });
 }));
 
-/* ---- exact row count (on demand — COUNT(*) can be slow on huge tables) ---- */
+/* ---- exact row count (on demand · COUNT(*) can be slow on huge tables) ---- */
 app.get('/api/schema/table/:name/count', wrap(async (req, res) => {
   const table = req.params.name;
   await getTableColumns(table); // schema-validates the name (400 if unknown)
@@ -1181,7 +1197,7 @@ function sanitizeProfile(body, existing) {
 
 function assertNoPendingSession(what) {
   if (session && session.status !== 'done' && session.status !== 'aborted' && sessionCounts(session).pending > 0) {
-    throw httpError(409, `A session with pending changes is active — abort it before ${what}`);
+    throw httpError(409, `A session with pending changes is active: abort it before ${what}`);
   }
 }
 
@@ -1218,7 +1234,7 @@ app.put('/api/connections/:id', wrap(async (req, res) => {
 app.delete('/api/connections/:id', wrap(async (req, res) => {
   const idx = connStore.profiles.findIndex((p) => p.id === req.params.id);
   if (idx === -1) throw httpError(404, 'Connection not found');
-  if (activeProfile().id === req.params.id) throw httpError(400, 'Cannot delete the active connection — activate another one first');
+  if (activeProfile().id === req.params.id) throw httpError(400, 'Cannot delete the active connection: activate another one first');
   const [removed] = connStore.profiles.splice(idx, 1);
   await saveConnections();
   logEvent('info', `Connection deleted: "${removed.name}"`);
@@ -1228,7 +1244,7 @@ app.delete('/api/connections/:id', wrap(async (req, res) => {
 app.post('/api/connections/:id/activate', wrap(async (req, res) => {
   const p = connStore.profiles.find((x) => x.id === req.params.id);
   if (!p) throw httpError(404, 'Connection not found');
-  if (p.sshOnly) throw httpError(400, 'This is an SSH-only server — it has no database to activate');
+  if (p.sshOnly) throw httpError(400, 'This is an SSH-only server: it has no database to activate');
   assertNoPendingSession('switching connections');
   connStore.activeId = p.id;
   await saveConnections();
@@ -1293,9 +1309,9 @@ app.get('/api/rules/:id/sql', wrap(async (req, res) => {
 app.post('/api/rules/:id/preview', wrap(async (req, res) => {
   const rule = rules.find((r) => r.id === req.params.id);
   if (!rule) throw httpError(404, 'Rule not found');
-  if (rule.draft) throw httpError(400, 'This rule is a draft — open it and use "Save rule" to publish it first');
+  if (rule.draft) throw httpError(400, 'This rule is a draft: open it and use "Save rule" to publish it first');
   if (session && session.status !== 'done' && session.status !== 'aborted' && sessionCounts(session).pending > 0) {
-    throw httpError(409, 'A session with pending changes is active — abort it or finish it first');
+    throw httpError(409, 'A session with pending changes is active: abort it or finish it first');
   }
   res.json(await runPreview(rule));
 }));
@@ -1320,7 +1336,7 @@ app.post('/api/php', wrap(async (req, res) => {
   }
 }));
 
-/* ---- manual edit of a proposed value (in-memory only — nothing is written
+/* ---- manual edit of a proposed value (in-memory only: nothing is written
         until the change is approved through the normal guarded path) ---- */
 app.post('/api/session/edit', wrap(async (req, res) => {
   const { changeId, column, newValue } = req.body || {};
@@ -1332,7 +1348,7 @@ app.post('/api/session/edit', wrap(async (req, res) => {
   const col = change.cols.find((c) => c.column === column);
   if (!col) throw httpError(400, `Column "${column}" is not part of this change`);
   if (newValue !== null && typeof newValue !== 'string') throw httpError(400, 'newValue must be a string or null');
-  if (valuesEqual(col.before, newValue)) throw httpError(400, 'Edited value equals the current DB value — use Skip instead');
+  if (valuesEqual(col.before, newValue)) throw httpError(400, 'Edited value equals the current DB value: use Skip instead');
   const previousProposed = col.after;
   col.after = newValue;
   col.manualEdit = true;
@@ -1346,7 +1362,7 @@ app.post('/api/session/edit', wrap(async (req, res) => {
     ruleProposed: previousProposed,
     manualProposed: newValue,
   });
-  logEvent('info', `Manual edit on pk=${change.pk}, column ${column} (pending only — nothing written)`);
+  logEvent('info', `Manual edit on pk=${change.pk}, column ${column} (pending only: nothing written)`);
   broadcastChange(change);
   res.json(change);
 }));
@@ -1361,7 +1377,7 @@ app.post('/api/session/decision', wrap(async (req, res) => {
 
 /* ---- backup download (preview-time values of the current session) ---- */
 app.get('/api/session/backup', (req, res) => {
-  if (!session) throw httpError(404, 'No session — run a preview first');
+  if (!session) throw httpError(404, 'No session: run a preview first');
   const b = buildBackup(session, req.query.format === 'json' ? 'json' : 'sql');
   res.setHeader('Content-Disposition', `attachment; filename="${b.filename}"`);
   res.type(b.mime).send(b.content);
@@ -1431,7 +1447,7 @@ app.post('/api/session/abort', wrap(async (req, res) => {
   }
   session.status = 'aborted';
   audit({ action: 'abort', rule: session.ruleName, table: session.table, discardedPending: discarded });
-  logEvent('warn', `Session aborted — ${discarded} pending change(s) discarded, nothing written`);
+  logEvent('warn', `Session aborted: ${discarded} pending change(s) discarded, nothing written`);
   broadcastSession();
   res.json(sessionSnapshot());
 }));
@@ -1498,7 +1514,7 @@ DETERMINISTIC CHECK (already computed by the server): for each changed column, d
   ${JSON.stringify(matchCheck)}
   - ok:true  => the AFTER is precisely the rule's transform output; no extra/hidden edits were introduced beyond the rule.
   - ok:false with manualEdit:true => a human hand-edited the value; scrutinize whether that manual result is safe and on-intent.
-  - ok:false with manualEdit:false => ANOMALY: the value diverges from the rule for no known reason — treat with suspicion.
+  - ok:false with manualEdit:false => ANOMALY: the value diverges from the rule for no known reason: treat with suspicion.
 
 Columns actually changed: ${JSON.stringify(changed)} (these must be a subset of the rule's allowed columns above; flag "bad" if any other column were affected).
 
@@ -1516,7 +1532,7 @@ Reply with ONLY one line of JSON, nothing else: {"verdict":"ok"|"warn"|"bad","su
       try { parsed = JSON.parse((out.match(/\{[\s\S]*\}/) || [out])[0]); } catch {}
       if (!parsed || !['ok', 'warn', 'bad'].includes(parsed.verdict)) parsed = { verdict: 'warn', summary: out.slice(0, 300) };
       change.aiReview = { status: 'done', verdict: parsed.verdict, summary: String(parsed.summary || '').slice(0, 500), at: new Date().toISOString() };
-      logEvent('info', `AI review pk=${change.pk}: ${parsed.verdict} — ${change.aiReview.summary.slice(0, 120)}`);
+      logEvent('info', `AI review pk=${change.pk}: ${parsed.verdict}: ${change.aiReview.summary.slice(0, 120)}`);
     } catch (e) {
       change.aiReview = { status: 'error', summary: e.message };
       logEvent('error', `AI review failed for pk=${change.pk}: ${e.message}`);
@@ -1542,7 +1558,7 @@ const AGENT_FILE = path.join(DATA_DIR, 'agent.json');
 let agentConfig = null;
 try { agentConfig = JSON.parse(fs.readFileSync(AGENT_FILE, 'utf8')); } catch {}
 const CHAT_FILE = path.join(DATA_DIR, 'agent-chat.json');
-let agentChat = []; // conversation: { role: 'user'|'assistant'|'note', text, ... } — persisted so it resumes across restarts
+let agentChat = []; // conversation: { role: 'user'|'assistant'|'note', text, ... }: persisted so it resumes across restarts
 try { const c = JSON.parse(fs.readFileSync(CHAT_FILE, 'utf8')); if (Array.isArray(c)) agentChat = c; } catch {}
 let chatSaveChain = Promise.resolve();
 function saveChat() {
@@ -1557,9 +1573,9 @@ const AGENT_PROVIDERS = {
   'claude-api': { label: 'Claude (API key or sign-in token)', short: 'Claude', kind: 'api' },
 };
 
-/* direct Messages API call — used for API keys (sk-ant-api…) and OAuth tokens
+/* direct Messages API call: used for API keys (sk-ant-api…) and OAuth tokens
    from browser sign-in flows like `claude setup-token` (sk-ant-oat…) */
-async function claudeApiCall(apiKey, model, prompt, maxTokens = 8192) {
+async function claudeApiCall(apiKey, model, prompt, maxTokens = 8192, opts = {}) {
   const isOAuth = apiKey.startsWith('sk-ant-oat');
   const headers = { 'content-type': 'application/json', 'anthropic-version': '2023-06-01' };
   if (isOAuth) {
@@ -1572,16 +1588,45 @@ async function claudeApiCall(apiKey, model, prompt, maxTokens = 8192) {
   // OAuth tokens from the Claude sign-in flow are scoped to Claude Code and are
   // rejected unless the request identifies as such via this exact system prompt.
   if (isOAuth) body.system = "You are Claude Code, Anthropic's official CLI for Claude.";
+  const streaming = typeof opts.onText === 'function';
+  if (streaming) body.stream = true;
   let res, j;
   try {
-    res = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers, body: JSON.stringify(body) });
-    j = await res.json().catch(() => ({}));
+    res = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers, body: JSON.stringify(body), signal: opts.signal });
+    if (!res.ok || !streaming) j = await res.json().catch(() => ({}));
   } catch (e) {
+    if (e.name === 'AbortError' || opts.signal?.aborted) throw cancelledError();
     throw new Error(`network error reaching api.anthropic.com: ${e.message}`);
   }
   if (!res.ok) {
     const msg = j?.error?.message || j?.error?.type || j?.error || (typeof j === 'string' ? j : '') || `HTTP ${res.status}`;
     throw new Error(`${res.status} ${msg}`);
+  }
+  if (streaming) {
+    // server-sent events: text deltas as they come, stop_reason from message_delta
+    let text = '', stopReason = null, buf = '';
+    const onEvent = (block) => {
+      for (const line of block.split('\n')) {
+        if (!line.startsWith('data:')) continue;
+        let ev; try { ev = JSON.parse(line.slice(5).trim()); } catch { continue; }
+        if (ev.type === 'content_block_delta' && ev.delta?.type === 'text_delta') { text += ev.delta.text; opts.onText(ev.delta.text); }
+        else if (ev.type === 'message_delta' && ev.delta?.stop_reason) stopReason = ev.delta.stop_reason;
+        else if (ev.type === 'error') throw new Error(ev.error?.message || 'stream error');
+      }
+    };
+    try {
+      for await (const chunk of res.body) {
+        buf += Buffer.from(chunk).toString('utf8');
+        let i; while ((i = buf.indexOf('\n\n')) >= 0) { onEvent(buf.slice(0, i)); buf = buf.slice(i + 2); }
+      }
+      if (buf.trim()) onEvent(buf);
+    } catch (e) {
+      if (e.name === 'AbortError' || opts.signal?.aborted) throw cancelledError();
+      throw e;
+    }
+    text = text.trim();
+    if (stopReason === 'max_tokens') { const e = new Error('response hit the output token limit (truncated)'); e.truncated = true; e.partial = text; throw e; }
+    return text;
   }
   const text = (j.content || []).map((c) => c.text || '').join('').trim();
   // surface a hit output cap so a truncated tool-call JSON isn't silently mistaken for a final reply
@@ -1589,22 +1634,65 @@ async function claudeApiCall(apiKey, model, prompt, maxTokens = 8192) {
   return text;
 }
 
-function runCli(cmd, args, input, timeoutMs = 180000) {
+// shell:true wraps the CLI in cmd.exe/sh, so a plain kill() would leave the real agent process running
+function killTree(child) {
+  if (process.platform === 'win32') { try { spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }); } catch {} }
+  try { child.kill('SIGKILL'); } catch {}
+}
+const cancelledError = () => { const e = new Error('cancelled'); e.cancelled = true; return e; };
+// opts.signal aborts the run (process tree killed); opts.onData observes stdout chunks as they arrive
+function runCli(cmd, args, input, timeoutMs = 180000, opts = {}) {
   return new Promise((resolve, reject) => {
+    if (opts.signal?.aborted) return reject(cancelledError());
     const child = spawn(cmd, args, { shell: true, cwd: DATA_DIR, windowsHide: true });
-    let out = '', err = '';
-    const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} reject(new Error('Agent CLI timed out')); }, timeoutMs);
-    child.stdout.on('data', (d) => { out += d; });
+    let out = '', err = '', settled = false;
+    const done = (fn, v) => { if (settled) return; settled = true; clearTimeout(timer); opts.signal?.removeEventListener('abort', onAbort); fn(v); };
+    const onAbort = () => { killTree(child); done(reject, cancelledError()); };
+    const timer = setTimeout(() => { killTree(child); done(reject, new Error('Agent CLI timed out')); }, timeoutMs);
+    opts.signal?.addEventListener('abort', onAbort, { once: true });
+    child.stdout.on('data', (d) => { out += d; if (opts.onData) { try { opts.onData(String(d)); } catch {} } });
     child.stderr.on('data', (d) => { err += d; });
-    child.on('error', (e) => { clearTimeout(timer); reject(e); });
+    child.on('error', (e) => done(reject, e));
     child.on('close', (code) => {
-      clearTimeout(timer);
-      if (code === 0) resolve(out.trim());
-      else reject(new Error(`agent CLI exited ${code}: ${(err || out).slice(0, 400)}`));
+      if (code === 0) done(resolve, out.trim());
+      else done(reject, new Error(`agent CLI exited ${code}: ${(err || out).slice(0, 400)}`));
     });
     if (input != null) child.stdin.write(input);
     child.stdin.end();
   });
+}
+
+/* Claude Code in print mode with stream-json output: text deltas are forwarded to onText as they
+   arrive, the final "result" line is the authoritative answer. Older CLIs without the flag fall back
+   to plain text mode (no live typing, same answer). */
+async function runClaudeCliStreaming(model, prompt, opts = {}) {
+  const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages'];
+  if (model) args.push('--model', model);
+  let pending = '', assembled = '', result = null, resultError = null;
+  const onLine = (line) => {
+    if (!line.trim()) return;
+    let j; try { j = JSON.parse(line); } catch { return; }
+    if (j.type === 'stream_event' && j.event?.type === 'content_block_delta' && j.event.delta?.type === 'text_delta') {
+      assembled += j.event.delta.text; if (opts.onText) opts.onText(j.event.delta.text);
+    } else if (j.type === 'result') {
+      if (j.is_error) resultError = new Error(String(j.result || j.subtype || 'agent CLI reported an error'));
+      else if (typeof j.result === 'string') result = j.result;
+    }
+  };
+  const onData = (chunk) => { pending += chunk; let i; while ((i = pending.indexOf('\n')) >= 0) { onLine(pending.slice(0, i)); pending = pending.slice(i + 1); } };
+  try {
+    await runCli('claude', args, prompt, undefined, { signal: opts.signal, onData });
+  } catch (e) {
+    if (e.cancelled || opts.signal?.aborted) throw e;
+    if (!assembled && /unknown option|include-partial-messages|output-format|verbose/i.test(e.message)) {
+      const plain = ['-p']; if (model) plain.push('--model', model);
+      return runCli('claude', plain, prompt, undefined, { signal: opts.signal }); // old CLI: plain print mode
+    }
+    throw e;
+  }
+  if (pending) onLine(pending);
+  if (resultError && !result) throw resultError;
+  return (result != null ? result : assembled).trim();
 }
 
 async function probeProvider(key) {
@@ -1612,15 +1700,17 @@ async function probeProvider(key) {
   try { await runCli(AGENT_PROVIDERS[key].cmd, ['--version'], null, 20000); return true; } catch { return false; }
 }
 
-async function agentRun(prompt) {
+// opts: { signal } to cancel, { onText(delta) } to receive the answer as it is written (where the provider streams)
+async function agentRun(prompt, opts = {}) {
   const model = agentConfig.model || null; // null = provider/CLI default
   if (agentConfig.provider === 'claude-api') {
     try {
-      return await claudeApiCall(agentConfig.apiKey, model || 'claude-sonnet-4-5', prompt);
+      return await claudeApiCall(agentConfig.apiKey, model || 'claude-sonnet-4-5', prompt, undefined, opts);
     } catch (e) {
+      if (e.cancelled) throw e;
       // expired sign-in token: refresh once and retry
       if (/401|authentication|expired/i.test(e.message) && (await refreshClaudeToken())) {
-        return claudeApiCall(agentConfig.apiKey, model || 'claude-sonnet-4-5', prompt);
+        return claudeApiCall(agentConfig.apiKey, model || 'claude-sonnet-4-5', prompt, undefined, opts);
       }
       throw e;
     }
@@ -1631,14 +1721,12 @@ async function agentRun(prompt) {
     const args = ['exec', '--skip-git-repo-check'];
     if (model) args.push('-m', model);
     args.push('--output-last-message', `"${lastFile}"`, '-');
-    await runCli('codex', args, prompt);
+    await runCli('codex', args, prompt, undefined, { signal: opts.signal }); // codex exec has no partial output: no live typing
     const txt = (await fsp.readFile(lastFile, 'utf8')).trim();
     fsp.unlink(lastFile).catch(() => {});
     return txt;
   }
-  const args = ['-p'];
-  if (model) args.push('--model', model);
-  return runCli('claude', args, prompt); // print mode: prompt on stdin, answer on stdout
+  return runClaudeCliStreaming(model, prompt, opts); // print mode: prompt on stdin, answer streamed on stdout
 }
 
 /* read-only tools, executed by THIS server against the active connection */
@@ -1705,7 +1793,7 @@ const AGENT_TOOLS = {
       let existing = null;
       if (action === 'update') {
         existing = rules.find((r) => r.id === String(inp?.ruleId || ''));
-        if (!existing) throw new Error('ruleId not found — use list_rules to get valid ids');
+        if (!existing) throw new Error('ruleId not found: use list_rules to get valid ids');
       }
       const clean = sanitizeRuleInput(inp?.rule || {}); // same validation as the UI editor
       const prop = {
@@ -1720,15 +1808,35 @@ const AGENT_TOOLS = {
   },
 };
 const agentProposals = []; // rule change proposals awaiting explicit user decision
+// proposal kinds: how an approved proposal is applied. 'rule' is the original behaviour;
+// other modules (e.g. deploy manifests) register their own kind at mount time.
+const agentProposalKinds = {
+  rule: {
+    label: (prop) => `rule-${prop.action} proposal "${prop.rule.name}"`,
+    approve: async (prop) => {
+      if (prop.action === 'update') {
+        const idx = rules.findIndex((r) => r.id === prop.ruleId);
+        if (idx === -1) throw httpError(409, 'The target rule no longer exists');
+        rules[idx] = { id: prop.ruleId, ...prop.rule };
+      } else {
+        rules.push({ id: crypto.randomUUID(), ...prop.rule });
+      }
+      await saveRules();
+    },
+  },
+};
 
 function agentSystemPrompt() {
-  const toolLines = Object.entries(AGENT_TOOLS).map(([k, v]) => `- ${k}: ${v.desc}`).join('\n');
+  const toolLines = Object.entries(AGENT_TOOLS).filter(([, v]) => !v.enabled || v.enabled()).map(([k, v]) => `- ${k}: ${v.desc}`).join('\n');
+  const assist = AI_ASSIST_KEYS.filter((k) => settings.aiAssist[k]);
+  const assistLine = assist.length ? `\nDeploy assistance the user enabled in Settings: ${assist.join(', ')}. Use the matching deploy_* tools to verify facts (files, plan changes, health, logs) instead of guessing; a proposal must pass the guardrail check when templates are enabled.` : '';
   return `You are the AI assistant built into "Server Tools", a DevOps toolbox. Your role is GLOBAL: you help across ALL of its modules, not just rule-writing. The modules are:
-- MySQL Update Tool — rule-based batch updates where every row change needs explicit human approval.
-- SQL Console — a strictly read-only query console (SELECT / SHOW / DESCRIBE / EXPLAIN).
-- Schema Map — the tables, columns and relations of the connected database.
-- SSH Servers — the configured servers / connection profiles (visible via list_servers; secrets are masked).
-- History — the audit timeline of decisions, edits, SSH sessions and AI actions.
+- MySQL Update Tool: rule-based batch updates where every row change needs explicit human approval.
+- SQL Console: a strictly read-only query console (SELECT / SHOW / DESCRIBE / EXPLAIN).
+- Schema Map: the tables, columns and relations of the connected database.
+- SSH Servers: the configured servers / connection profiles (visible via list_servers; secrets are masked).
+- History: the audit timeline of decisions, edits, SSH sessions and AI actions.
+- The Ascension (deploy module): connect a git repo, detect its stack, plan/build/ship it to a server (VPS over SSH or shared hosting). Use the deploy_* tools to inspect repos, targets, manifests and run logs. You may PROPOSE a manifest (propose_deploy_manifest) and PROPOSE deploy actions (propose_deploy_action: plan, ship, rollback, unlock, cancel); each appears as a card the user must approve in the chat before anything runs. You never execute deploy actions directly and never read secrets. When a shared log or a failed run shows a problem, explain it and propose the fitting action.
 Help the user with whatever module they are in: answer questions, inspect data, draft and explain SQL, interpret the audit history, describe the schema and servers, and propose rules. Prefer doing the safe, useful thing over refusing.
 SAFETY (non-negotiable):
 - DATABASE access is strictly READ-ONLY. You can NEVER write to the database. Row changes happen ONLY through rules whose previewed changes the USER approves.
@@ -1737,13 +1845,13 @@ SAFETY (non-negotiable):
 Connected database: "${currentDb().database}".
 To gather information, reply with ONLY one JSON object on a single line, nothing else: {"tool":"<name>","input":{...}}
 Available tools:
-${toolLines}
+${toolLines}${assistLine}
 After a tool result you may call another tool (max 6 total) or give your final answer as plain text (never JSON). Keep answers concise and concrete.`;
 }
 
 function parseAgentToolCall(s) {
   const tryParse = (str) => {
-    try { const j = JSON.parse(str); if (j && typeof j.tool === 'string' && AGENT_TOOLS[j.tool]) return j; } catch {}
+    try { const j = JSON.parse(str); if (j && typeof j.tool === 'string' && AGENT_TOOLS[j.tool] && (!AGENT_TOOLS[j.tool].enabled || AGENT_TOOLS[j.tool].enabled())) return j; } catch {}
     return null;
   };
   const line = s.trim().replace(/^```(json)?\s*|\s*```$/g, '');
@@ -1769,23 +1877,25 @@ app.post('/api/agent/proposal/:id', wrap(async (req, res) => {
   if (!prop) throw httpError(404, 'Proposal not found');
   if (prop.status !== 'pending') throw httpError(409, `Proposal already ${prop.status}`);
   const decision = req.body?.decision === 'approve' ? 'approved' : 'rejected';
-  if (decision === 'approved') {
-    if (prop.action === 'update') {
-      const idx = rules.findIndex((r) => r.id === prop.ruleId);
-      if (idx === -1) throw httpError(409, 'The target rule no longer exists');
-      rules[idx] = { id: prop.ruleId, ...prop.rule };
-    } else {
-      rules.push({ id: crypto.randomUUID(), ...prop.rule });
-    }
-    await saveRules();
-  }
+  const kind = prop.kind || 'rule';
+  const handler = agentProposalKinds[kind];
+  if (!handler) throw httpError(500, `No handler for proposal kind "${kind}"`);
+  if (decision === 'approved') await handler.approve(prop);
   prop.status = decision;
-  agentChat.push({
-    role: 'note', kind: 'decision', decision, proposalAction: prop.action, ruleName: prop.rule.name,
-    text: `User ${decision} the agent's rule-${prop.action} proposal "${prop.rule.name}".`,
-  });
-  audit({ action: `agent-rule-${decision}`, rule: prop.rule.name, table: prop.rule.table, proposalAction: prop.action });
-  logEvent(decision === 'approved' ? 'info' : 'warn', `AI agent rule proposal ${decision}: "${prop.rule.name}"`);
+  if (kind === 'rule') {
+    agentChat.push({
+      role: 'note', kind: 'decision', decision, proposalAction: prop.action, ruleName: prop.rule.name,
+      text: `User ${decision} the agent's rule-${prop.action} proposal "${prop.rule.name}".`,
+    });
+    audit({ action: `agent-rule-${decision}`, rule: prop.rule.name, table: prop.rule.table, proposalAction: prop.action });
+    logEvent(decision === 'approved' ? 'info' : 'warn', `AI agent rule proposal ${decision}: "${prop.rule.name}"`);
+  } else {
+    const label = handler.label(prop);
+    agentChat.push({ role: 'note', kind: 'decision', decision, proposalKind: kind, proposalAction: prop.action, targetName: prop.targetName, text: `User ${decision} the agent's ${label}.` });
+    audit({ action: `agent-${kind}-${decision}`, target: prop.targetName, proposalAction: prop.action });
+    logEvent(decision === 'approved' ? 'info' : 'warn', `AI agent ${label} ${decision}`);
+  }
+  saveChat();
   res.json({ ok: true, status: decision });
 }));
 
@@ -1866,7 +1976,7 @@ app.post('/api/agent/oauth/finish', wrap(async (req, res) => {
       `(code ${code.length} chars [${code.slice(0, 6)}…], state ${(statePart || '').length} chars, ` +
       `${statePart && oauthPending && statePart === oauthPending.verifier ? 'from the CURRENT sign-in attempt' : 'from an OLDER sign-in attempt/tab'})`);
     throw httpError(400, `Authorization failed: ${j.error_description || j.error || 'HTTP ' + r.status}. ` +
-      `Each code works once — click "Sign in with Claude" for a fresh tab, approve, then paste the FULL code (both parts around "#").`);
+      `Each code works once: click "Sign in with Claude" for a fresh tab, approve, then paste the FULL code (both parts around "#").`);
   }
   const model = String(req.body?.model || '').trim() || 'claude-sonnet-4-5';
   try { await claudeApiCall(j.access_token, model, 'Reply with the single word: ok', 16); }
@@ -1951,10 +2061,28 @@ app.post('/api/agent/context', wrap(async (req, res) => {
   res.json({ ok: true, name: rule.name });
 }));
 
+let agentInflight = null; // AbortController of the chat currently being answered (one at a time)
+app.post('/api/agent/chat/cancel', wrap(async (req, res) => {
+  if (!agentInflight) return res.json({ ok: false });
+  agentInflight.abort();
+  res.json({ ok: true });
+}));
+
 app.post('/api/agent/chat', wrap(async (req, res) => {
   if (!agentConfig?.provider) throw httpError(400, 'No AI agent connected');
   const message = String(req.body?.message || '').trim();
   if (!message) throw httpError(400, 'Empty message');
+  if (agentInflight) throw httpError(409, 'The agent is still answering the previous message. Stop it first.');
+  const ac = new AbortController();
+  agentInflight = ac;
+  try {
+    await agentChatTurn(req, res, message, ac.signal);
+  } finally {
+    if (agentInflight === ac) agentInflight = null;
+  }
+}));
+
+async function agentChatTurn(req, res, message, signal) {
   agentChat.push({ role: 'user', text: message, ts: new Date().toISOString() });
   trimChat(); saveChat();
   audit({ action: 'ai-chat', role: 'user', text: message });
@@ -1963,7 +2091,7 @@ app.post('/api/agent/chat', wrap(async (req, res) => {
   let transcriptExtra = '';
   let reply = null;
   // the browser tells us which module the user is looking at, so replies can be contextual
-  const moduleNote = req.body?.module ? `\n\nContext: the user is currently in the "${String(req.body.module).slice(0, 60)}" module — tailor your help to it.` : '';
+  const moduleNote = req.body?.module ? `\n\nContext: the user is currently in the "${String(req.body.module).slice(0, 60)}" module: tailor your help to it.` : '';
   for (let step = 0; step < 6; step++) {
     const who = AGENT_PROVIDERS[agentConfig.provider].short + (agentConfig.model ? ` (${agentConfig.model})` : '');
     sseBroadcast('agent', { type: 'step', step: step + 1, msg: `thinking with ${who}` });
@@ -1972,19 +2100,51 @@ app.post('/api/agent/chat', wrap(async (req, res) => {
     const prompt = agentSystemPrompt() + moduleNote + '\n\n--- Conversation ---\n' +
       recent.map((m) => `${m.role === 'user' ? 'User' : m.role === 'note' ? 'System note' : 'Assistant'}: ${m.text}`).join('\n\n') +
       transcriptExtra + '\n\nAssistant:';
+    // live typing: forward text deltas once the answer is clearly prose (a tool call starts with "{" or a fence)
+    let streamed = '', streaming = false;
+    const onText = (delta) => {
+      streamed += delta;
+      if (!streaming) {
+        const lead = streamed.trimStart();
+        if (!lead) return;
+        if (lead.startsWith('{') || lead.startsWith('```')) return; // keep a probable tool call private until it is parsed
+        if (lead.length < 8) return;
+        streaming = true;
+        sseBroadcast('agent', { type: 'text', text: streamed, reset: true });
+        return;
+      }
+      sseBroadcast('agent', { type: 'text', text: delta });
+    };
     let outRaw;
-    try { outRaw = (await agentRun(prompt)).trim(); }
+    try { outRaw = (await agentRun(prompt, { signal, onText })).trim(); }
     catch (e) {
+      if (e.cancelled || signal.aborted) {
+        if (streaming) sseBroadcast('agent', { type: 'text-discard' });
+        agentChat.push({ role: 'note', kind: 'cancelled', text: 'Reply stopped by the user.', ts: new Date().toISOString() });
+        trimChat(); saveChat();
+        audit({ action: 'ai-chat-cancelled', tools: actions.map((a) => a.tool) });
+        logEvent('info', 'AI chat: reply stopped by the user');
+        return res.json({ cancelled: true, actions });
+      }
       if (e.truncated) { reply = 'My response was too long and got cut off before it was complete. If I was building a rule, ask me to split it into smaller rules or use fewer transforms per rule.'; break; }
       throw e;
     }
     const call = parseAgentToolCall(outRaw);
     if (!call) { sseBroadcast('agent', { type: 'final' }); reply = outRaw; break; }
+    if (streaming) sseBroadcast('agent', { type: 'text-discard' }); // prose turned out to wrap a tool call
     sseBroadcast('agent', { type: 'tool', tool: call.tool, input: JSON.stringify(call.input || {}).slice(0, 140) });
     const t0 = Date.now();
     let result, ok = true;
     try { result = await AGENT_TOOLS[call.tool].run(call.input || {}); }
     catch (e) { ok = false; result = { error: e.message }; }
+    if (signal.aborted) { // stopped while the tool ran: record what happened, do not start another model step
+      actions.push({ tool: call.tool, input: call.input || {}, ok, ms: Date.now() - t0 });
+      sseBroadcast('agent', { type: 'tool-done', tool: call.tool, ok, ms: Date.now() - t0 });
+      agentChat.push({ role: 'note', kind: 'cancelled', text: 'Reply stopped by the user.', ts: new Date().toISOString() });
+      trimChat(); saveChat();
+      audit({ action: 'ai-chat-cancelled', tools: actions.map((a) => a.tool) });
+      return res.json({ cancelled: true, actions });
+    }
     let resultStr = JSON.stringify(result);
     if (resultStr.length > 12000) resultStr = resultStr.slice(0, 12000) + ' …(truncated)';
     actions.push({ tool: call.tool, input: call.input || {}, ok, ms: Date.now() - t0 });
@@ -1997,7 +2157,7 @@ app.post('/api/agent/chat', wrap(async (req, res) => {
   trimChat(); saveChat();
   audit({ action: 'ai-chat', role: 'assistant', text: reply, tools: actions.map((a) => a.tool) });
   res.json({ reply, actions, proposals: agentProposals.slice(propBefore).filter((p) => p.status === 'pending') });
-}));
+}
 
 /* natural-language -> SQL for the read-only console.
    Single-shot (no tool loop): we build an authoritative schema context straight
@@ -2005,7 +2165,7 @@ app.post('/api/agent/chat', wrap(async (req, res) => {
    columns regardless of what the browser has cached. The result is validated
    through the same read-only guard the console itself uses before it is returned. */
 app.post('/api/agent/sql', wrap(async (req, res) => {
-  if (!agentConfig?.provider) throw httpError(400, 'No AI agent connected — open the AI agent (top-right) and connect a provider first.');
+  if (!agentConfig?.provider) throw httpError(400, 'No AI agent connected: open the AI agent (top-right) and connect a provider first.');
   const ask = String(req.body?.prompt || '').trim();
   if (!ask) throw httpError(400, 'Describe the query you want in plain language.');
   const attachSchema = req.body?.attachSchema !== false; // client asks the user; false = generate without DB metadata
@@ -2025,7 +2185,7 @@ app.post('/api/agent/sql', wrap(async (req, res) => {
 
     // 2) pick the tables most relevant to the request. Schemas here can hold
     //    thousands of tables, so a blind alphabetical slice would hide the right
-    //    one — score by overlap between the prompt and each table name instead.
+    //    one: score by overlap between the prompt and each table name instead.
     const MAX_TABLES = 45, MAX_COLS = 45;
     const stop = new Set(['the', 'and', 'for', 'from', 'with', 'that', 'this', 'row', 'rows', 'all', 'get', 'list', 'show', 'find', 'where', 'select', 'count', 'table', 'tables', 'column', 'columns', 'top', 'last', 'first', 'per', 'them', 'their', 'has', 'contains', 'contain', 'still']);
     const basis = `${ask} ${previousSql}`.toLowerCase();
@@ -2344,6 +2504,23 @@ app.get('/api/events', (req, res) => {
   });
 });
 
+/* ================= Deploy → Build → Ship (lib/deploy) ================= */
+const deploy = require('./lib/deploy');
+const deployCtx = {
+  app, DATA_DIR, IS_PACKAGED, ROOT, httpError, wrap, cli: DEPLOY_CLI,
+  audit, logEvent, sseBroadcast,
+  connStore, profileById, sshConnectOptions, sshClientFor, sshSessions, saveConnections,
+  settings,
+  agent: {
+    isConnected: () => !!agentConfig?.provider,
+    run: (prompt) => agentRun(prompt),
+    tools: AGENT_TOOLS,                 // deploy adds its read-only tools here
+    proposals: agentProposals, kinds: agentProposalKinds,
+    chatNote: (note) => { agentChat.push({ role: 'note', ...note }); trimChat(); saveChat(); },
+  },
+};
+const deployModule = deploy.mount(deployCtx);
+
 /* ---- errors ---- */
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
@@ -2399,7 +2576,7 @@ function sftpWriteFile(client, relPath, data, mode, mkdirParent) {
 /* ================= interactive SSH terminal (WebSocket + PTY) ================= */
 const { WebSocketServer } = require('ws');
 const termWss = new WebSocketServer({ noServer: true });
-const sshTerminals = new Map(); // profileId -> Set of { close() } — so disconnecting a server kills its terminals (and any AI CLI running in them)
+const sshTerminals = new Map(); // profileId -> Set of { close() }: so disconnecting a server kills its terminals (and any AI CLI running in them)
 function closeTerminalsFor(profileId) {
   const set = sshTerminals.get(profileId);
   if (!set) return 0;
@@ -2512,21 +2689,31 @@ termWss.on('connection', (ws, req) => {
   client.connect(opts);
 });
 
-const server = app.listen(PORT, '127.0.0.1', () => {
-  console.log(`server-tools listening on http://localhost:${PORT} (localhost only)`);
-  const db = currentDb(), ssh = currentSsh();
-  console.log(`Connection profile: "${activeProfile().name}" — ${db.database} @ ${db.host}:${db.port}${ssh ? ` via SSH tunnel ${ssh.host}` : ' (direct)'}`);
-  console.log('No database connection is opened until you load the schema or run a preview.');
-  if (IS_PACKAGED && process.platform === 'win32' && !process.env.MAU_NO_OPEN) {
-    // double-click convenience: open the UI in the default browser
-    require('child_process').exec(`start http://localhost:${PORT}`, () => {});
-  }
-});
+function startHttp() {
+  const server = app.listen(PORT, '127.0.0.1', () => {
+    console.log(`server-tools listening on http://localhost:${PORT} (localhost only)`);
+    const db = currentDb(), ssh = currentSsh();
+    console.log(`Connection profile: "${activeProfile().name}"${db.database} @ ${db.host}:${db.port}${ssh ? ` via SSH tunnel ${ssh.host}` : ' (direct)'}`);
+    console.log('No database connection is opened until you load the schema or run a preview.');
+    if (IS_PACKAGED && process.platform === 'win32' && !process.env.MAU_NO_OPEN) {
+      // double-click convenience: open the UI in the default browser
+      require('child_process').exec(`start http://localhost:${PORT}`, () => {});
+    }
+  });
 
-// upgrade only our terminal path, and only from loopback (the whole app is localhost-only)
-server.on('upgrade', (req, socket, head) => {
-  const remote = req.socket.remoteAddress || '';
-  const isLocal = remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1';
-  if (!isLocal || !req.url.startsWith('/api/ssh-term')) { socket.destroy(); return; }
-  termWss.handleUpgrade(req, socket, head, (ws) => termWss.emit('connection', ws, req));
-});
+  // upgrade only our terminal path, and only from loopback (the whole app is localhost-only)
+  server.on('upgrade', (req, socket, head) => {
+    const remote = req.socket.remoteAddress || '';
+    const isLocal = remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1';
+    if (!isLocal || !req.url.startsWith('/api/ssh-term')) { socket.destroy(); return; }
+    termWss.handleUpgrade(req, socket, head, (ws) => termWss.emit('connection', ws, req));
+  });
+  return server;
+}
+
+if (DEPLOY_CLI) {
+  // CLI mode: same engine, same data files, no port opened. Exit code = deploy outcome.
+  deploy.cli.main(process.argv.slice(2), deployCtx, deployModule).then((code) => process.exit(code), (e) => { console.error(e); process.exit(1); });
+} else {
+  startHttp();
+}

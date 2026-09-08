@@ -9,3 +9,15 @@ rules.json
 agent.json
 agent-chat.json
 settings.json
+
+# deploy module runtime data
+deploy-repos.json*
+deploy-targets.json*
+deploy-runs.json*
+deploy-secrets.enc
+deploy-master.key
+/deploy-work
+/deploy-runs
+deploy-servers.json*
+/deploy-keys
+deploy-templates.json*

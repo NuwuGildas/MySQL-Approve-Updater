@@ -1,0 +1,1 @@
+{ "name": "acme/php-web", "description": "tiny composer app for deploy e2e", "require": { "php": ">=8.1" }, "config": { "platform-check": false } }

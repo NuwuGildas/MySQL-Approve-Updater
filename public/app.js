@@ -24,12 +24,12 @@ function ensureToaster() {
 }
 // classify a plain message so single-string calls still get a sensible colour/badge
 function toastState(text) {
-  if (/\b(fail(ed|s)?|error|unavailable|invalid|cannot|can't|denied|unable|no such|not loaded|not connected)\b/i.test(text)) return 'error';
+  if (/\b(fail(ed|s)?|error|unavailable|invalid|cannot|can't|denied|unable|no such|not loaded|not connected)\b/i.test(text) || /\b(ECONN[A-Z]+|ETIMEDOUT|ENOTFOUND|EHOSTUNREACH|EPIPE|ER_[A-Z_]+|PROTOCOL_[A-Z_]+)\b/.test(text)) return 'error';
   if (/\b(copied|loaded|added|saved|approved|imported|exported|done|created|updated|removed|deleted|set to|connected|success|complete)\b/i.test(text)) return 'success';
   return 'info';
 }
 const TOAST_TITLES = { error: 'Error', success: 'Done', warning: 'Warning', info: 'Notice', loading: 'Working' };
-// toast(message) — backwards-compatible single-string API. toast(message, state) to force a state.
+// toast(message): backwards-compatible single-string API. toast(message, state) to force a state.
 function toast(msg, state) {
   const text = String(msg == null ? '' : msg);
   const g = ensureToaster();
@@ -97,11 +97,12 @@ function transformRowHtml(t = {}) {
   const type = t.type || 'findReplace';
   const opts = Object.entries(state.transformTypes)
     .map(([k, lbl]) => `<option value="${k}" ${k===type?'selected':''}>${esc(lbl)}</option>`).join('');
-  return `<div class="transform-row">
+  const uid = ++transformUid; // unique ids so each visible label is associated with its control
+  return `<div class="transform-row" data-uid="${uid}">
     <button type="button" class="del" title="Remove">✕</button>
     <div class="row">
-      <div><label>Column</label><input class="t-col" list="colList" value="${esc(t.column||'')}" required></div>
-      <div><label>Type</label><select class="t-type">${opts}</select></div>
+      <div><label for="tcol-${uid}">Column</label><input id="tcol-${uid}" class="t-col" list="colList" value="${esc(t.column||'')}" required></div>
+      <div><label for="ttype-${uid}">Type</label><select id="ttype-${uid}" class="t-type">${opts}</select></div>
     </div>
     <div class="t-params"></div>
     <label style="display:flex;align-items:center;gap:.4rem;margin-top:.45rem;font-size:.72rem;color:var(--muted)">
@@ -113,12 +114,13 @@ function transformRowHtml(t = {}) {
 
 function renderParams(rowEl, type, params = {}) {
   const wrap = rowEl.querySelector('.t-params');
+  const uid = rowEl.dataset.uid || rowEl.closest('.transform-row')?.dataset.uid || 'x';
   wrap.innerHTML = (PARAM_FIELDS[type] || []).map((f) => {
     if (f.type === 'checkbox')
       return `<label style="display:flex;align-items:center;gap:.4rem;margin-top:.4rem"><input type="checkbox" style="width:auto" data-k="${f.key}" ${params[f.key]?'checked':''}> ${esc(f.label)}</label>`;
     if (f.type === 'select')
-      return `<label>${esc(f.label)}</label><select data-k="${f.key}">${f.options.map(o=>`<option ${params[f.key]===o?'selected':''}>${o}</option>`).join('')}</select>`;
-    return `<label>${esc(f.label)}</label><input data-k="${f.key}" value="${esc(params[f.key]??'')}" placeholder="${esc(f.placeholder||'')}">`;
+      return `<label for="tp-${uid}-${f.key}">${esc(f.label)}</label><select id="tp-${uid}-${f.key}" data-k="${f.key}">${f.options.map(o=>`<option ${params[f.key]===o?'selected':''}>${o}</option>`).join('')}</select>`;
+    return `<label for="tp-${uid}-${f.key}">${esc(f.label)}</label><input id="tp-${uid}-${f.key}" data-k="${f.key}" value="${esc(params[f.key]??'')}" placeholder="${esc(f.placeholder||'')}">`;
   }).join('');
 }
 
@@ -449,7 +451,7 @@ $('btnLoadSchema').addEventListener('click', async () => {
     $('btnLoadSchema').textContent = 'Loading…';
     await loadSchema();
     toast(`Schema loaded: ${Object.keys(state.schema.tables).length} tables - SQL console autocomplete active`);
-  } catch (err) { toast('Schema load failed: ' + err.message); }
+  } catch (err) { dbErrorToast(err, 'Schema load failed: '); }
   finally { $('btnLoadSchema').textContent = 'Load schema'; }
 });
 $('rTable').addEventListener('change', updateColDatalist);
@@ -1066,7 +1068,7 @@ async function approveReviewedOk() {
   try {
     const r = await api('/api/session/batch', { method: 'POST', body: JSON.stringify({ changeIds: ids, action: 'approve' }) });
     const parts = Object.entries(r.results).map(([k, v]) => `${v} ${k}`).join(', ');
-    toast(`Approved OK-reviewed: ${parts || 'nothing'}${r.stopped ? ' - stopped: ' + r.stopped : ''}`);
+    toast(`Approved OK-reviewed: ${parts || 'nothing'}${r.stopped ? ', stopped: ' + r.stopped : ''}`);
   } catch (e) { toast(e.message); }
 }
 
@@ -1130,7 +1132,7 @@ async function batch(action) {
   try {
     const r = await api('/api/session/batch', { method: 'POST', body: JSON.stringify({ changeIds: [...selected], action }) });
     const parts = Object.entries(r.results).map(([k, v]) => `${v} ${k}`).join(', ');
-    toast(`Batch ${action}: ${parts || 'nothing done'}${r.stopped ? ' - stopped: ' + r.stopped : ''}`);
+    toast(`Batch ${action}: ${parts || 'nothing done'}${r.stopped ? ', stopped: ' + r.stopped : ''}`);
   } catch (e) { toast(e.message); }
   finally { batching = false; }
 }
@@ -1465,7 +1467,7 @@ function renderSchemaMap(g) {
     `- ${g.database}: showing ${nMatched} of ${g.totalTables} tables` +
     (nRelated ? ` + ${nRelated} related` : '') +
     `, ${g.relations.length} relations (${g.relations.filter((r) => r.inferred).length} inferred)` +
-    (truncated ? ' - use the filter to narrow down' : '');
+    (truncated ? '. Use the filter to narrow down' : '');
   schemaView.el = canvas.querySelector('svg');
   schemaView.vb = { x: 0, y: 0, w: width, h: height };
   applySchemaVb();
@@ -1628,11 +1630,38 @@ $('btnDownloadDdl').addEventListener('click', () => {
   URL.revokeObjectURL(a.href);
 });
 
+/* Database errors: a plain explanation with recovery actions; the raw driver message stays available but folded. */
+const DB_CONN_RE = /ECONN[A-Z]+|ETIMEDOUT|ENOTFOUND|EHOSTUNREACH|EPIPE|PROTOCOL_CONNECTION_LOST|PROTOCOL_ENQUEUE|ER_ACCESS_DENIED|ER_BAD_DB_ERROR|ER_DBACCESS_DENIED|Handshake|ssh|tunnel|connect(ion)? (failed|refused|timed out)|getaddrinfo/i;
+function dbErrorInfo(e) {
+  const raw = String(e?.message || e || '');
+  if (/ER_ACCESS_DENIED|ER_DBACCESS_DENIED|Access denied/i.test(raw)) return { title: 'This database refused the credentials', hint: 'The user or password of the active connection profile is not accepted.' };
+  if (/ER_BAD_DB_ERROR|Unknown database/i.test(raw)) return { title: "This database doesn't exist on the server", hint: 'Check the database name in the connection profile.' };
+  if (/ssh|tunnel/i.test(raw)) return { title: "Couldn't open the SSH tunnel to this database", hint: 'The SSH host, port, user or key of the connection profile may be wrong, or the server is unreachable.' };
+  if (DB_CONN_RE.test(raw)) return { title: "Couldn't connect to this database", hint: 'The host is unreachable or nothing listens on that port. Is the database (or its SSH tunnel) up, and is the profile pointing at the right host and port?' };
+  return null;
+}
+function dbErrorBlock(e, { retry, compact = false } = {}) {
+  const info = dbErrorInfo(e);
+  const raw = String(e?.message || e || '');
+  const el = document.createElement('div');
+  el.className = 'db-error';
+  el.innerHTML = `<b>${esc(info ? info.title : 'The database request failed')}</b>${info ? `<div class="hint">${esc(info.hint)}</div>` : ''}
+    <div class="actions"><button type="button" class="primary" data-db="edit">Edit connection</button>${retry ? '<button type="button" data-db="retry">Retry</button>' : ''}</div>
+    ${info || !compact ? `<details><summary>Technical details</summary><pre>${esc(raw)}</pre></details>` : ''}`;
+  el.querySelector('[data-db="edit"]').addEventListener('click', () => { ['schemaModal', 'settingsModal'].forEach((id) => { const d = $(id); if (d?.open) d.close(); }); $('connForm').hidden = true; loadConns().catch((err) => toast(err.message, 'error')); $('connModal').showModal(); });
+  if (retry) el.querySelector('[data-db="retry"]').addEventListener('click', retry);
+  return el;
+}
+const dbErrorToast = (e, prefix = '') => { const info = dbErrorInfo(e); toast(`${prefix}${info ? info.title : String(e?.message || e)}`, 'error'); };
 async function loadSchemaMap(q) {
   $('schemaCanvas').innerHTML = '<div class="empty" style="padding:1rem">Loading schema…</div>';
   schemaView.el = null;
   try { renderSchemaMap(await api('/api/schema/graph?q=' + encodeURIComponent(q || ''))); }
-  catch (e) { $('schemaCanvas').innerHTML = `<div class="empty" style="padding:1rem">${esc(e.message)}</div>`; toast(e.message); }
+  catch (e) {
+    $('schemaCanvas').innerHTML = '';
+    $('schemaCanvas').appendChild(dbErrorBlock(e, { retry: () => loadSchemaMap($('schemaFilter').value.trim()) }));
+    dbErrorToast(e, 'Schema map: ');
+  }
 }
 
 $('btnSchemaMap').addEventListener('click', () => {
@@ -1683,6 +1712,7 @@ function connectSSE() {
     if (modalChangeId) renderCardModal();
   });
   es.addEventListener('log', (e) => appendLog(JSON.parse(e.data)));
+  es.addEventListener('deploy', (e) => { try { onDeployEvent(JSON.parse(e.data)); } catch (err) { console.error('deploy event', err); } });
   es.addEventListener('preview', (e) => {
     const p = JSON.parse(e.data);
     // "computing" is a rolling counter: update the active line in place, don't stack
@@ -1695,18 +1725,35 @@ function connectSSE() {
   es.addEventListener('agent', (e) => {
     if (!agentFeedEl || !agentFeedEl.isConnected) return;
     const ev = JSON.parse(e.data);
-    const line = document.createElement('div');
-    line.className = 'agent-feed-line' + (ev.type === 'tool-done' && !ev.ok ? ' err' : '');
-    line.textContent =
-      ev.type === 'step' ? `step ${ev.step}: ${ev.msg}…`
-      : ev.type === 'tool' ? `running ${ev.tool} ${ev.input || ''}`
-      : ev.type === 'tool-done' ? `${ev.ok ? 'done' : 'FAILED'}: ${ev.tool} (${ev.ms} ms)`
-      : ev.type === 'final' ? 'writing the answer…'
-      : '';
-    if (line.textContent) {
-      agentFeedEl.appendChild(line);
+    // activity list (same step component as the preview loader): previous step ticks off, the new one is active
+    const feed = agentFeedEl;
+    const active = feed.querySelector('.ql-step.active');
+    const add = (text) => {
+      if (active) active.classList.replace('active', 'ql-done');
+      const l = document.createElement('div'); l.className = 'ql-step active'; l.textContent = text; feed.appendChild(l);
+    };
+    const short = (s) => { s = String(s || '').replace(/\s+/g, ' ').trim(); return s.length > 70 ? s.slice(0, 69) + '…' : s; };
+    if (ev.type === 'text' || ev.type === 'text-discard') { // the answer being written, live
+      const card = feed.parentElement; const live = card && card.querySelector('.agent-stream'); if (!live) return;
+      if (ev.type === 'text-discard') { live.textContent = ''; live.hidden = true; }
+      else {
+        if (ev.reset) live.textContent = '';
+        live.hidden = false; live.textContent += ev.text;
+        const head = card.querySelector('.aw-head span:last-child'); if (head) head.textContent = 'Replying…';
+        if (active) active.classList.replace('active', 'ql-done');
+      }
       $('agentMessages').scrollTop = $('agentMessages').scrollHeight;
+      return;
     }
+    if (ev.type === 'step') add(ev.msg);
+    else if (ev.type === 'tool') add(`Running ${ev.tool}${ev.input ? ' · ' + short(ev.input) : ''}`);
+    else if (ev.type === 'tool-done') {
+      const text = `${ev.tool}${ev.ok ? '' : ' failed'} · ${ev.ms} ms`;
+      if (active) { active.classList.remove('active'); active.classList.add(ev.ok ? 'ql-done' : 'err'); active.textContent = text; }
+      else add(text);
+    } else if (ev.type === 'final') add('Writing the answer…');
+    else return;
+    $('agentMessages').scrollTop = $('agentMessages').scrollHeight;
   });
 }
 
@@ -1831,7 +1878,7 @@ function aiAskAttach() { // honors the Settings default: always / never / ask ea
 }
 async function aiGenerate(instruction, previousSql) {
   if (aiSql.busy || !instruction) return;
-  if (!document.body.classList.contains('agent-on')) { toast('AI not connected — connect a provider (top-right)', 'error'); return; }
+  if (!document.body.classList.contains('agent-on')) { toast('AI not connected: connect a provider (top-right)', 'error'); return; }
   const attach = await aiAskAttach(); // ask every time
   aiBusy(true);
   try {
@@ -1874,7 +1921,7 @@ function openAiSqlPrompt() {
   aiSql.variants = []; aiSql.varIdx = -1; aiSql.baseAsk = '';
   aiSetPhase('prompt');
   $('aiSqlPrompt').hidden = false;
-  if (!document.body.classList.contains('agent-on')) toast('AI not connected — connect a provider (top-right)', 'error');
+  if (!document.body.classList.contains('agent-on')) toast('AI not connected: connect a provider (top-right)', 'error');
   const inp = $('aiSqlInput'); inp.value = ''; inp.focus();
 }
 
@@ -1895,7 +1942,7 @@ $('btnAiRegen').addEventListener('click', aiRegenerate);
 $('btnAiVarPrev').addEventListener('click', () => aiVarShow(aiSql.varIdx - 1));
 $('btnAiVarNext').addEventListener('click', () => aiVarShow(aiSql.varIdx + 1));
 // Ctrl+Shift+/ (open) and Esc (close/discard) at the document level so they work
-// regardless of focus — e.g. after the SQL drawer was toggled shut underneath.
+// regardless of focus: e.g. after the SQL drawer was toggled shut underneath.
 // Ctrl+/ is left free for the editor's line-comment. We match the physical Slash
 // key (e.code) because Shift turns "/" into "?" in e.key.
 // Ignored while a modal dialog (e.g. the schema-attach confirm) is open.
@@ -1912,7 +1959,7 @@ const SQL_DESTRUCTIVE_KW = ['DROP', 'DELETE', 'TRUNCATE', 'ALTER', 'UPDATE'];
 function updateSqlModeHint() {
   const el = $('sqlModeHint'); if (!el) return;
   el.innerHTML = state.allowWrites
-    ? '<span style="color:var(--amber)">writes enabled</span> — reads + INSERT/UPDATE/DELETE/DDL · Ctrl+Enter runs · Ctrl+Shift+/ asks AI'
+    ? '<span style="color:var(--amber)">writes enabled</span>reads + INSERT/UPDATE/DELETE/DDL · Ctrl+Enter runs · Ctrl+Shift+/ asks AI'
     : 'read-only: SELECT / SHOW / DESCRIBE / EXPLAIN · Ctrl+Enter runs · Ctrl+Shift+/ asks AI';
 }
 async function runSql(page = 0) {
@@ -1960,7 +2007,7 @@ function renderSqlResult() {
     $('sqlPager').hidden = true;
     const i = r.info || {};
     $('sqlMeta').textContent = `${r.kw} OK · ${i.affectedRows ?? 0} affected · ${r.ms} ms`;
-    $('sqlResults').innerHTML = `<div class="empty" style="padding:.8rem;color:var(--green)">Query OK — ${i.affectedRows ?? 0} row(s) affected${i.changedRows != null ? `, ${i.changedRows} changed` : ''}${i.insertId ? `, insert id ${i.insertId}` : ''}${i.warningStatus ? ` · ${i.warningStatus} warning(s)` : ''}.</div>`;
+    $('sqlResults').innerHTML = `<div class="empty" style="padding:.8rem;color:var(--green)">Query OK: ${i.affectedRows ?? 0} row(s) affected${i.changedRows != null ? `, ${i.changedRows} changed` : ''}${i.insertId ? `, insert id ${i.insertId}` : ''}${i.warningStatus ? ` · ${i.warningStatus} warning(s)` : ''}.</div>`;
     return;
   }
   const page = r.page ?? 0; // tolerate a server still running the pre-pagination code
@@ -2257,36 +2304,98 @@ $('btnAiAgent').addEventListener('click', () => {
   if ($('agentDrawer').classList.contains('open')) closeAgentDrawer();
   else openAgent();
 });
-const closeAgentDrawer = () => $('agentDrawer').classList.remove('open');
+// The agent window lives in the browser's top layer (popover="manual") so it floats above every module,
+// drawer and modal dialog. It is never closed by navigation: only its own close button / Escape hide it.
+const agentPopover = () => { const el = $('agentDrawer'); return 'showPopover' in el && el.hasAttribute('popover') ? el : null; };
+function raiseAgentWindow() { // (re)show the popover so it sits on top of the top layer, e.g. above a dialog opened later
+  const el = agentPopover(); if (!el || !$('agentDrawer').classList.contains('open')) return;
+  try { if (el.matches(':popover-open')) el.hidePopover(); el.showPopover(); } catch {}
+  raiseQuickFab();
+}
+const closeAgentDrawer = () => {
+  $('agentDrawer').classList.remove('open');
+  const el = agentPopover(); try { if (el && el.matches(':popover-open')) el.hidePopover(); } catch {}
+};
+/* Modal dialogs without the browser's inert lock.
+   Native showModal() makes everything outside the dialog inert, including the AI agent window and the
+   quick-access button. Dialogs are opened non-modally instead and given a shared backdrop, so they still
+   look and behave like modals (centered, dimmed page, page clicks blocked, Escape cancels) while the
+   agent window in the top layer stays usable above them. */
+(function emulateModalDialogs() {
+  if (typeof HTMLDialogElement === 'undefined' || HTMLDialogElement.prototype.__stModal) return;
+  HTMLDialogElement.prototype.__stModal = true;
+  const stack = []; let backdrop = null;
+  const sync = () => {
+    if (!backdrop) {
+      backdrop = document.createElement('div'); backdrop.id = 'stBackdrop'; backdrop.hidden = true;
+      backdrop.addEventListener('pointerdown', (e) => e.preventDefault()); // swallow page clicks like a real backdrop
+      document.body.appendChild(backdrop);
+    }
+    const top = stack[stack.length - 1];
+    backdrop.hidden = !top;
+    document.body.classList.toggle('st-modal-open', !!top);
+    stack.forEach((d, i) => { d.style.zIndex = String(1001 + i * 2); });
+    if (top) backdrop.style.zIndex = String(1000 + (stack.length - 1) * 2);
+  };
+  HTMLDialogElement.prototype.showModal = function () {
+    if (this.open) return;
+    this.dataset.stModal = '1';
+    this.show();
+    stack.push(this);
+    this.addEventListener('close', () => {
+      const i = stack.indexOf(this); if (i >= 0) stack.splice(i, 1);
+      delete this.dataset.stModal; this.style.zIndex = ''; sync();
+    }, { once: true });
+    sync();
+    raiseAgentWindow(); // keep the agent above the dialog it may have been asked from
+  };
+  document.addEventListener('keydown', (e) => { // Escape = native cancel: cancelable "cancel" event, then close()
+    if (e.key !== 'Escape' || e.defaultPrevented || !stack.length) return;
+    const top = stack[stack.length - 1]; if (!top.open) return;
+    if (top.dispatchEvent(new Event('cancel', { cancelable: true }))) top.close();
+    e.preventDefault(); e.stopImmediatePropagation(); // the Escape was consumed by the dialog: no other view reacts
+  });
+})();
+function raiseQuickFab() { // the quick-access button sits in the top layer too, always above the agent window
+  const f = $('quickFab'); if (!f || !('showPopover' in f) || !f.hasAttribute('popover')) return;
+  try { if (f.matches(':popover-open')) f.hidePopover(); f.showPopover(); } catch {}
+}
 $('btnAgentClose').addEventListener('click', closeAgentDrawer);
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && $('agentDrawer').classList.contains('open') && !document.querySelector('dialog[open]')) {
+  if (e.key === 'Escape' && !e.defaultPrevented && $('agentDrawer').classList.contains('open') && !document.querySelector('dialog[open]')) {
+    if (!$('agentMenu').hidden || !$('agentScopePop').hidden) { agentMenuOpen(false); agentScopeOpen(false); return; }
     closeAgentDrawer();
   }
 });
 
-async function openAgent() {
+async function openAgent() { // never closes whatever view/module is open: the window floats above it
   $('agentDrawer').classList.add('open');
+  raiseAgentWindow();
   restoreAgentGeom(); // place/size the floating window from the last saved geometry
   $('agentConnect').hidden = true;
   $('agentChatWrap').hidden = true;
   $('btnAgentReset').hidden = $('btnAgentDisconnect').hidden = true;
-  $('agentStatus').textContent = '- checking for local agents…';
+  setAgentStatus('Checking for local agents…', 'busy');
   try {
     const st = await api('/api/agent?probe=1');
     document.body.classList.toggle('agent-on', st.connected);
     if (st.connected) showAgentChat(st);
     else showAgentConnect(st);
   } catch (e) {
-    $('agentStatus').textContent = '- ' + e.message;
+    setAgentStatus(e.message, 'bad');
   }
+}
+// header status line: state dot + short text (connected provider, or what is going on)
+function setAgentStatus(text, state) {
+  const dot = state === 'ok' ? 'ok' : state === 'busy' ? 'busy' : state === 'bad' ? '' : 'off';
+  $('agentStatus').innerHTML = `<span class="dot ${dot}"></span><span>${esc(text)}</span>`;
 }
 
 // gate agent-dependent UI (e.g. "add to chat" on rule cards) from startup
 api('/api/agent').then((st) => document.body.classList.toggle('agent-on', st.connected)).catch(() => {});
 
 function showAgentConnect(st) {
-  $('agentStatus').textContent = '- not connected';
+  setAgentStatus('Not connected', 'off');
   $('agentConnect').hidden = false;
   const box = $('agentProviders');
   box.innerHTML = '';
@@ -2298,17 +2407,23 @@ function showAgentConnect(st) {
         <div style="flex:1;min-width:0">
           <div class="pname">${esc(p.label)}</div>
           <div class="pstat">Easiest: <b>Sign in with Claude</b> opens claude.ai in a new tab for authorization. Alternatively paste an API key (console.anthropic.com) or a token from <b>claude setup-token</b>.</div>
-          <div class="row" style="margin-top:.45rem">
-            <button type="button" class="p-oauth" style="flex:none">Sign in with Claude</button>
-            <input class="p-key" type="password" autocomplete="off" placeholder="or paste sk-ant-api… / sk-ant-oat…">
-            <input class="p-model" placeholder="model (default: claude-sonnet-4-5)" style="max-width:220px">
+          <div class="ag-conn-grid">
+            <label for="agApiKey">API key or sign-in token <span class="hint" style="margin:0">(optional when you sign in below)</span></label>
+            <input id="agApiKey" class="p-key" type="password" autocomplete="off" placeholder="sk-ant-api… or sk-ant-oat…">
+            <label for="agApiModel">Model</label>
+            <input id="agApiModel" class="p-model" placeholder="default: claude-sonnet-4-5">
+          </div>
+          <div class="ag-conn-actions">
+            <button type="button" class="p-oauth">Sign in with Claude</button>
+            <span class="hint" style="margin:0">opens claude.ai in a new tab; paste the code it shows</span>
           </div>
           <div class="p-oauth-step" hidden style="margin-top:.45rem">
             <div class="pstat">An authorization tab was opened. Approve access there, copy the code it shows, and paste it here:</div>
-            <div class="row" style="margin-top:.3rem">
-              <input class="p-code" autocomplete="off" placeholder="paste the authorization code">
-              <button type="button" class="primary p-finish" style="flex:none">Complete sign-in</button>
+            <div class="ag-conn-grid">
+              <label for="agApiCode">Authorization code</label>
+              <input id="agApiCode" class="p-code" autocomplete="off" placeholder="paste the authorization code">
             </div>
+            <div class="ag-conn-actions"><button type="button" class="primary p-finish">Complete sign-in</button></div>
           </div>
         </div>
         <button class="primary" data-prov="${esc(key)}">Connect</button>`;
@@ -2370,11 +2485,25 @@ function showAgentConnect(st) {
 }
 
 function showAgentChat(st) {
-  $('agentStatus').textContent = `- connected: ${st.providers[st.provider]?.label || st.provider}${st.model ? ` (${st.model})` : ''}`;
+  const providerLabel = st.providers[st.provider]?.label || st.provider;
+  setAgentStatus(`${providerLabel} · Read-only`, 'ok');
   $('agentConnect').hidden = true;
   $('agentChatWrap').hidden = false;
   $('btnAgentReset').hidden = $('btnAgentDisconnect').hidden = false;
-  $('agentScope').textContent = `Database access is read-only (${$('dbInfo').textContent.replace(/^profile: /, '')}). The agent can propose rule creations and edits, but each proposal needs your approval below. Every action is listed under its reply and in the activity log.`;
+  // access chip + details popover (environment, database, access, agent, model)
+  const info = $('dbInfo').textContent;
+  const pick = (re) => ((re.exec(info) || [])[1] || '').trim();
+  const envName = pick(/profile:\s*([^·]+)/), dbName = pick(/db:\s*([^·]+)/), via = pick(/via\s+([^·]+)/);
+  $('agentScopeText').textContent = 'Read-only' + (envName ? ` · ${envName}` : '');
+  $('agentScopePop').innerHTML = `<dl>
+      ${envName ? `<dt>Environment</dt><dd>${esc(envName)}</dd>` : ''}
+      ${dbName ? `<dt>Database</dt><dd>${esc(dbName)}</dd>` : ''}
+      ${via ? `<dt>Connection</dt><dd>${esc(via)}</dd>` : ''}
+      <dt>Access</dt><dd>read-only</dd>
+      <dt>Agent</dt><dd>${esc(providerLabel)}</dd>
+      <dt>Model</dt><dd>${esc(st.model || 'provider default')}</dd>
+    </dl>
+    <div class="hint">The agent can propose rule creations and edits, but each proposal needs your approval here. Every action is listed under its reply and in the activity log.</div>`;
   // model switcher: provider-appropriate suggestions, current value prefilled
   const claudeModels = ['claude-fable-5', 'claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5-20251001', 'claude-sonnet-4-5', 'claude-opus-4-1', 'claude-3-5-haiku-latest'];
   const codexModels = ['gpt-5-codex', 'gpt-5', 'o4-mini', 'gpt-4.1'];
@@ -2385,10 +2514,40 @@ function showAgentChat(st) {
   $('agentMessages').innerHTML = '';
   for (const m of st.chat || []) appendAgentMsg(m.role, m.text, null, m);
   for (const p of st.proposals || []) appendAgentProposal(p);
+  if (!$('agentMessages').children.length) renderAgentEmpty();
   $('agentInput').focus();
 }
 
+// empty conversation: identity + a few starter prompts (chips send the prompt as a normal message)
+const AGENT_STARTERS = [
+  ['Explore the database', 'Give me an overview of the connected database: main tables, row counts and how they relate.'],
+  ['Check the schema', 'Which tables and columns does the current rule set touch? Point out anything that looks risky.'],
+  ['Explain a rule', 'Pick the most complex rule and explain what it changes, step by step.'],
+];
+function renderAgentEmpty() {
+  const el = document.createElement('div');
+  el.className = 'ag-empty';
+  el.innerHTML = `<span class="ag-ico"><img class="ai-mini" src="/assets/robot-logo-animated_1.svg" alt="" aria-hidden="true"></span>
+    <h3>What would you like to explore?</h3>
+    <p>Ask about rules, schema or data. Access is read-only; changes come back as proposals for you to approve.</p>
+    <div class="ag-sugg">${AGENT_STARTERS.map(([label], i) => `<button type="button" class="chip-btn" data-starter="${i}">${esc(label)}</button>`).join('')}</div>`;
+  el.querySelectorAll('[data-starter]').forEach((b) => b.addEventListener('click', () => {
+    $('agentInput').value = AGENT_STARTERS[+b.dataset.starter][1];
+    agentSend();
+  }));
+  $('agentMessages').appendChild(el);
+}
+// minimal, escape-first rendering of agent replies: fenced code blocks, inline code, bold
+function renderAgentText(text) {
+  let s = esc(text);
+  s = s.replace(/```([a-z0-9_-]*)\n([\s\S]*?)```/g, (m, lang, code) => `<pre><code${lang ? ` data-lang="${lang}"` : ''}>${code.replace(/\n$/, '')}</code></pre>`);
+  s = s.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+  s = s.replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>');
+  return s;
+}
+
 function appendAgentMsg(role, text, actions, meta) {
+  const empty = $('agentMessages').querySelector('.ag-empty'); if (empty) empty.remove();
   const el = document.createElement('div');
   if (role === 'note') {
     if (meta?.kind === 'context' && meta.rule) {
@@ -2405,9 +2564,18 @@ function appendAgentMsg(role, text, actions, meta) {
         <div class="ap-head">AI review shared <span class="badge ai-${esc(meta.verdict)}">${esc(meta.verdict)}</span></div>
         <div class="ap-meta">${esc(meta.rule || '')} · ${esc(meta.table || '')} pk=${esc(String(meta.pk))} · ${esc(meta.columns || '')}</div>
         <div class="txt" style="margin-top:.3rem">${esc(meta.summary || '')}</div>`;
+    } else if (meta?.kind === 'run-log') {
+      // a deploy log shared from The Ascension: summary card with the redacted tail folded
+      el.className = 'agent-ctx-card';
+      el.innerHTML = `
+        <div class="ap-head">Log shared: <b>${esc(meta.mode || 'run')}</b> on <b>${esc(meta.target || '')}</b> <span class="badge ${esc(meta.status || '')}">${esc(String(meta.status || '').replace('_', ' '))}</span></div>
+        <div class="ap-meta">${esc(meta.runId || '')}${meta.stage ? ` · stage ${esc(meta.stage)}` : ''}${meta.error ? ` · ${esc(String(meta.error).slice(0, 120))}` : ''}</div>
+        <details><summary>${(meta.lines || []).length} log line(s)</summary><pre>${esc((meta.lines || []).join('\n'))}</pre></details>`;
     } else if (meta?.kind === 'decision') {
       el.className = 'agent-note';
-      el.innerHTML = `<span class="badge ${meta.decision === 'approved' ? 'approved' : 'rejected'}">${esc(meta.decision)}</span> rule ${esc(meta.proposalAction || '')} proposal <b>${esc(meta.ruleName || '')}</b>`;
+      el.innerHTML = meta.proposalKind && meta.proposalKind !== 'rule'
+        ? `<span class="badge ${meta.decision === 'approved' ? 'approved' : 'rejected'}">${esc(meta.decision)}</span> ${esc(String(text || '').replace(/^User (approved|rejected) the agent's /, ''))}`
+        : `<span class="badge ${meta.decision === 'approved' ? 'approved' : 'rejected'}">${esc(meta.decision)}</span> rule ${esc(meta.proposalAction || '')} proposal <b>${esc(meta.ruleName || '')}</b>`;
     } else {
       el.className = 'agent-note';
       el.textContent = text;
@@ -2418,10 +2586,11 @@ function appendAgentMsg(role, text, actions, meta) {
   }
   el.className = 'agent-msg ' + (role === 'user' ? 'user' : 'ai');
   const acts = (actions && actions.length)
-    ? `<details class="agent-actions"><summary>${actions.length} action(s) taken</summary>${actions.map((a) =>
-        `<div class="agent-action ${a.ok ? '' : 'err'}">${esc(a.tool)} ${esc(JSON.stringify(a.input))} · ${a.ms} ms${a.ok ? '' : ' · FAILED'}</div>`).join('')}</details>`
+    ? `<details class="agent-actions"><summary>${actions.length} action${actions.length === 1 ? '' : 's'} taken${actions.some((a) => !a.ok) ? ' · some failed' : ''}</summary>${actions.map((a) =>
+        `<div class="agent-action ${a.ok ? '' : 'err'}"><span>${esc(a.tool)}</span><code>${esc(JSON.stringify(a.input))}</code><span class="ms">${a.ms} ms</span></div>`).join('')}</details>`
     : '';
-  el.innerHTML = `<div class="who">${role === 'user' ? 'You' : 'AI agent'}</div><div class="txt">${esc(text)}</div>${acts}`;
+  const who = role === 'user' ? 'You' : '<span class="ag-ico"><img class="ai-mini" src="/assets/robot-logo-animated_1.svg" alt="" aria-hidden="true"></span>AI Agent';
+  el.innerHTML = `<div class="who">${who}</div><div class="txt">${renderAgentText(text)}</div>${acts}`;
   $('agentMessages').appendChild(el);
   $('agentMessages').scrollTop = $('agentMessages').scrollHeight;
   return el;
@@ -2429,9 +2598,52 @@ function appendAgentMsg(role, text, actions, meta) {
 
 /* rule proposal card: the user gate for agent rule changes */
 function appendAgentProposal(p) {
-  const t = p.rule;
   const el = document.createElement('div');
   el.className = 'agent-proposal';
+  if (p.kind === 'deploy-manifest') {
+    const m = p.manifest || {};
+    el.innerHTML = `
+      <div class="ap-head">Deploy manifest proposal for <b>${esc(p.targetName || '')}</b>${p.guardrails === 'passed' ? ' <span class="badge approved" title="Passed the manifest guardrail check">guardrails ✓</span>' : ''}</div>
+      <div class="ap-meta">${esc(m.stack?.type || '?')}/${esc(m.stack?.framework || '?')} · ${(m.build?.steps || []).length} build step(s) · runtime ${esc(m.runtime?.kind || '?')}${m.runtime?.docroot && m.runtime.docroot !== '.' ? ` · docroot ${esc(m.runtime.docroot)}` : ''}</div>
+      <details><summary>Full manifest</summary><pre>${esc(JSON.stringify(m, null, 2))}</pre></details>
+      <div class="actions">
+        <button class="approve" data-dec="approve">Approve and save</button>
+        <button class="reject" data-dec="reject">Reject</button>
+      </div>`;
+    el.querySelectorAll('[data-dec]').forEach((b) => b.addEventListener('click', async () => {
+      try {
+        const r = await api('/api/agent/proposal/' + p.id, { method: 'POST', body: JSON.stringify({ decision: b.dataset.dec }) });
+        el.querySelector('.actions').innerHTML = `<span class="badge ${r.status === 'approved' ? 'approved' : 'rejected'}">${r.status}</span>`;
+        if (r.status === 'approved' && typeof loadDeploy === 'function' && $('deployDrawer').classList.contains('open')) loadDeploy();
+      } catch (e) { toast(e.message); }
+    }));
+    $('agentMessages').appendChild(el);
+    $('agentMessages').scrollTop = $('agentMessages').scrollHeight;
+    return;
+  }
+  if (p.kind === 'deploy-action') {
+    const labels = { plan: 'Run a Plan (read-only dry run)', ship: 'Ship', rollback: 'Roll back', unlock: 'Force-unlock the target', cancel: 'Cancel the running deploy' };
+    el.innerHTML = `
+      <div class="ap-head">Deploy action: <b>${esc(labels[p.action] || p.action)}</b> on <b>${esc(p.targetName || '')}</b></div>
+      <div class="ap-meta">${p.release ? `release ${esc(p.release)} · ` : ''}${p.planHash ? `reviewed plan ${esc(p.planHash)} · ` : p.action === 'ship' ? 'no reviewed plan: computed and executed in one go · ' : ''}proposed ${p.source === 'explain' ? 'after analysing a failed run' : 'by the assistant'}</div>
+      ${p.reason ? `<div class="txt" style="margin-top:.3rem">${esc(p.reason)}</div>` : ''}
+      <div class="actions">
+        <button class="${p.action === 'ship' || p.action === 'rollback' ? 'warn' : 'approve'}" data-dec="approve">Approve and ${esc((labels[p.action] || p.action).split(' ')[0].toLowerCase())}</button>
+        <button class="reject" data-dec="reject">Reject</button>
+      </div>`;
+    el.querySelectorAll('[data-dec]').forEach((b) => b.addEventListener('click', async () => {
+      try {
+        el.querySelectorAll('[data-dec]').forEach((x) => { x.disabled = true; });
+        const r = await api('/api/agent/proposal/' + p.id, { method: 'POST', body: JSON.stringify({ decision: b.dataset.dec }) });
+        el.querySelector('.actions').innerHTML = `<span class="badge ${r.status === 'approved' ? 'approved' : 'rejected'}">${r.status}</span>${r.status === 'approved' ? ' <span class="hint" style="margin:0">running: follow it in The Ascension log</span>' : ''}`;
+        if (r.status === 'approved') { toast(`${labels[p.action] || p.action}: started`, 'success'); if (typeof loadDeploy === 'function' && $('deployDrawer').classList.contains('open')) loadDeploy().catch(() => {}); }
+      } catch (e) { toast(e.message, 'error'); el.querySelectorAll('[data-dec]').forEach((x) => { x.disabled = false; }); }
+    }));
+    $('agentMessages').appendChild(el);
+    $('agentMessages').scrollTop = $('agentMessages').scrollHeight;
+    return;
+  }
+  const t = p.rule;
   el.innerHTML = `
     <div class="ap-head">Rule ${p.action === 'update' ? `update: <b>${esc(p.targetName || '')}</b> → <b>${esc(t.name)}</b>` : `proposal: <b>${esc(t.name)}</b>`}
       ${t.draft ? '<span class="badge draftbadge">draft</span>' : ''}</div>
@@ -2458,18 +2670,21 @@ async function agentSend() {
   const msg = $('agentInput').value.trim();
   if (!msg) return;
   agentBusy = true;
-  $('btnAgentSend').disabled = true;
+  $('btnAgentSend').classList.add('busy'); // the send action becomes Stop while the agent works
+  $('btnAgentSend').title = 'Stop';
   $('agentInput').value = '';
+  agentInputAutosize();
   appendAgentMsg('user', msg);
-  // no bubble while working: animated icon + label, live feed streaming below
+  // activity card while working: status head + live step list streamed over SSE
   const pending = document.createElement('div');
   pending.className = 'agent-working';
   pending.innerHTML = `
     <div class="aw-head">
-      <img class="ai-logo" src="/assets/robot-logo-focused.svg" alt="" aria-hidden="true">
+      <span class="spinner"></span>
       <span>Working…</span>
     </div>
-    <div class="agent-feed"></div>`;
+    <div class="agent-feed ql-steps"></div>
+    <div class="agent-stream" hidden></div>`;
   $('agentMessages').appendChild(pending);
   $('agentMessages').scrollTop = $('agentMessages').scrollHeight;
   agentFeedEl = pending.querySelector('.agent-feed'); // the SSE 'agent' listener streams progress lines into it
@@ -2477,6 +2692,7 @@ async function agentSend() {
   try {
     const r = await api('/api/agent/chat', { method: 'POST', body: JSON.stringify({ message: msg, module: currentModuleLabel() }) });
     pending.remove();
+    if (r.cancelled) { appendAgentMsg('note', 'Reply stopped by the user.'); return; }
     appendAgentMsg('ai', r.reply, r.actions);
     (r.proposals || []).forEach(appendAgentProposal);
   } catch (e) {
@@ -2486,13 +2702,35 @@ async function agentSend() {
     agentFeedEl = null;
     agentBusy = false;
     document.body.classList.remove('agent-busy');
-    $('btnAgentSend').disabled = false;
+    $('btnAgentSend').classList.remove('busy');
+    $('btnAgentSend').title = 'Send (Enter)';
     $('agentInput').focus();
   }
 }
-$('btnAgentSend').addEventListener('click', agentSend);
+let agentCancelling = false;
+async function agentCancel() { // Stop: the server kills the provider run and records a note in the conversation
+  if (!agentBusy || agentCancelling) return;
+  agentCancelling = true;
+  try { await api('/api/agent/chat/cancel', { method: 'POST' }); } catch (e) { toast(e.message); } finally { agentCancelling = false; }
+}
+$('btnAgentSend').addEventListener('click', () => { if (agentBusy) agentCancel(); else agentSend(); });
 $('agentInput').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); agentSend(); }
+});
+// composer grows with its content (up to the CSS max-height), then scrolls
+function agentInputAutosize() {
+  const t = $('agentInput'); t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 160) + 'px';
+}
+$('agentInput').addEventListener('input', agentInputAutosize);
+// options menu (model, reset, disconnect) and the access-details popover
+const agentMenuOpen = (on) => { $('agentMenu').hidden = !on; $('btnAgentMenu').setAttribute('aria-expanded', String(on)); };
+const agentScopeOpen = (on) => { $('agentScopePop').hidden = !on; $('agentScope').setAttribute('aria-expanded', String(on)); };
+$('btnAgentMenu').addEventListener('click', (e) => { e.stopPropagation(); agentScopeOpen(false); agentMenuOpen($('agentMenu').hidden); });
+$('agentScope').addEventListener('click', (e) => { e.stopPropagation(); agentMenuOpen(false); agentScopeOpen($('agentScopePop').hidden); });
+$('agentMenu').addEventListener('click', (e) => { if (e.target.closest('button')) agentMenuOpen(false); });
+document.addEventListener('click', (e) => {
+  if (!$('agentMenu').hidden && !e.target.closest('.ag-menu-wrap')) agentMenuOpen(false);
+  if (!$('agentScopePop').hidden && !e.target.closest('.ag-status-row')) agentScopeOpen(false);
 });
 let agentModelSaved = '';
 async function saveAgentModel() {
@@ -2510,6 +2748,7 @@ $('agentModel').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.
 $('btnAgentReset').addEventListener('click', async () => {
   await api('/api/agent/reset', { method: 'POST' }).catch((e) => toast(e.message));
   $('agentMessages').innerHTML = '';
+  renderAgentEmpty();
 });
 $('btnAgentDisconnect').addEventListener('click', async () => {
   const ok = await confirmDialog({
@@ -2531,6 +2770,7 @@ $('moreMenu').addEventListener('change', async () => {
   else if (action === 'audit') openAudit();
   else if (action === 'ssh') openSsh();
   else if (action === 'servers') openServers();
+  else if (action === 'deploy') openDeploy();
 });
 
 /* ---------- SSH servers (cards with live VM meta) ---------- */
@@ -2586,7 +2826,7 @@ function serverCard(s) {
   } else if (m?.error) {
     body = `<div class="srv-err">Could not read VM info: ${esc(m.error)}</div>`;
   } else if (!s.connected) {
-    body = `<div class="srv-metaline">Not connected — connect to pull live VM stats.</div>`;
+    body = `<div class="srv-metaline">Not connected: connect to pull live VM stats.</div>`;
   }
   el.innerHTML = `
     <div class="srv-head">
@@ -2689,7 +2929,7 @@ const showSshDrawer = () => $('sshDrawer').classList.add('open');
 const hideSshDrawer = () => $('sshDrawer').classList.remove('open');
 
 function renderSshTabs() {
-  $('sshHostInfo').textContent = consoles.size ? `— ${consoles.size}/${MAX_CONSOLES}` : '';
+  $('sshHostInfo').textContent = consoles.size ? `${consoles.size}/${MAX_CONSOLES}` : '';
   const host = $('sshTabs'); host.innerHTML = '';
   const docked = dockedConsoles();
   docked.forEach((c) => {
@@ -2770,7 +3010,7 @@ function toggleFloat(id) {
     if (next) activateConsole(next.id); else { renderSshTabs(); if (!dockedConsoles().length) hideSshDrawer(); }
   } else {
     // reparent into the host while STILL fixed (viewport-anchored, no reflow), THEN
-    // drop the floating class — otherwise it briefly lays out full-size in <body>
+    // drop the floating class: otherwise it briefly lays out full-size in <body>
     $('sshConsoleHost').appendChild(c.el);
     c.floating = false; c.el.classList.remove('floating');
     c.el.removeAttribute('style'); // drop floating geometry, back to docked layout
@@ -2815,11 +3055,11 @@ async function openSsh(profileId, opts = {}) {
   const pid = (typeof profileId === 'string') ? profileId : null;
   const ai = !!opts.ai;
   if (!pid) { // active-connection terminal requires an SSH tunnel
-    try { const st = await api('/api/state'); if (!st.config.sshTunnel) { toast('The active connection has no SSH tunnel — enable one in Connections'); return; } }
+    try { const st = await api('/api/state'); if (!st.config.sshTunnel) { toast('The active connection has no SSH tunnel: enable one in Connections'); return; } }
     catch (e) { toast(e.message); return; }
   }
   if (typeof Terminal === 'undefined') { toast('Terminal library not loaded'); return; }
-  if (consoles.size >= MAX_CONSOLES) { toast(`You can run at most ${MAX_CONSOLES} SSH consoles at once — close one first`); return; }
+  if (consoles.size >= MAX_CONSOLES) { toast(`You can run at most ${MAX_CONSOLES} SSH consoles at once: close one first`); return; }
   const id = 'c' + (++consoleSeq);
   const label = (opts.label || (pid ? 'server' : 'active connection')) + (ai ? ' · AI' : '');
   const c = { id, profileId: pid, ai, label, floating: false, statusCls: '' };
@@ -2832,8 +3072,7 @@ async function openSsh(profileId, opts = {}) {
   setTimeout(() => { refitConsole(c); connectConsole(c); c.term.focus(); }, 30);
 }
 
-// close every console (docked or floating) tied to a given server profile —
-// used when that server is disconnected so no dead consoles linger
+// close every console (docked or floating) tied to a given server profile · // used when that server is disconnected so no dead consoles linger
 function closeConsolesForProfile(pid) { [...consoles.values()].filter((c) => c.profileId === pid).forEach((c) => closeConsole(c.id)); }
 function closeSshDrawer() { dockedConsoles().forEach((c) => closeConsole(c.id)); hideSshDrawer(); }
 $('btnSshClose').addEventListener('click', closeSshDrawer);
@@ -2893,9 +3132,10 @@ async function openAudit() {
 // classify each entry into a friendly category
 function auditCategory(a) {
   if (!a) return 'other';
-  if (a === 'ai-chat') return 'ai';
+  if (a === 'ai-chat' || a === 'ai-chat-cancelled') return 'ai';
   if (a === 'approve') return 'approvals';
   if (a.startsWith('ssh')) return 'ssh';
+  if (a.startsWith('deploy') || a.startsWith('agent-deploy')) return 'deploy';
   if (a.startsWith('agent-rule') || ['preview', 'reject', 'skip', 'edit', 'abort', 'clear'].includes(a)) return 'rules';
   return 'rules';
 }
@@ -2904,6 +3144,7 @@ const CAT_META = {
   approvals: { label: 'Approvals', icon: '✓', cls: 'approve' },
   rules: { label: 'Rules', icon: '▤', cls: 'rules' },
   ssh: { label: 'SSH', icon: '›_', cls: 'ssh' },
+  deploy: { label: 'Ascension', icon: '⇧', cls: 'deploy' },
   other: { label: 'Other', icon: '•', cls: 'other' },
 };
 const CAT_ICON_SVG = {
@@ -2916,19 +3157,52 @@ function auditDescribe(e) {
   const rule = e.rule ? ` "${esc(e.rule)}"` : '';
   switch (a) {
     case 'ai-chat': return null; // rendered as a chat bubble instead
-    case 'preview': return `Previewed${rule}${tbl} — ${e.matchedRows} matched, ${e.proposedChanges} would change`;
+    case 'ai-chat-cancelled': return 'AI reply stopped by the user' + (e.tools && e.tools.length ? ' after ' + esc(e.tools.join(', ')) : '');
+    case 'deploy-log-to-chat': return `Deploy log of run ${esc(e.runId || '')} (${esc(e.target || '')}) shared with the AI chat`;
+    case 'deploy-agent-action': return `AI-proposed deploy action approved: <b>${esc(e.deployAction || '')}</b> on <b>${esc(e.target || '')}</b>${e.runId ? ` (run ${esc(e.runId)})` : ''}`;
+    case 'deploy-preship-review': return `AI pre-ship review of <b>${esc(e.target || '')}</b>: ${esc(e.verdict || '')}${e.findings ? ` (${e.findings} finding${e.findings === 1 ? '' : 's'})` : ''}`;
+    case 'preview': return `Previewed${rule}${tbl}: ${e.matchedRows} matched, ${e.proposedChanges} would change`;
     case 'approve': return `Approved a change${tbl}${e.pk !== undefined ? ` (id ${esc(String(e.pk))})` : ''}`;
     case 'reject': return `Rejected a change${tbl}${e.pk !== undefined ? ` (id ${esc(String(e.pk))})` : ''}`;
     case 'skip': return `Skipped a change${tbl}${e.pk !== undefined ? ` (id ${esc(String(e.pk))})` : ''}`;
     case 'edit': return `Hand-edited a proposed value${tbl}${e.column ? ` · ${esc(e.column)}` : ''}`;
-    case 'abort': return `Aborted the session${rule} — ${e.discardedPending ?? 0} discarded`;
-    case 'clear': return `Cleared the preview${rule} — ${e.discardedPending ?? 0} discarded`;
+    case 'abort': return `Aborted the session${rule}: ${e.discardedPending ?? 0} discarded`;
+    case 'clear': return `Cleared the preview${rule}: ${e.discardedPending ?? 0} discarded`;
     case 'agent-rule-approved': return `Approved the AI's rule proposal${rule}`;
     case 'agent-rule-rejected': return `Rejected the AI's rule proposal${rule}`;
-    case 'ssh-session-connect': return `Connected SSH — ${esc(e.sshUser || '')}@${esc(e.sshHost || '')}`;
+    case 'ssh-session-connect': return `Connected SSH: ${esc(e.sshUser || '')}@${esc(e.sshHost || '')}`;
     case 'ssh-session-cleanup': return `Cleaned up ${esc(e.sshHost || '')} (${esc((e.cleaned || []).join(', '))})`;
     case 'ssh-terminal-open': return `Opened a terminal on ${esc(e.sshHost || '')}`;
-    case 'ssh-terminal-ai': return `Opened an AI terminal (${esc(e.aiCli || '')}) on ${esc(e.sshHost || '')}${e.sessionForwarded ? ' — session forwarded' : ''}`;
+    case 'ssh-terminal-ai': return `Opened an AI terminal (${esc(e.aiCli || '')}) on ${esc(e.sshHost || '')}${e.sessionForwarded ? 'session forwarded' : ''}`;
+    case 'deploy-plan': return `Planned a deploy of <b>${esc(e.target || '')}</b>${e.ref ? ` (${esc(e.ref)})` : ''}`;
+    case 'deploy-ship-start': return `Started shipping <b>${esc(e.target || '')}</b>${e.trigger ? ` via ${esc(e.trigger)}` : ''}`;
+    case 'deploy-ship-success': return `Shipped <b>${esc(e.target || '')}</b>release ${esc(e.release || '')}${e.commit ? ` @ ${esc(String(e.commit).slice(0, 8))}` : ''}${e.ms ? ` in ${Math.round(e.ms / 1000)}s` : ''}`;
+    case 'deploy-ship-failed': return `Deploy of <b>${esc(e.target || '')}</b> failed at ${esc(e.stage || '?')}${e.error ? `${esc(e.error)}` : ''}`;
+    case 'deploy-ship-rolled-back': return `Deploy of <b>${esc(e.target || '')}</b> failed at ${esc(e.stage || '?')} and was rolled back to ${esc(e.previousRelease || 'the previous release')}`;
+    case 'deploy-rollback-start': return `Started a rollback of <b>${esc(e.target || '')}</b>`;
+    case 'deploy-rollback': return `Rolled <b>${esc(e.target || '')}</b> back to ${esc(e.release || '')}`;
+    case 'deploy-cancel': return `Cancelled a deploy of <b>${esc(e.target || '')}</b>${e.stage ? ` during ${esc(e.stage)}` : ''}`;
+    case 'deploy-force-unlock': return `Force-unlocked <b>${esc(e.target || '')}</b>`;
+    case 'deploy-repo-add': return `Connected repo <b>${esc(e.repo || '')}</b> (${esc(e.kind || '')})`;
+    case 'deploy-repo-update': return `Updated repo <b>${esc(e.repo || '')}</b>`;
+    case 'deploy-repo-remove': return `Removed repo <b>${esc(e.repo || '')}</b>`;
+    case 'deploy-target-add': return `Added deploy target <b>${esc(e.target || '')}</b> (${esc(e.type || '')})`;
+    case 'deploy-target-update': return `Updated deploy target <b>${esc(e.target || '')}</b>`;
+    case 'deploy-target-remove': return `Removed deploy target <b>${esc(e.target || '')}</b>`;
+    case 'deploy-manifest-save': return `Saved the deploy manifest of <b>${esc(e.repo || '')}</b>${e.by === 'agent-proposal' ? ' (AI proposal approved)' : ''}`;
+    case 'deploy-secret-set': return `Stored secret <b>${esc(e.name || '')}</b> in the vault`;
+    case 'deploy-secret-remove': return `Removed secret <b>${esc(e.name || '')}</b> from the vault`;
+    case 'deploy-ai-detect': return `Asked the AI to identify the stack of <b>${esc(e.repo || '')}</b>${e.ok ? ` (confidence ${e.confidence})` : 'no usable answer'}`;
+    case 'deploy-ai-explain': return `Asked the AI to explain deploy run ${esc(e.runId || '')}`;
+    case 'deploy-webhook': return `Webhook push started a ship of <b>${esc(e.target || '')}</b>${e.ref ? ` (${esc(e.ref)})` : ''}${e.reason ? `${esc(e.reason)}` : ''}`;
+    case 'deploy-webhook-rejected': return `Rejected a webhook call for <b>${esc(e.target || '')}</b>${esc(e.reason || '')}${e.ip ? ` from ${esc(e.ip)}` : ''}`;
+    case 'deploy-cloud-provision': return `Provisioning <b>${esc(e.name || '')}</b> on ${esc(e.provider || '')} (${esc(e.region || '')} · ${esc(e.size || '')}, recipe ${esc(e.recipe || '')})`;
+    case 'deploy-cloud-ready': return `Cloud server <b>${esc(e.name || '')}</b> is ready at ${esc(e.ip || '')}${e.targetId ? 'target created' : ''}`;
+    case 'deploy-cloud-failed': return `Provisioning of <b>${esc(e.name || '')}</b> failed: ${esc(e.error || '')}`;
+    case 'deploy-cloud-destroy': return `Destroyed cloud server <b>${esc(e.name || '')}</b> (${esc(e.provider || '')})`;
+    case 'deploy-poll-trigger': return `Polling found a new commit and started a ship of <b>${esc(e.target || '')}</b>${e.reason ? `${esc(e.reason)}` : ''}`;
+    case 'agent-deploy-manifest-approved': return `Approved the AI's deploy manifest for <b>${esc(e.target || '')}</b>`;
+    case 'agent-deploy-manifest-rejected': return `Rejected the AI's deploy manifest for <b>${esc(e.target || '')}</b>`;
     default: return `${esc(a || 'event')}${rule}${tbl}`;
   }
 }
@@ -2947,7 +3221,7 @@ const hhmm = (iso) => (iso || '').slice(11, 16);
 function renderAuditChips() {
   const counts = { all: auditData.length };
   for (const e of auditData) { const c = auditCategory(e.action); counts[c] = (counts[c] || 0) + 1; }
-  const cats = ['all', 'ai', 'approvals', 'rules', 'ssh'].filter((c) => c === 'all' || counts[c]);
+  const cats = ['all', 'ai', 'approvals', 'rules', 'ssh', 'deploy'].filter((c) => c === 'all' || counts[c]);
   $('auditChips').innerHTML = cats.map((c) => {
     const label = c === 'all' ? 'All' : CAT_META[c].label;
     return `<button class="chip-btn ${auditCat === c ? 'on' : ''}" data-cat="${c}">${esc(label)} <span class="chip-n">${counts[c] || 0}</span></button>`;
@@ -2987,11 +3261,11 @@ function renderAudit() {
   $('auditBody').innerHTML = html;
   $('auditBody').querySelectorAll('.tl-chat[data-resume]').forEach((el) => el.addEventListener('click', (ev) => {
     if (ev.target.closest('summary')) return;
-    closeAudit(); openAgent();
+    openAgent(); // the audit view stays open underneath
   }));
 }
 
-$('btnAuditResume').addEventListener('click', () => { closeAudit(); openAgent(); });
+$('btnAuditResume').addEventListener('click', () => openAgent());
 $('btnAuditRefresh').addEventListener('click', openAudit);
 $('btnAuditClose').addEventListener('click', closeAudit);
 document.addEventListener('keydown', (e) => {
@@ -3009,6 +3283,7 @@ const CC_ICON = {
   schema: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="7" height="6" rx="1"/><rect x="14" y="15" width="7" height="6" rx="1"/><rect x="3" y="15" width="7" height="6" rx="1"/><path d="M6.5 9v3h11v3M6.5 15v-3"/></svg>',
   server: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><path d="M7 7.5h.01M7 16.5h.01"/></svg>',
   history: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>',
+  rocket: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M14 4c3-1 6-1 6-1s0 3-1 6c-1.5 4-5 7-8 9l-4-4c2-3 5-6.5 9-8z"/><path d="M9 15l-3 6 6-3"/><circle cx="14.5" cy="9.5" r="1.5"/><path d="M5 12l-2 1 3 3M12 19l1 2 3-3"/></svg>',
   settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
 };
 const TOOLS = [
@@ -3024,6 +3299,9 @@ const TOOLS = [
   { id: 'servers', name: 'SSH Servers', tag: 'Infrastructure', accent: '--amber', icon: CC_ICON.server,
     desc: 'Manage SSH servers, watch live VM stats, and open full terminals.',
     launch: () => openServers() },
+  { id: 'deploy', name: 'The Ascension', tag: 'Deploy', accent: '--green', icon: CC_ICON.rocket,
+    desc: 'Build → deploy → ship: connect a repo, detect its stack, review the plan and the deploy map, then ship to a VPS or shared host with one click: or one CLI command.',
+    launch: () => openDeploy() },
   { id: 'history', name: 'History', tag: 'Audit', accent: '--red', icon: CC_ICON.history,
     desc: 'Timeline of every decision, edit, SSH session and AI action.',
     launch: () => openAudit() },
@@ -3048,9 +3326,32 @@ function renderCompass() {
   }).join('') || `<div class="empty" style="padding:1rem">No tools match "${esc(q)}".</div>`;
   $('compassGrid').querySelectorAll('[data-tool]').forEach((b) => b.addEventListener('click', () => { const t = TOOLS.find((x) => x.id === b.dataset.tool); if (t) t.launch(); }));
 }
+/* ---------- quick access: floating compass listing every module (visible everywhere) ---------- */
+function renderQuickFab() {
+  const compassIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/></svg>';
+  const items = TOOLS.map((t) => `<button class="qfab-item" role="menuitem" data-qf="${t.id}" style="--tool-accent:var(${t.accent})"><span class="qi">${t.icon}</span><span><b>${esc(t.name)}</b><span class="qd">${esc(t.tag)}</span></span></button>`).join('');
+  $('qfabMenu').innerHTML = `<div class="qfab-head">Modules</div><button class="qfab-item" role="menuitem" data-qf="__compass"><span class="qi">${compassIcon}</span><span><b>Compass</b><span class="qd">Home</span></span></button>${items}<div class="qfab-head">Assistant</div><button class="qfab-item" role="menuitem" data-qf="__agent" style="--tool-accent:var(--accent)"><span class="qi"><img class="ai-mini" src="/assets/robot-logo-animated_1.svg" alt="" aria-hidden="true" style="height:18px"></span><span><b>AI agent</b><span class="qd">Works across every module</span></span></button>`;
+}
+$('quickFab').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-qf]');
+  if (!b) { if (e.target.closest('.qfab-btn')) $('quickFab').classList.toggle('open'); return; }
+  $('quickFab').classList.remove('open');
+  const id = b.dataset.qf;
+  const leaveAscension = () => { if (typeof closeDeploy === 'function' && $('deployDrawer').classList.contains('open')) closeDeploy(); };
+  if (id === '__compass') { leaveAscension(); showCompass(); return; }
+  if (id === '__agent') { openAgent(); return; }
+  const t = TOOLS.find((x) => x.id === id); if (!t) return;
+  if (id !== 'deploy') leaveAscension();
+  t.launch();
+});
+document.addEventListener('click', (e) => { if (!e.target.closest('#quickFab')) $('quickFab').classList.remove('open'); });
+renderQuickFab();
+raiseQuickFab();
+
 const compassVisible = () => document.body.classList.contains('view-compass');
-// which module the user is looking at — sent with each AI chat so replies are contextual
+// which module the user is looking at: sent with each AI chat so replies are contextual
 function currentModuleLabel() {
+  if ($('deployDrawer').classList.contains('open')) return 'The Ascension (deploy)';
   if ($('serversDrawer').classList.contains('open')) return 'SSH Servers';
   if ($('auditDrawer').classList.contains('open')) return 'History';
   if ($('sshDrawer').classList.contains('open')) return 'SSH Console';
@@ -3060,7 +3361,8 @@ function currentModuleLabel() {
   return $('toolCrumb').textContent || 'MySQL Update Tool';
 }
 function closeAllDrawers() {
-  ['agentDrawer', 'serversDrawer', 'sshDrawer', 'auditDrawer'].forEach((id) => $(id).classList.remove('open'));
+  // the AI agent window is deliberately not in this list: it floats above every view and survives navigation
+  ['serversDrawer', 'deployDrawer', 'sshDrawer', 'auditDrawer'].forEach((id) => $(id).classList.remove('open'));
   ['schemaModal', 'ddlModal'].forEach((id) => { const d = $(id); if (d && d.open) d.close(); });
 }
 function setView(v) { // 'compass' | 'mysql' | 'settings'
@@ -3122,13 +3424,14 @@ async function renderSettings() {
     $('setSqlPage').value = s.sqlConsoleMaxRows;
     $('setReqBackup').checked = !!s.requireBackupBeforeApprove;
     $('setAllowWrites').checked = !!s.allowWrites;
+    document.querySelectorAll('#settingsModal [data-assist]').forEach((cb) => { cb.checked = !!s.aiAssist?.[cb.dataset.assist]; });
     $('setPreviewCeil').textContent = `(max ${s.ceilings.maxPreviewRows})`;
     $('setSqlPageCeil').textContent = `(max ${s.ceilings.sqlConsoleMaxRows})`;
     $('setDbName').textContent = state.config?.database || 'the database';
   } catch (e) { toast('Settings load failed: ' + e.message, 'error'); }
   try {
     const d = await api('/api/connections');
-    $('setConnCount').textContent = `— ${d.profiles.length}`;
+    $('setConnCount').textContent = `${d.profiles.length}`;
     $('setConnList').innerHTML = d.profiles.length ? d.profiles.map((p) => `
       <div class="settings-row">
         <span class="sr-name">${esc(p.name)}</span>
@@ -3140,7 +3443,7 @@ async function renderSettings() {
   try {
     const d = await api('/api/ssh/sessions');
     const conn = d.sessions.filter((s) => s.connected).length;
-    $('setSrvCount').textContent = d.sessions.length ? `— ${conn}/${d.sessions.length} connected` : '';
+    $('setSrvCount').textContent = d.sessions.length ? `${conn}/${d.sessions.length} connected` : '';
     $('setSrvList').innerHTML = d.sessions.length ? d.sessions.map((s) => `
       <div class="settings-row">
         <span class="srv-dot ${s.connected ? 'on' : ''}"></span>
@@ -3149,7 +3452,22 @@ async function renderSettings() {
         <span class="sr-sub">${esc(s.user)}@${esc(s.host)}</span>
       </div>`).join('') : '<div class="empty">No SSH-enabled profiles.</div>';
   } catch (e) { $('setSrvList').innerHTML = `<div class="empty" style="color:var(--red)">${esc(e.message)}</div>`; }
+  if (typeof renderDeploySettings === 'function') renderDeploySettings();
 }
+/* ---------- theme (dark / light / system) ---------- */
+const prefTheme = () => { try { return localStorage.getItem('st-theme') || 'dark'; } catch { return 'dark'; } };
+function applyTheme(pref) {
+  const t = pref === 'system' ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : pref;
+  document.documentElement.dataset.theme = t;
+  try { localStorage.setItem('st-theme', pref); } catch {}
+  document.querySelectorAll('#setTheme [data-theme]').forEach((b) => b.classList.toggle('on', b.dataset.theme === pref));
+}
+applyTheme(prefTheme());
+matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => { if (prefTheme() === 'system') applyTheme('system'); });
+const toggleTheme = () => applyTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light');
+$('btnTheme').addEventListener('click', toggleTheme);
+$('setTheme').addEventListener('click', (e) => { const b = e.target.closest('[data-theme]'); if (b) applyTheme(b.dataset.theme); });
+
 // client preferences (auto-save)
 $('setOrient').addEventListener('click', (e) => { const b = e.target.closest('[data-orient]'); if (!b) return; applyDrawerOrient(b.dataset.orient); renderSettings(); });
 $('setStartup').addEventListener('change', () => { try { localStorage.setItem('st-startup', $('setStartup').value); } catch {} });
@@ -3165,10 +3483,15 @@ $('setReqBackup').addEventListener('change', () => putSetting({ requireBackupBef
 $('setSqlPage').addEventListener('change', () => putSetting({ sqlConsoleMaxRows: Number($('setSqlPage').value) }).then((s) => { if (s) $('setSqlPage').value = s.sqlConsoleMaxRows; }));
 $('setPreview').addEventListener('change', () => putSetting({ maxPreviewRows: Number($('setPreview').value) }).then((s) => { if (s) $('setPreview').value = s.maxPreviewRows; }));
 $('btnSettingsClose').addEventListener('click', () => $('settingsModal').close());
+// AI assistant: opt-in deploy capabilities (server-side, they gate the assistant's tools)
+document.querySelectorAll('#settingsModal [data-assist]').forEach((cb) => cb.addEventListener('change', async () => {
+  try { await putSetting({ aiAssist: { [cb.dataset.assist]: cb.checked } }); if (typeof loadDeploy === 'function' && $('deployDrawer').classList.contains('open')) loadDeploy().catch(() => {}); }
+  catch { cb.checked = !cb.checked; }
+}));
 $('btnManageConns').addEventListener('click', () => { $('settingsModal').close(); $('connForm').hidden = true; loadConns().catch((e) => toast(e.message)); $('connModal').showModal(); });
 $('btnManageServers').addEventListener('click', () => { $('settingsModal').close(); openServers(); });
 // nav sidebar: switch the visible section + breadcrumb
-const SETTINGS_SECTIONS = { appearance: 'Appearance & view', sql: 'SQL console', rules: 'Rules & preview', ai: 'AI assistant', db: 'Database connections', ssh: 'SSH servers' };
+const SETTINGS_SECTIONS = { appearance: 'Appearance & view', sql: 'SQL console', rules: 'Rules & preview', ai: 'AI assistant', db: 'Database connections', ssh: 'SSH servers', deploy: 'The Ascension' };
 function showSettingsSection(sec) {
   if (!SETTINGS_SECTIONS[sec]) return;
   document.querySelectorAll('#settingsNav .nav-item').forEach((b) => b.classList.toggle('active', b.dataset.sec === sec));
@@ -3183,7 +3506,7 @@ $('settingsSearch').addEventListener('input', () => {
   if (q && first) showSettingsSection(first.dataset.sec);
 });
 
-/* ---------- drawer orientation (vertical/right or horizontal/bottom) — docked drawers only ---------- */
+/* ---------- drawer orientation (vertical/right or horizontal/bottom): docked drawers only ---------- */
 const DRAWER_ORIENT_KEY = 'st-drawer-orient';
 const DOCK_ICON = {
   vertical: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="18" height="16" rx="2"/><rect x="14" y="5" width="6.5" height="14" rx="1" fill="currentColor" stroke="none"/></svg>',
@@ -3194,7 +3517,7 @@ function applyDrawerOrient(o) {
   document.body.classList.toggle('drawers-h', horizontal);
   document.querySelectorAll('.btn-dock').forEach((b) => {
     b.innerHTML = horizontal ? DOCK_ICON.horizontal : DOCK_ICON.vertical;
-    b.title = horizontal ? 'Docked at the bottom (horizontal) — click to dock right' : 'Docked at the right (vertical) — click to dock at the bottom';
+    b.title = horizontal ? 'Docked at the bottom (horizontal): click to dock right' : 'Docked at the right (vertical): click to dock at the bottom';
   });
   try { localStorage.setItem(DRAWER_ORIENT_KEY, horizontal ? 'horizontal' : 'vertical'); } catch {}
   try { if (typeof refitConsoles === 'function') refitConsoles(); } catch {} // refit terminals to the new box
@@ -3205,18 +3528,46 @@ applyDrawerOrient(localStorage.getItem(DRAWER_ORIENT_KEY) || 'vertical'); // res
 // enable slide transitions only after the initial orientation is painted
 requestAnimationFrame(() => requestAnimationFrame(() => document.body.classList.add('drawers-ready')));
 
+/* ---------- Drawers: inert while closed, focus returns to the opener ----------
+   The side drawers slide off-screen with a transform, which keeps their controls in the tab order.
+   The inert attribute follows the .open class, and the element that opened a drawer gets focus back. */
+(function drawerA11y() {
+  const openers = new Map();
+  for (const id of ['serversDrawer', 'sshDrawer', 'auditDrawer', 'deployDrawer']) {
+    const el = $(id); if (!el) continue;
+    let wasOpen = el.classList.contains('open');
+    el.toggleAttribute('inert', !wasOpen);
+    new MutationObserver(() => {
+      const open = el.classList.contains('open');
+      if (open === wasOpen) return;
+      wasOpen = open;
+      if (open) {
+        el.removeAttribute('inert');
+        const a = document.activeElement; if (a && a !== document.body && !el.contains(a)) openers.set(id, a);
+      } else {
+        const inside = el.contains(document.activeElement);
+        el.setAttribute('inert', '');
+        const back = openers.get(id);
+        if (inside || document.activeElement === document.body) { if (back && back.isConnected && !back.closest('[inert]')) back.focus(); else $('btnCompass')?.focus(); }
+      }
+    }).observe(el, { attributes: true, attributeFilter: ['class'] });
+  }
+})();
+
 /* ---------- AI assistant: free-floating window (drag by header, resize from corner) ---------- */
 const AI_GEOM_KEY = 'st-ai-geom';
+let agentUserResized = false; // set once the corner grip is used; until then the window hugs its content
 function saveAgentGeom() {
-  const r = $('agentDrawer').getBoundingClientRect();
-  try { localStorage.setItem(AI_GEOM_KEY, JSON.stringify({ left: r.left, top: r.top, w: r.width, h: r.height })); } catch {}
+  const el = $('agentDrawer'); const r = el.getBoundingClientRect();
+  const h = agentUserResized || el.style.height ? r.height : null;
+  try { localStorage.setItem(AI_GEOM_KEY, JSON.stringify({ left: r.left, top: r.top, w: r.width, h })); } catch {}
 }
 function restoreAgentGeom() { // called when the window opens
   const el = $('agentDrawer');
   let g = null; try { g = JSON.parse(localStorage.getItem(AI_GEOM_KEY)); } catch {}
   if (!g) return;
   el.style.width = Math.min(g.w, window.innerWidth * 0.96) + 'px';
-  el.style.height = Math.min(g.h, window.innerHeight * 0.92) + 'px';
+  if (g.h) el.style.height = Math.min(g.h, window.innerHeight * 0.8) + 'px';
   el.style.left = Math.min(Math.max(0, g.left), window.innerWidth - 80) + 'px';
   el.style.top = Math.min(Math.max(0, g.top), window.innerHeight - 60) + 'px';
   el.style.right = 'auto';
@@ -3225,7 +3576,7 @@ function restoreAgentGeom() { // called when the window opens
   const el = $('agentDrawer'); if (!el) return;
   const header = el.querySelector(':scope > div'); // the title/controls row is the drag handle
   header.addEventListener('pointerdown', (e) => {
-    if (e.target.closest('button')) return; // clicking a control must not start a drag
+    if (e.target.closest('button, input, .ag-menu')) return; // controls and the options menu are not drag targets
     const r = el.getBoundingClientRect();
     const ox = e.clientX - r.left, oy = e.clientY - r.top;
     // pin current position as left/top before dropping the right anchor (avoids a jump)
@@ -3239,8 +3590,13 @@ function restoreAgentGeom() { // called when the window opens
     window.addEventListener('pointerup', up);
     e.preventDefault();
   });
+  // the native corner grip: a pointerdown near the bottom-right corner marks a user resize (content growth is not one)
+  el.addEventListener('pointerdown', (e) => {
+    const r = el.getBoundingClientRect();
+    if (r.right - e.clientX < 22 && r.bottom - e.clientY < 22) agentUserResized = true;
+  });
   let roTimer = 0; // persist size after the native corner-resize settles
-  new ResizeObserver(() => { if (el.classList.contains('open')) { clearTimeout(roTimer); roTimer = setTimeout(saveAgentGeom, 200); } }).observe(el);
+  new ResizeObserver(() => { if (el.classList.contains('open') && agentUserResized) { clearTimeout(roTimer); roTimer = setTimeout(saveAgentGeom, 200); } }).observe(el);
 })();
 
 (async function init() {
