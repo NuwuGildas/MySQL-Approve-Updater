@@ -25,10 +25,57 @@ anytime with the **❓ Tour** button in the header. Note: intro.js is AGPL-3.0 /
 commercially dual-licensed — fine for internal use, but check the license before
 distributing this tool.
 
-**Theme and quick access.** Dark by default; switch to light (or follow the OS) under
-*Settings → Appearance* or with the sun/moon button in the header and in The Ascension;
-the choice is remembered per browser. The floating compass button in the bottom-right
-corner lists every module and the AI agent from anywhere, including inside The Ascension.
+**Navigation shell.** One persistent navigation column (Home; Database: Updates, SQL console,
+Schema map; Infrastructure: Deployments, Servers; Workspace: Connections, History; Settings and the
+guided tour at the bottom) with hash routes such as `#/database/updates`, `#/deployments/targets/<id>`
+and `#/servers`. Browser Back/Forward and direct links work; the current page is marked with
+`aria-current`; the sidebar collapses to icons under 1100px and becomes an off-canvas menu behind the
+header button under 768px. The Ascension, Servers and History fill the content area next to the
+sidebar. The header keeps the app identity, the assistant, the theme switch and Settings; the approval
+session controls (Pause, Resume, Abort) moved into a session bar on the Updates page. The green dot in
+the header means the browser is connected to Server Tools, not that a database or server is healthy.
+
+**Pages.** SQL console, Schema map, Connections and Settings are full pages inside the shell (`#/database/sql`,
+`#/database/schema`, `#/connections`, `#/settings/<section>`); Escape returns to the previous page. The schema
+inspector lists tables for keyboard navigation and becomes a bottom sheet on phones. History has search,
+time and outcome filters that persist. In Deployments, **New deployment** starts the five-step wizard, a
+resource switcher shows Targets, Repositories, Secrets or Cloud servers, and tabs are labelled Run vs Target.
+A terminal opened from a server card gets its own address (`#/servers/<id>/terminal`). The assistant can
+dock beside the workspace on wide screens from its ⋯ menu.
+
+**Connectors.** The Connectors page (`#/connectors`) holds GitHub and GitLab accounts. Paste a personal
+access token once (or point at a vault secret): it is stored in the encrypted vault under a
+`GITHUB_TOKEN_*` / `GITLAB_TOKEN_*` name, verified against the provider (`/user`), and the card shows the
+account, its scopes and the verification state. "Browse repositories" lists what the token can see and
+**Connect** prefills the repository form with the clone URL, default branch and the token reference.
+GitHub Enterprise and self-managed GitLab work through the base URL. API: `/api/connectors`
+(list, create, update, verify, repos, delete). Tokens never leave the vault.
+
+**Deployment targets.** The target dialog is organised by intent: **Source** (repository, its branch,
+"Deploy automatically when `main` changes") and **Server** (destination, connection method, host or server
+profile, username, vault secret with an inline "+ Secret", deployment directory, **Test connection**), then
+collapsible **Environment**, **Health checks**, **Release settings**, **Automation details** and **Advanced
+overrides**, each with a one-line summary. New targets get a prefilled name, default ports (21 / 990 / the
+profile's SSH port), a derived releases folder and the build strategy implied by the destination; existing
+targets keep every explicit value. **Test & create / Test & save** connects and probes the draft first
+(`POST /api/deploy/targets/test`), with "Save without testing" as the fallback. The webhook secret is
+shown for saved targets and rotated with an explicit, confirmed action.
+
+**Adding a server.** The Add server dialog offers three ways to authenticate: the **Server Tools key**
+(recommended: one ed25519 key pair generated on first use under `deploy-keys/server-tools.key`; the dialog
+shows the one-line command that appends its public half to the server's `authorized_keys`, and the same
+key works for every server), **My own key** (paste a private key, stored owner-only under `deploy-keys/`,
+or point to a key file on this machine) or a **Password**. Private keys are never returned by the API.
+Ticking **Auto-install Claude CLI** connects right after saving and installs the CLI with the official script
+when it is missing; you then run `claude` once in the server's terminal to log in.
+
+**Views, modals and type.** The Ascension, Servers and History render as in-flow views next to the
+sidebar (no sliding drawers). The connection profile form and the Add server form open as modal dialogs.
+The UI uses a 16px base size and the Manrope typeface in both themes (loaded from Google Fonts with a
+local fallback); consoles, code and logs stay monospace.
+
+**Theme.** Dark by default; switch to light (or follow the OS) under *Settings → Appearance* or with
+the sun/moon button in the header and in The Ascension; the choice is remembered per browser.
 
 **Deploy assistance (opt-in).** Under *Settings → AI assistant → Deploy assistance* you can grant
 the assistant extra, read-only capabilities for The Ascension. Each one is off by default:

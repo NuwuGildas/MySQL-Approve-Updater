@@ -21,3 +21,5 @@ deploy-master.key
 deploy-servers.json*
 /deploy-keys
 deploy-templates.json*
+connectors.json
+connectors.json.tmp

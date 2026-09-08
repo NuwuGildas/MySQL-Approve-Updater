@@ -692,6 +692,9 @@ function renderQueue() {
   $('btnPause').disabled = !s || s.status !== 'running';
   $('btnResume').disabled = !s || s.status !== 'paused';
   $('btnAbort').disabled = !s || ['aborted','done'].includes(s.status);
+  document.body.classList.toggle('queue-paused', !!s && s.status === 'paused');
+  const banner = $('pausedBanner');
+  if (banner) banner.hidden = !(s && s.status === 'paused');
   if (!s) {
     q.innerHTML = '<div class="empty">Run a preview to load changes.</div>';
     updateToolbar(); // the early return must not skip toolbar state (buttons, backup links)
@@ -790,9 +793,9 @@ function cardHtml(c, s, active) {
     ? `<div class="note">Current DB value(s): ${esc(JSON.stringify(c.currentValues))}. Re-run the preview to act on this row.</div>` : '';
   const actions = c.status === 'pending'
     ? `<div class="actions">
-        <button class="approve" data-decide="approve" data-id="${c.id}">Approve${active?' <kbd>A</kbd>':''}</button>
-        <button class="reject" data-decide="reject" data-id="${c.id}">Reject${active?' <kbd>R</kbd>':''}</button>
-        <button data-decide="skip" data-id="${c.id}">Skip${active?' <kbd>S</kbd>':''}</button>
+        <button class="approve" data-decide="approve" data-id="${c.id}" ${state.session?.status !== 'running' ? 'disabled' : ''}>Approve${active?' <kbd>A</kbd>':''}</button>
+        <button class="reject" data-decide="reject" data-id="${c.id}" ${state.session?.status !== 'running' ? 'disabled' : ''}>Reject${active?' <kbd>R</kbd>':''}</button>
+        <button data-decide="skip" data-id="${c.id}" ${state.session?.status !== 'running' ? 'disabled' : ''}>Skip${active?' <kbd>S</kbd>':''}</button>
         ${aiReviewButton(c)}
       </div>`
     : `<span class="badge ${c.status}">${c.status}</span>`;
@@ -929,9 +932,9 @@ function renderCardModal() {
   }).join('');
   const actions = c.status === 'pending'
     ? `<div class="actions">
-        <button class="approve" data-decide="approve" data-id="${c.id}">Approve <kbd>A</kbd></button>
-        <button class="reject" data-decide="reject" data-id="${c.id}">Reject <kbd>R</kbd></button>
-        <button data-decide="skip" data-id="${c.id}">Skip <kbd>S</kbd></button>
+        <button class="approve" data-decide="approve" data-id="${c.id}" ${state.session?.status !== 'running' ? 'disabled' : ''}>Approve <kbd>A</kbd></button>
+        <button class="reject" data-decide="reject" data-id="${c.id}" ${state.session?.status !== 'running' ? 'disabled' : ''}>Reject <kbd>R</kbd></button>
+        <button data-decide="skip" data-id="${c.id}" ${state.session?.status !== 'running' ? 'disabled' : ''}>Skip <kbd>S</kbd></button>
         ${aiReviewButton(c)}
       </div>` : '';
   const staleInfo = c.status === 'stale' && c.currentValues
@@ -997,6 +1000,8 @@ $('cardModal').addEventListener('close', () => { modalChangeId = null; });
 let deciding = false;
 async function decide(changeId, action) {
   if (deciding) return;
+  const blocked = decisionBlockedReason(changeId);
+  if (blocked) { toast(blocked, 'warning'); return; }
   if (action === 'approve' && !(await confirmNoBackup('Approve this row anyway?'))) return;
   if (deciding) return; // re-check: another decision may have started while the dialog was open
   deciding = true;
@@ -1005,12 +1010,34 @@ async function decide(changeId, action) {
   finally { deciding = false; }
 }
 
+/* Decision eligibility, shared by buttons, batch actions and shortcuts (the server enforces it too). */
+function decisionBlockedReason(changeId) {
+  const s = state.session;
+  if (!s) return 'No approval session is loaded.';
+  if (s.status === 'paused') return 'The session is paused: press Resume to decide again.';
+  if (s.status !== 'running') return `The session is ${s.status}: no decisions can be made.`;
+  if (changeId && !s.changes.some((c) => c.id === changeId && c.status === 'pending')) return 'That row is no longer pending.';
+  return null;
+}
+/* the approval workspace is "active" only when the Updates page is the visible page and nothing sits above it */
+function approvalWorkspaceActive() {
+  if (!document.body.classList.contains('view-mysql')) return false;
+  if (['serversDrawer', 'deployDrawer', 'sshDrawer', 'auditDrawer', 'connectorsDrawer'].some((id) => $(id)?.classList.contains('open'))) return false;
+  if ($('agentDrawer')?.classList.contains('open') && $('agentDrawer').contains(document.activeElement)) return false;
+  const openDialog = document.querySelector('dialog[open]');
+  if (openDialog && openDialog.id !== 'cardModal') return false;
+  return true;
+}
 document.addEventListener('keydown', (e) => {
-  if (['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName)) return;
+  if (e.repeat || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+  const t = e.target;
+  if (t && (['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName) || t.isContentEditable || t.closest?.('.xterm, .CodeMirror, [contenteditable]'))) return;
   const map = { a: 'approve', r: 'reject', s: 'skip' };
-  const action = map[e.key.toLowerCase()];
+  const action = map[String(e.key).toLowerCase()];
   if (!action || !state.session) return;
-  // while the large card view is open, shortcuts act on that card
+  if (!approvalWorkspaceActive()) return; // Home, Settings, Deployments, terminals...: the shortcut does nothing
+  if (decisionBlockedReason(null)) { e.preventDefault(); toast(decisionBlockedReason(null), 'warning'); return; }
+  // while the large card view is open, shortcuts act on that card; otherwise on the first visible pending row
   const target = modalChangeId && $('cardModal').open
     ? state.session.changes.find((c) => c.id === modalChangeId && c.status === 'pending')
     : state.session.changes.find((c) => c.status === 'pending');
@@ -1306,7 +1333,7 @@ function fillConnForm(p) {
   $('cName').focus();
 }
 
-$('btnConns').addEventListener('click', () => { $('connForm').hidden = true; loadConns().catch((e) => toast(e.message)); $('connModal').showModal(); });
+// Connections opens from the sidebar (navigation.js: openConnectionsPage)
 $('btnCloseConn').addEventListener('click', () => $('connModal').close());
 $('btnNewConn').addEventListener('click', () => fillConnForm(null));
 $('btnCancelConn').addEventListener('click', () => { $('connForm').hidden = true; });
@@ -1648,7 +1675,10 @@ function dbErrorBlock(e, { retry, compact = false } = {}) {
   el.innerHTML = `<b>${esc(info ? info.title : 'The database request failed')}</b>${info ? `<div class="hint">${esc(info.hint)}</div>` : ''}
     <div class="actions"><button type="button" class="primary" data-db="edit">Edit connection</button>${retry ? '<button type="button" data-db="retry">Retry</button>' : ''}</div>
     ${info || !compact ? `<details><summary>Technical details</summary><pre>${esc(raw)}</pre></details>` : ''}`;
-  el.querySelector('[data-db="edit"]').addEventListener('click', () => { ['schemaModal', 'settingsModal'].forEach((id) => { const d = $(id); if (d?.open) d.close(); }); $('connForm').hidden = true; loadConns().catch((err) => toast(err.message, 'error')); $('connModal').showModal(); });
+  el.querySelector('[data-db="edit"]').addEventListener('click', () => {
+    if (typeof openConnectionsPage === 'function') return openConnectionsPage(); // the Connections page (router)
+    ['schemaModal', 'settingsModal'].forEach((id) => { const d = $(id); if (d?.open) d.close(); }); $('connForm').hidden = true; loadConns().catch((err) => toast(err.message, 'error')); $('connModal').showModal();
+  });
   if (retry) el.querySelector('[data-db="retry"]').addEventListener('click', retry);
   return el;
 }
@@ -1783,7 +1813,7 @@ function toggleSqlConsole() {
     closeAiSqlPrompt(); // don't orphan the prompt bar above a closed drawer
   }
 }
-$('sqlBar').addEventListener('click', (e) => { if (e.target.tagName !== 'BUTTON') toggleSqlConsole(); });
+$('sqlBar').addEventListener('click', (e) => { if (e.target.tagName !== 'BUTTON' && !document.body.classList.contains('page-sql')) toggleSqlConsole(); }); // on the SQL page the bar is a toolbar, not a toggle
 $('btnSqlToggle').addEventListener('click', toggleSqlConsole);
 
 const sqlState = { sql: '', page: 0, result: null, transposed: false };
@@ -2264,36 +2294,46 @@ function sqlTableRedraw() {
 
 /* ---------- guided tour (intro.js) ---------- */
 function startTour() {
-  if (typeof introJs === 'undefined') { toast('Tour library not loaded: run npm install and restart the server'); return; }
+  if (typeof introJs === 'undefined') { toast('Tour library not loaded: run npm install and restart the server', 'error'); return; }
   localStorage.setItem('mau-tour-seen', '1');
+  // the tour walks the shell page by page: each step names the route it belongs to and the element it highlights
+  const go = (r) => { if (typeof navigate === 'function') navigate(r, { focus: false }); };
+  const origin = location.hash || '#/home';
   const steps = [
-    { title: 'Welcome', intro: 'This tool runs <b>rule-based batch updates</b> on MySQL with one hard guarantee: <b>nothing is written without your explicit approval</b>.' },
-    { element: '#btnConns', title: 'Connections', intro: 'Manage <b>connection profiles</b>: database credentials plus an optional SSH tunnel. Test them and switch between them; switching is blocked while changes are pending.' },
-    { element: '#secRuleList > summary', title: 'Saved rules', intro: '<b>Run preview</b> fetches matching rows and computes proposed changes, in memory only. <b>SQL</b> exports the exact queries a rule generates. The rule with an active session is highlighted.' },
-    { element: '#btnNewRule', title: 'Rule editor', intro: 'New rule, the pencil (edit) and the copy (duplicate) buttons all open the rule editor modal. A rule is a <b>fetch</b> (table, WHERE as raw SQL, server-capped LIMIT) plus <b>transforms</b> applied in order: find/replace with regex and capture groups, trim, case, prefix/suffix, fixed value.' },
-    { element: '#btnSchemaMap', title: 'Schema tools', intro: '<b>Load schema</b> fills table and column autocomplete. <b>Schema map</b> opens a visual diagram: drag cards, follow relation lines, click a card for details, row counts and its CREATE TABLE.' },
-    { element: '#queueToolbar', title: 'Batch and backup', intro: 'Select cards for <b>batch approve / reject / skip</b>. Every preview auto-saves a <b>restore script</b> server-side. Download it here; you will be warned if you approve without a local copy.' },
-    { element: '#queue', title: 'Approval cards', intro: 'Each card shows a <b>before/after diff</b> of one row. <b>Approve</b> writes exactly that row (parameterized, verified, stale-guarded: externally modified rows are never overwritten). The Edit button hand-tunes the proposed value, the expand button opens a large view. Keys: <b>A / R / S</b>.' },
-    { element: '#dashPanel', title: 'Live progress', intro: 'Counts, progress bar and activity log update in real time. Every decision is also appended to <b>audit.log</b>.' },
-    { element: '#btnAbort', title: 'Session control', intro: '<b>Pause</b> blocks approvals server-side; <b>Abort</b> discards all pending changes (nothing written). The full audit trail can be downloaded from the <b>More</b> menu in the header.' },
-    { title: 'All set', intro: 'Define a rule, then <b>Run preview</b>, then approve change by change (or in batches). Re-run this tour anytime from the <b>More</b> menu in the header.' },
+    { title: 'Welcome to Server Tools', intro: 'One shell, several tools: <b>database updates with per-row approval</b>, a SQL console, a schema map, <b>deployments</b>, SSH servers and a complete history. Two rules hold everywhere: nothing is written to a database and nothing is shipped to a server without <b>your explicit approval</b>. This tour moves between pages as it goes; use Next, Back or the arrow keys.' },
+    { element: '#appNav', route: '#/home', title: 'Navigation', intro: 'Every module is one click away and has its own address (for example <code>#/deployments</code>), so browser Back/Forward, reload and bookmarks work. On narrower screens the sidebar collapses to icons; on phones it sits behind the ☰ button in the header.' },
+    { element: '#compassGrid', route: '#/home', title: 'Home', intro: 'The Compass shows the same tools as cards with a short description and a search box. The green dot in the header only means this browser is connected to the app, not that a database or server is healthy.' },
+    { element: '#rulesPanel', route: '#/database/updates', title: 'Updates: rules', intro: 'A rule is a <b>fetch</b> (table, WHERE, limit) plus an ordered list of <b>transforms</b>. <b>Run preview</b> fetches the matching rows and computes the proposed changes in memory only. New rule, edit and duplicate open the rule editor; Import loads exported JSON.' },
+    { element: '#queuePanel', route: '#/database/updates', title: 'Approval queue', intro: 'Each card is one row with a before/after diff. <b>Approve</b> writes exactly that row (parameterized and stale-guarded); Reject and Skip write nothing. Select cards for batch decisions and download the auto-saved restore script. Keyboard <b>A / R / S</b> act on the highlighted card only while this page is visible and the session is running.' },
+    { element: '#sessionBar', route: '#/database/updates', title: 'Session controls', intro: '<b>Pause</b> blocks every decision, on the server too; <b>Resume</b> lifts it; <b>Abort</b> discards all pending changes without writing anything. The session state and the active database profile are always shown here.' },
+    { element: '#sqlBar', route: '#/database/sql', title: 'SQL console', intro: 'A full page: editor on the left, results on the right (stacked on phones). It is <b>read-only</b> unless you enable writes in Settings, which then asks before destructive statements. Ctrl+Enter runs, Ctrl+Shift+/ asks the assistant for a query. <b>Load schema</b> powers autocomplete here and in the rule editor; <b>Schema map</b> draws tables and relations with an inspector and a searchable table list.' },
+    { element: '#deployDrawer .asc-head', route: '#/deployments', title: 'Deployments · The Ascension', intro: '<b>New deployment</b> starts the five-step guided setup: source, framework, destination, access, review. <b>Add ▾</b> creates single repositories, targets, secrets or cloud servers and imports or exports the configuration. Secrets live in an encrypted vault and never appear in plans or logs.' },
+    { element: '#deployMain', route: '#/deployments', title: 'Plan, Ship, Verify', intro: 'Pick a target and follow the pipeline: Test → Fetch → Detect → Plan → Ship → Verify. <b>Plan</b> is a read-only dry run listing every command; <b>Ship</b> executes the reviewed plan (atomic swap where the target supports it) and rolls back when the health check fails; <b>Rollback</b> returns to a previous release. Tabs marked <i>Run</i> describe the selected run, tabs marked <i>Target</i> the target itself.' },
+    { element: '#serversDrawer .ssh-head', route: '#/servers', title: 'Servers', intro: '<b>+ Add server</b> asks how to authenticate: the <b>Server Tools key</b> (one command on the server, no key handling), your own key, or a password. It can also install the Claude CLI on the box. <b>Connect</b> shows live VM stats; <b>Terminal</b> opens a full console in its own page.' },
+    { element: '#auditDrawer .audit-filters', route: '#/history', title: 'History', intro: 'Every decision, edit, SSH session, deploy run and AI action, grouped by day. Filter by category chips, search text, time range and outcome; the filters are remembered between visits. The raw JSON-lines file downloads from the header.' },
+    { element: '.ai-agent', title: 'AI assistant', intro: 'Works across every module from this button and floats above whatever you are doing. Its database access is read-only; rule changes, deploy manifests and deploy actions arrive as <b>proposals you approve in the chat</b>. Replies stream live and can be stopped. Optional deploy capabilities (repo files, plan diffs, health checks, log search, guardrail templates, pre-ship review) are switched on under Settings → AI assistant.' },
+    { element: '#appNav [data-nav="settings"]', title: 'Settings and this tour', intro: 'Appearance and theme, SQL writes, rule limits, assistant capabilities, connections, servers and deploy options live in Settings. Run this tour again anytime from <b>Guided tour</b> just above it.' },
   ];
   const t = introJs.tour ? introJs.tour() : introJs();
   t.setOptions({
-    steps,
-    showProgress: true,
-    exitOnOverlayClick: true,
-    scrollToElement: true,
-    tooltipRenderAsHtml: true,
-    tooltipClass: 'mau-tour',
-    nextLabel: 'Next',
-    prevLabel: 'Back',
-    doneLabel: 'Done',
+    steps: steps.map(({ route, ...s }) => s),
+    showProgress: true, exitOnOverlayClick: true, scrollToElement: true, tooltipRenderAsHtml: true, tooltipClass: 'mau-tour',
+    nextLabel: 'Next', prevLabel: 'Back', doneLabel: 'Done', disableInteraction: true,
   });
-  // targets can live inside inner scrollable panels intro.js cannot scroll itself
-  const ensureVisible = (el) => { try { el?.scrollIntoView({ block: 'nearest' }); } catch {} };
-  if (typeof t.onBeforeChange === 'function') t.onBeforeChange(ensureVisible);
-  else if (typeof t.onbeforechange === 'function') t.onbeforechange(ensureVisible);
+  // before each step: open the page it belongs to, give the view a moment to lay out, then let intro.js highlight
+  const beforeChange = async function (el, stepIndex) {
+    // intro.js hands us the element about to be shown: resolve the step from it (the index argument lags one step behind)
+    let s = el ? steps.find((x) => x.element && (el.matches?.(x.element) || el === document.querySelector(x.element))) : null;
+    if (!s && typeof stepIndex === 'number') s = steps[stepIndex];
+    if (s?.route && location.hash !== s.route) { go(s.route); await new Promise((r) => setTimeout(r, s.route.startsWith('#/deploy') ? 600 : 300)); }
+    try { (el || document.querySelector(s?.element || ''))?.scrollIntoView?.({ block: 'nearest' }); } catch {}
+    return true;
+  };
+  if (typeof t.onBeforeChange === 'function') t.onBeforeChange(beforeChange);
+  else if (typeof t.onbeforechange === 'function') t.onbeforechange(beforeChange);
+  const backToOrigin = () => { if (location.hash !== origin) go(origin); };
+  if (typeof t.onExit === 'function') t.onExit(backToOrigin); else if (typeof t.onexit === 'function') t.onexit(backToOrigin);
+  if (typeof t.onComplete === 'function') t.onComplete(backToOrigin); else if (typeof t.oncomplete === 'function') t.oncomplete(backToOrigin);
   t.start();
 }
 /* ---------- AI agent ---------- */
@@ -2325,6 +2365,14 @@ const closeAgentDrawer = () => {
   if (typeof HTMLDialogElement === 'undefined' || HTMLDialogElement.prototype.__stModal) return;
   HTMLDialogElement.prototype.__stModal = true;
   const stack = []; let backdrop = null;
+  const inertSaved = new Map(); // body children we made inert → whether they already were
+  const isFocusable = (el) => el && !el.disabled && !el.closest('[inert]') && el.getClientRects().length > 0;
+  const focusInto = (d) => {
+    if (d.contains(document.activeElement)) return;
+    const el = d.querySelector('[autofocus]') || [...d.querySelectorAll('input, select, textarea, button, [href], [tabindex]:not([tabindex="-1"])')].find(isFocusable);
+    try { (el || d).focus({ preventScroll: true }); } catch {}
+    if (!el && !d.hasAttribute('tabindex')) { d.setAttribute('tabindex', '-1'); try { d.focus({ preventScroll: true }); } catch {} }
+  };
   const sync = () => {
     if (!backdrop) {
       backdrop = document.createElement('div'); backdrop.id = 'stBackdrop'; backdrop.hidden = true;
@@ -2336,19 +2384,56 @@ const closeAgentDrawer = () => {
     document.body.classList.toggle('st-modal-open', !!top);
     stack.forEach((d, i) => { d.style.zIndex = String(1001 + i * 2); });
     if (top) backdrop.style.zIndex = String(1000 + (stack.length - 1) * 2);
+    // only the topmost dialog and the (intentionally available) assistant window can receive interaction
+    if (top) {
+      for (const el of document.body.children) {
+        const keep = el === top || el === backdrop || el.id === 'agentDrawer' || el.tagName === 'SCRIPT' || el.tagName === 'svg';
+        if (keep) { if (inertSaved.has(el) && !inertSaved.get(el)) el.removeAttribute('inert'); continue; }
+        if (!inertSaved.has(el)) inertSaved.set(el, el.hasAttribute('inert'));
+        el.setAttribute('inert', '');
+      }
+      document.documentElement.classList.add('st-scroll-lock');
+      focusInto(top);
+    } else {
+      for (const [el, had] of inertSaved) if (!had) el.removeAttribute('inert');
+      inertSaved.clear();
+      document.documentElement.classList.remove('st-scroll-lock');
+    }
   };
   HTMLDialogElement.prototype.showModal = function () {
     if (this.open) return;
     this.dataset.stModal = '1';
+    this.__stOpener = document.activeElement && document.activeElement !== document.body ? document.activeElement : null;
     this.show();
     stack.push(this);
     this.addEventListener('close', () => {
       const i = stack.indexOf(this); if (i >= 0) stack.splice(i, 1);
       delete this.dataset.stModal; this.style.zIndex = ''; sync();
+      const back = this.__stOpener; this.__stOpener = null;
+      const below = stack[stack.length - 1];
+      if (below) focusInto(below);
+      else if (back && back.isConnected && !back.closest('[inert]') && back.getClientRects().length) { try { back.focus({ preventScroll: true }); } catch {} }
     }, { once: true });
     sync();
     raiseAgentWindow(); // keep the agent above the dialog it may have been asked from
   };
+  // Tab / Shift+Tab wrap inside the topmost dialog (focus never reaches the browser chrome or the page behind)
+  document.addEventListener('keydown', (e) => {
+    const top = stack[stack.length - 1]; if (!top || e.key !== 'Tab') return;
+    if ($('agentDrawer')?.contains(e.target)) return; // the assistant window keeps its own natural order
+    const items = [...top.querySelectorAll('input, select, textarea, button, [href], [tabindex]:not([tabindex="-1"])')].filter(isFocusable);
+    if (!items.length) return;
+    const first = items[0], last = items[items.length - 1];
+    if (!e.shiftKey && (e.target === last || !top.contains(e.target))) { e.preventDefault(); first.focus(); }
+    else if (e.shiftKey && (e.target === first || !top.contains(e.target))) { e.preventDefault(); last.focus(); }
+  });
+  // a Tab that escapes the dialog (e.g. from the last control) wraps back into it
+  document.addEventListener('focusin', (e) => {
+    const top = stack[stack.length - 1]; if (!top) return;
+    const t = e.target;
+    if (top.contains(t) || $('agentDrawer')?.contains(t) || t === document.body) return;
+    focusInto(top);
+  });
   document.addEventListener('keydown', (e) => { // Escape = native cancel: cancelable "cancel" event, then close()
     if (e.key !== 'Escape' || e.defaultPrevented || !stack.length) return;
     const top = stack[stack.length - 1]; if (!top.open) return;
@@ -2763,15 +2848,7 @@ $('btnAgentDisconnect').addEventListener('click', async () => {
   }
 });
 
-$('moreMenu').addEventListener('change', async () => {
-  const action = $('moreMenu').value;
-  $('moreMenu').value = '';
-  if (action === 'tour') startTour();
-  else if (action === 'audit') openAudit();
-  else if (action === 'ssh') openSsh();
-  else if (action === 'servers') openServers();
-  else if (action === 'deploy') openDeploy();
-});
+// the More menu was replaced by the sidebar (navigation.js)
 
 /* ---------- SSH servers (cards with live VM meta) ---------- */
 const closeServers = () => $('serversDrawer').classList.remove('open');
@@ -2879,8 +2956,25 @@ function serverCard(s) {
 }
 
 /* add SSH server (creates an ssh-only connection profile) */
-$('btnAddServer').addEventListener('click', () => { $('addServerForm').hidden = false; $('asName').focus(); });
-$('btnAddServerCancel').addEventListener('click', () => { $('addServerForm').hidden = true; $('addServerForm').reset(); });
+$('btnAddServer').addEventListener('click', () => { $('addServerForm').hidden = false; $('asName').focus(); loadAppKey(); });
+/* authentication choice: app-managed key (default), pasted key, or password */
+let asAuth = 'app-key';
+function setAsAuth(mode) {
+  asAuth = mode;
+  $('asAuthChoice').querySelectorAll('[data-auth]').forEach((b) => { const on = b.dataset.auth === mode; b.classList.toggle('on', on); b.setAttribute('aria-checked', String(on)); });
+  $('asAuthApp').hidden = mode !== 'app-key'; $('asAuthOwn').hidden = mode !== 'own-key'; $('asAuthPass').hidden = mode !== 'password';
+  $('asPass').required = mode === 'password';
+}
+$('asAuthChoice').addEventListener('click', (e) => { const b = e.target.closest('[data-auth]'); if (b) setAsAuth(b.dataset.auth); });
+let appKeyInfo = null;
+async function loadAppKey() {
+  if (appKeyInfo) return appKeyInfo;
+  try { appKeyInfo = await api('/api/ssh/app-key'); $('asAppKeyCmd').textContent = appKeyInfo.installCmd; $('asAppKeyFp').textContent = `Key fingerprint ${appKeyInfo.fingerprint}`; }
+  catch (e) { $('asAppKeyCmd').textContent = 'could not load the key: ' + e.message; }
+  return appKeyInfo;
+}
+$('btnAsCopyKey').addEventListener('click', async () => { if (!appKeyInfo) await loadAppKey(); try { await navigator.clipboard.writeText(appKeyInfo.installCmd); toast('Install command copied', 'success'); } catch { toast('Clipboard blocked: select the command and copy it', 'warning'); } });
+$('btnAddServerCancel').addEventListener('click', () => { $('addServerForm').hidden = true; $('addServerForm').reset(); setAsAuth('app-key'); });
 $('addServerForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const body = {
@@ -2889,16 +2983,28 @@ $('addServerForm').addEventListener('submit', async (e) => {
     db: {},
     ssh: {
       enabled: true, host: $('asHost').value.trim(), port: Number($('asPort').value) || 22,
-      user: $('asUser').value.trim(), password: $('asPass').value,
-      privateKeyPath: $('asKey').value.trim(), passphrase: $('asPhrase').value,
+      user: $('asUser').value.trim(), auth: asAuth,
+      password: asAuth === 'password' ? $('asPass').value : '',
+      privateKeyInline: asAuth === 'own-key' ? $('asKeyInline').value : '',
+      privateKeyPath: asAuth === 'own-key' ? $('asKey').value.trim() : '', passphrase: asAuth === 'own-key' ? $('asPhrase').value : '',
     },
   };
+  if (asAuth === 'own-key' && !body.ssh.privateKeyInline.trim() && !body.ssh.privateKeyPath) { toast('Paste a private key or give a key file path', 'warning'); $('asKeyInline').focus(); return; }
+  const bootstrap = $('asBootstrapClaude').checked;
   try {
-    await api('/api/connections', { method: 'POST', body: JSON.stringify(body) });
-    $('addServerForm').hidden = true; $('addServerForm').reset();
+    const saved = await api('/api/connections', { method: 'POST', body: JSON.stringify(body) });
+    $('addServerForm').hidden = true; $('addServerForm').reset(); setAsAuth('app-key');
     await loadServers();
-    toast(`SSH server "${body.name}" added`);
-  } catch (err) { toast(err.message); }
+    toast(`SSH server "${body.name}" added`, 'success');
+    if (bootstrap) {
+      toast(`Installing the Claude CLI on ${body.name}…`, 'loading');
+      try {
+        const r = await api(`/api/ssh/sessions/${saved.id}/bootstrap-claude`, { method: 'POST' });
+        toast(r.ok ? `Claude CLI ${r.alreadyInstalled ? 'already present' : 'installed'} on ${body.name}. ${r.next}` : `Claude CLI install did not complete on ${body.name}: open its terminal to finish (see History for the output)`, r.ok ? 'success' : 'warning');
+        await loadServers();
+      } catch (e) { toast(`Claude CLI bootstrap failed: ${e.message}`, 'error'); }
+    }
+  } catch (err) { toast(err.message, 'error'); }
 });
 $('btnServersClose').addEventListener('click', closeServers);
 $('btnServersRefresh').addEventListener('click', loadServers);
@@ -3065,7 +3171,7 @@ async function openSsh(profileId, opts = {}) {
   const c = { id, profileId: pid, ai, label, floating: false, statusCls: '' };
   consoles.set(id, c);
   $('sshConsoleHost').appendChild(buildConsoleEl(c));
-  c.term = new Terminal({ cursorBlink: true, fontSize: 13, fontFamily: 'ui-monospace, Consolas, monospace', theme: { background: '#0b0f13', foreground: '#dce3ea', cursor: '#4da3ff' } });
+  c.term = new Terminal({ cursorBlink: true, fontSize: 13, fontFamily: 'ui-monospace, Consolas, monospace', theme: termTheme() });
   c.fit = new FitAddon.FitAddon(); c.term.loadAddon(c.fit);
   c.term.open(c.termHost);
   showSshDrawer(); activateConsole(id);
@@ -3135,7 +3241,7 @@ function auditCategory(a) {
   if (a === 'ai-chat' || a === 'ai-chat-cancelled') return 'ai';
   if (a === 'approve') return 'approvals';
   if (a.startsWith('ssh')) return 'ssh';
-  if (a.startsWith('deploy') || a.startsWith('agent-deploy')) return 'deploy';
+  if (a.startsWith('deploy') || a.startsWith('agent-deploy') || a.startsWith('connector')) return 'deploy';
   if (a.startsWith('agent-rule') || ['preview', 'reject', 'skip', 'edit', 'abort', 'clear'].includes(a)) return 'rules';
   return 'rules';
 }
@@ -3158,8 +3264,14 @@ function auditDescribe(e) {
   switch (a) {
     case 'ai-chat': return null; // rendered as a chat bubble instead
     case 'ai-chat-cancelled': return 'AI reply stopped by the user' + (e.tools && e.tools.length ? ' after ' + esc(e.tools.join(', ')) : '');
+    case 'connector-add': return `Connector <b>${esc(e.connector || '')}</b> (${esc(e.kind || '')}) added${e.status === 'ok' ? ' and verified' : ': verification failed'}`;
+    case 'connector-update': return `Connector <b>${esc(e.connector || '')}</b> updated${e.status === 'ok' ? ' and verified' : ''}`;
+    case 'connector-verify': return `Connector <b>${esc(e.connector || '')}</b> verified: ${esc(e.status || '')}`;
+    case 'connector-remove': return `Connector <b>${esc(e.connector || '')}</b> removed`;
     case 'deploy-log-to-chat': return `Deploy log of run ${esc(e.runId || '')} (${esc(e.target || '')}) shared with the AI chat`;
     case 'deploy-agent-action': return `AI-proposed deploy action approved: <b>${esc(e.deployAction || '')}</b> on <b>${esc(e.target || '')}</b>${e.runId ? ` (run ${esc(e.runId)})` : ''}`;
+    case 'agent-deploy-action-approved': case 'agent-deploy-action-rejected': return `AI-proposed deploy action <b>${esc(e.proposalAction || '')}</b> on <b>${esc(e.target || '')}</b>: ${a.endsWith('approved') ? 'approved' : 'rejected'}`;
+    case 'agent-deploy-manifest-approved': case 'agent-deploy-manifest-rejected': return `AI-proposed manifest for <b>${esc(e.target || '')}</b>: ${a.endsWith('approved') ? 'approved and saved' : 'rejected'}`;
     case 'deploy-preship-review': return `AI pre-ship review of <b>${esc(e.target || '')}</b>: ${esc(e.verdict || '')}${e.findings ? ` (${e.findings} finding${e.findings === 1 ? '' : 's'})` : ''}`;
     case 'preview': return `Previewed${rule}${tbl}: ${e.matchedRows} matched, ${e.proposedChanges} would change`;
     case 'approve': return `Approved a change${tbl}${e.pk !== undefined ? ` (id ${esc(String(e.pk))})` : ''}`;
@@ -3278,6 +3390,7 @@ document.addEventListener('keydown', (e) => {
    tool is just another entry here. "Workspace" tools reveal <main> (the MySQL
    tool); "panel" tools slide their drawer over the hub. */
 const CC_ICON = {
+  connectors: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M9 7H6a3 3 0 0 0 0 6h3M15 7h3a3 3 0 0 1 0 6h-3"/><path d="M8 10h8"/><path d="M12 13v4M9 21h6M12 17l-2 4M12 17l2 4"/></svg>',
   db: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>',
   console: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>',
   schema: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="7" height="6" rx="1"/><rect x="14" y="15" width="7" height="6" rx="1"/><rect x="3" y="15" width="7" height="6" rx="1"/><path d="M6.5 9v3h11v3M6.5 15v-3"/></svg>',
@@ -3287,22 +3400,25 @@ const CC_ICON = {
   settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
 };
 const TOOLS = [
-  { id: 'mysql', name: 'MySQL Update Tool', tag: 'Database', accent: '--accent', icon: CC_ICON.db,
+  { id: 'mysql', name: 'Updates', route: '#/database/updates', tag: 'Database', accent: '--accent', icon: CC_ICON.db,
     desc: 'Rule-based batch updates with preview, per-row human approval and backups.',
     launch: () => revealWorkspace('MySQL Update Tool') },
-  { id: 'sql', name: 'SQL Console', tag: 'Database', accent: '--green', icon: CC_ICON.console,
+  { id: 'sql', name: 'SQL console', route: '#/database/sql', tag: 'Database', accent: '--green', icon: CC_ICON.console,
     desc: 'Read-only SQL console with schema autocomplete, export, and AI query generation.',
     launch: () => { revealWorkspace('SQL Console'); if (!$('sqlConsole').classList.contains('open')) toggleSqlConsole(); } },
-  { id: 'schema', name: 'Schema Map', tag: 'Database', accent: '--purple', icon: CC_ICON.schema,
+  { id: 'schema', name: 'Schema map', route: '#/database/schema', tag: 'Database', accent: '--purple', icon: CC_ICON.schema,
     desc: 'Visualize tables and relations; inspect columns, row counts and CREATE TABLE.',
     launch: () => { revealWorkspace('Schema Map'); $('btnSchemaMap').click(); } },
-  { id: 'servers', name: 'SSH Servers', tag: 'Infrastructure', accent: '--amber', icon: CC_ICON.server,
+  { id: 'connectors', name: 'Connectors', route: '#/connectors', tag: 'Infrastructure', accent: '--purple', icon: CC_ICON.connectors,
+    desc: 'GitHub and GitLab accounts: verify a token once, browse repositories and connect them for deployment.',
+    launch: () => openConnectors() },
+  { id: 'servers', name: 'Servers', route: '#/servers', tag: 'Infrastructure', accent: '--amber', icon: CC_ICON.server,
     desc: 'Manage SSH servers, watch live VM stats, and open full terminals.',
     launch: () => openServers() },
-  { id: 'deploy', name: 'The Ascension', tag: 'Deploy', accent: '--green', icon: CC_ICON.rocket,
+  { id: 'deploy', name: 'Deployments', route: '#/deployments', tag: 'The Ascension', accent: '--green', icon: CC_ICON.rocket,
     desc: 'Build → deploy → ship: connect a repo, detect its stack, review the plan and the deploy map, then ship to a VPS or shared host with one click: or one CLI command.',
     launch: () => openDeploy() },
-  { id: 'history', name: 'History', tag: 'Audit', accent: '--red', icon: CC_ICON.history,
+  { id: 'history', name: 'History', route: '#/history', tag: 'Audit', accent: '--red', icon: CC_ICON.history,
     desc: 'Timeline of every decision, edit, SSH session and AI action.',
     launch: () => openAudit() },
   { id: 'settings', name: 'Settings', tag: 'Configure', accent: '--muted', icon: CC_ICON.settings,
@@ -3313,6 +3429,7 @@ const TOOLS = [
 // global role and can intervene across every module (see the header button).
 function toolStatus() { return null; }
 function renderCompass() {
+  const focusedTool = document.activeElement?.closest?.('#compassGrid [data-tool]')?.dataset.tool || null;
   const q = ($('compassSearch')?.value || '').toLowerCase().trim();
   const list = TOOLS.filter((t) => !q || `${t.name} ${t.desc} ${t.tag}`.toLowerCase().includes(q));
   $('compassGrid').innerHTML = list.map((t) => {
@@ -3324,15 +3441,18 @@ function renderCompass() {
       <span class="cc-foot"><span class="cc-tag">${esc(t.tag)}</span>${st ? `<span class="cc-status ${st.on ? 'on' : ''}">${esc(st.text)}</span>` : ''}<span class="cc-open">Open →</span></span>
     </button>`;
   }).join('') || `<div class="empty" style="padding:1rem">No tools match "${esc(q)}".</div>`;
-  $('compassGrid').querySelectorAll('[data-tool]').forEach((b) => b.addEventListener('click', () => { const t = TOOLS.find((x) => x.id === b.dataset.tool); if (t) t.launch(); }));
+  $('compassGrid').querySelectorAll('[data-tool]').forEach((b) => b.addEventListener('click', () => { const t = TOOLS.find((x) => x.id === b.dataset.tool); if (!t) return; if (typeof navigate === 'function' && t.route) navigate(t.route); else t.launch(); }));
+  // re-rendering must not drop keyboard focus: keep it on the card that had it
+  if (focusedTool) $('compassGrid').querySelector(`[data-tool="${focusedTool}"]`)?.focus({ preventScroll: true });
 }
 /* ---------- quick access: floating compass listing every module (visible everywhere) ---------- */
 function renderQuickFab() {
+  if (!$('qfabMenu')) return;
   const compassIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/></svg>';
   const items = TOOLS.map((t) => `<button class="qfab-item" role="menuitem" data-qf="${t.id}" style="--tool-accent:var(${t.accent})"><span class="qi">${t.icon}</span><span><b>${esc(t.name)}</b><span class="qd">${esc(t.tag)}</span></span></button>`).join('');
   $('qfabMenu').innerHTML = `<div class="qfab-head">Modules</div><button class="qfab-item" role="menuitem" data-qf="__compass"><span class="qi">${compassIcon}</span><span><b>Compass</b><span class="qd">Home</span></span></button>${items}<div class="qfab-head">Assistant</div><button class="qfab-item" role="menuitem" data-qf="__agent" style="--tool-accent:var(--accent)"><span class="qi"><img class="ai-mini" src="/assets/robot-logo-animated_1.svg" alt="" aria-hidden="true" style="height:18px"></span><span><b>AI agent</b><span class="qd">Works across every module</span></span></button>`;
 }
-$('quickFab').addEventListener('click', (e) => {
+if ($('quickFab')) $('quickFab').addEventListener('click', (e) => {
   const b = e.target.closest('[data-qf]');
   if (!b) { if (e.target.closest('.qfab-btn')) $('quickFab').classList.toggle('open'); return; }
   $('quickFab').classList.remove('open');
@@ -3344,9 +3464,7 @@ $('quickFab').addEventListener('click', (e) => {
   if (id !== 'deploy') leaveAscension();
   t.launch();
 });
-document.addEventListener('click', (e) => { if (!e.target.closest('#quickFab')) $('quickFab').classList.remove('open'); });
-renderQuickFab();
-raiseQuickFab();
+if ($('quickFab')) { document.addEventListener('click', (e) => { if (!e.target.closest('#quickFab')) $('quickFab').classList.remove('open'); }); renderQuickFab(); raiseQuickFab(); }
 
 const compassVisible = () => document.body.classList.contains('view-compass');
 // which module the user is looking at: sent with each AI chat so replies are contextual
@@ -3358,11 +3476,12 @@ function currentModuleLabel() {
   if ($('settingsModal').open) return 'Settings';
   if ($('schemaModal').open) return 'Schema Map';
   if (compassVisible()) return 'Compass (home)';
+  if ($('sqlConsole').classList.contains('open')) return 'SQL Console';
   return $('toolCrumb').textContent || 'MySQL Update Tool';
 }
 function closeAllDrawers() {
   // the AI agent window is deliberately not in this list: it floats above every view and survives navigation
-  ['serversDrawer', 'deployDrawer', 'sshDrawer', 'auditDrawer'].forEach((id) => $(id).classList.remove('open'));
+  ['serversDrawer', 'deployDrawer', 'sshDrawer', 'auditDrawer', 'connectorsDrawer'].forEach((id) => $(id)?.classList.remove('open'));
   ['schemaModal', 'ddlModal'].forEach((id) => { const d = $(id); if (d && d.open) d.close(); });
 }
 function setView(v) { // 'compass' | 'mysql' | 'settings'
@@ -3376,7 +3495,7 @@ function showCompass() {
   setView('compass');
   $('toolCrumb').textContent = '';
   renderCompass();
-  const s = $('compassSearch'); if (s) { s.value = ''; s.focus(); }
+  const s = $('compassSearch'); if (s) s.value = ''; // focus is handled by the router (page heading / opener)
 }
 let tourOffered = false;
 function offerTourOnce() { if (tourOffered) return; tourOffered = true; if (!localStorage.getItem('mau-tour-seen')) setTimeout(startTour, 600); }
@@ -3391,9 +3510,6 @@ function showSettings() { // Settings is a modal over the current view
   renderSettings();
   if (!$('settingsModal').open) $('settingsModal').showModal();
 }
-$('homeLogo').addEventListener('click', showCompass);
-$('homeTitle').addEventListener('click', showCompass);
-$('btnCompass').addEventListener('click', showCompass);
 $('btnSettings').addEventListener('click', showSettings);
 $('compassSearch').addEventListener('input', renderCompass);
 
@@ -3456,9 +3572,15 @@ async function renderSettings() {
 }
 /* ---------- theme (dark / light / system) ---------- */
 const prefTheme = () => { try { return localStorage.getItem('st-theme') || 'dark'; } catch { return 'dark'; } };
+/* terminal colours follow the app theme (light: paper background, dark: console black) */
+function termTheme() {
+  return document.documentElement.dataset.theme === 'light'
+    ? { background: '#f0f3f7', foreground: '#1b2430', cursor: '#1e6fd9', cursorAccent: '#ffffff', selectionBackground: '#1e6fd933', black: '#1b2430', red: '#c9333a', green: '#1f8a4c', yellow: '#b8791d', blue: '#1e6fd9', magenta: '#6b4fd8', cyan: '#0e7490', white: '#5f6f82', brightBlack: '#5f6f82', brightRed: '#c9333a', brightGreen: '#1f8a4c', brightYellow: '#b8791d', brightBlue: '#1e6fd9', brightMagenta: '#6b4fd8', brightCyan: '#0e7490', brightWhite: '#1b2430' }
+    : { background: '#0b0f13', foreground: '#dce3ea', cursor: '#4da3ff' };
+}
 function applyTheme(pref) {
   const t = pref === 'system' ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : pref;
-  document.documentElement.dataset.theme = t;
+  document.documentElement.dataset.theme = t; if (typeof consoles !== 'undefined') for (const c of consoles.values()) { try { if (c.term) c.term.options.theme = termTheme(); } catch {} }
   try { localStorage.setItem('st-theme', pref); } catch {}
   document.querySelectorAll('#setTheme [data-theme]').forEach((b) => b.classList.toggle('on', b.dataset.theme === pref));
 }
@@ -3533,7 +3655,7 @@ requestAnimationFrame(() => requestAnimationFrame(() => document.body.classList.
    The inert attribute follows the .open class, and the element that opened a drawer gets focus back. */
 (function drawerA11y() {
   const openers = new Map();
-  for (const id of ['serversDrawer', 'sshDrawer', 'auditDrawer', 'deployDrawer']) {
+  for (const id of ['serversDrawer', 'sshDrawer', 'auditDrawer', 'deployDrawer', 'connectorsDrawer']) {
     const el = $(id); if (!el) continue;
     let wasOpen = el.classList.contains('open');
     el.toggleAttribute('inert', !wasOpen);
@@ -3543,12 +3665,14 @@ requestAnimationFrame(() => requestAnimationFrame(() => document.body.classList.
       wasOpen = open;
       if (open) {
         el.removeAttribute('inert');
-        const a = document.activeElement; if (a && a !== document.body && !el.contains(a)) openers.set(id, a);
+        const a = document.activeElement; if (a && a !== document.body && !el.contains(a)) openers.set(id, { el: a, sel: a.dataset?.tool ? `#compassGrid [data-tool="${a.dataset.tool}"]` : a.dataset?.nav ? `#appNav [data-nav="${a.dataset.nav}"]` : a.id ? '#' + a.id : null });
       } else {
         const inside = el.contains(document.activeElement);
         el.setAttribute('inert', '');
-        const back = openers.get(id);
-        if (inside || document.activeElement === document.body) { if (back && back.isConnected && !back.closest('[inert]')) back.focus(); else $('btnCompass')?.focus(); }
+        const o = openers.get(id);
+        // Home re-renders its cards, so a disconnected opener is looked up again by its selector
+        const back = o ? (o.el.isConnected ? o.el : o.sel ? document.querySelector(o.sel) : null) : null;
+        if (inside || document.activeElement === document.body) { if (back && !back.closest('[inert]')) back.focus(); else $('appNav')?.querySelector('[aria-current]')?.focus(); }
       }
     }).observe(el, { attributes: true, attributeFilter: ['class'] });
   }
@@ -3619,8 +3743,11 @@ function restoreAgentGeom() { // called when the window opens
   renderQueue(); renderDashboard();
   connectSSE();
   // land on the preferred startup view
-  const startup = prefStartup();
-  const last = (() => { try { return localStorage.getItem('st-last-view'); } catch { return null; } })();
-  if (startup === 'mysql' || (startup === 'last' && last === 'mysql')) revealWorkspace('MySQL Update Tool');
-  else showCompass();
+  if (typeof navStartup === 'function') navStartup();
+  else {
+    const startup = prefStartup();
+    const last = (() => { try { return localStorage.getItem('st-last-view'); } catch { return null; } })();
+    if (startup === 'mysql' || (startup === 'last' && last === 'mysql')) revealWorkspace('MySQL Update Tool');
+    else showCompass();
+  }
 })();

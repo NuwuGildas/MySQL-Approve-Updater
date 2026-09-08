@@ -224,7 +224,7 @@ function wzSync() {
   $('dpWizard').querySelectorAll('[data-wzt]').forEach((d) => { d.hidden = (d.dataset.wzt === 'sftp') !== ($('wzTransport').value === 'sftp'); });
   const p = (dp.status?.paasProviders || []).find((x) => x.id === $('wzPaas').value);
   $('wzPaasHint').textContent = p ? `${p.tokenHint}. Needs the ${p.cli} CLI on this machine.` : '';
-  if (p && $('wzPaasFields').dataset.for !== p.id) { $('wzPaasFields').dataset.for = p.id; $('wzPaasFields').innerHTML = p.fields.map((f) => `<label>${esc(f.label)}${f.required ? '' : ' <span class="hint">(optional)</span>'}</label><input data-wz-paas="${esc(f.key)}" placeholder="${esc(f.placeholder || '')}">`).join(''); }
+  if (p && $('wzPaasFields').dataset.for !== p.id) { $('wzPaasFields').dataset.for = p.id; $('wzPaasFields').innerHTML = p.fields.map((f) => `<label for="wzPaas-${esc(f.key)}">${esc(f.label)}${f.required || /optional/i.test(f.label) ? '' : ' <span class="hint">(optional)</span>'}</label><input id="wzPaas-${esc(f.key)}" data-wz-paas="${esc(f.key)}" placeholder="${esc(f.placeholder || '')}">`).join(''); }
   // smart names
   const repoName = wzRepoName();
   if (repoName && !$('wzTargetName').dataset.touched) $('wzTargetName').value = `${repoName}-${$('wzEnv').value === 'staging' ? 'staging' : $('wzEnv').value === 'dev' ? 'dev' : 'prod'}`;
@@ -495,7 +495,7 @@ function dpShowServer(x) {
   if (!x) return;
   const prof = dp.profiles.find((p) => p.id === x.profileId);
   confirmDialog({ title: `${x.name} · ${x.provider}`, okLabel: 'Close', cancelLabel: 'Add a target here', message: `<dl class="dp-kv"><dt>status</dt><dd>${esc(x.status)}${x.error ? ': ' + esc(x.error) : ''}</dd><dt>ip</dt><dd>${esc(x.ip || 'not assigned yet')}</dd><dt>region / size</dt><dd>${esc(x.region)} · ${esc(x.size)} · ${esc(x.image)}</dd><dt>recipe</dt><dd>${esc(x.recipe)}</dd><dt>ssh profile</dt><dd>${prof ? esc(prof.name) : (x.profileId ? esc(x.profileId) : 'not registered')}</dd><dt>private key</dt><dd>${esc(x.privateKeyPath || 'none')}</dd>${x.console ? `<dt>console</dt><dd><a href="${esc(x.console)}" target="_blank" rel="noopener">${esc(x.console)}</a></dd>` : ''}</dl>` })
-    .then((closed) => { if (!closed && x.profileId) { dpOpenTargetModal(null); setTimeout(() => { $('dtProfile').value = x.profileId; $('dtRoot').value = `/var/www/${x.name}`; $('dtHealth').value = x.ip ? `http://${x.ip}/` : ''; }, 50); } });
+    .then((closed) => { if (!closed && x.profileId) { dpOpenTargetModal(null); setTimeout(() => { $('dtType').value = 'vps-ssh'; $('dtProfile').value = x.profileId; tfState.rootTouched = true; $('dtRoot').value = `/var/www/${x.name}`; $('dtHealth').value = x.ip ? `http://${x.ip}/` : ''; }, 50); } });
 }
 async function dpOpenCloudModal() {
   try { dp.cloudMeta = dp.cloudMeta || await api('/api/deploy/cloud/providers'); } catch (e) { return toast(e.message, 'error'); }
@@ -773,6 +773,32 @@ async function dpWireAutoCard(t) {
 
 /* ---------- deploy map (SVG) ---------- */
 const STAGE_ORDER = ['connect', 'fetch', 'detect', 'plan', 'build', 'package', 'ship', 'activate', 'verify', 'rollback', 'cleanup'];
+/* Deploy map zoom and pan: the SVG viewBox is the camera. The view is kept per target across live re-renders. */
+function dpMapZoomInit(t, W, H) {
+  const wrap = $('dpMapWrap'), svg = wrap && wrap.querySelector('svg.asc-map'); if (!svg) return;
+  const base = { x: 0, y: 0, w: W, h: H };
+  let v = dp.mapView && dp.mapView.tid === t.id && dp.mapView.bw === W ? dp.mapView : { tid: t.id, bw: W, ...base };
+  const apply = () => { svg.setAttribute('viewBox', `${v.x} ${v.y} ${v.w} ${v.h}`); dp.mapView = v; const z = $('dpMapZoom'); if (z) z.textContent = Math.round((base.w / v.w) * 100) + '%'; };
+  const zoomAt = (factor, cx, cy) => { // cx/cy in map units stay under the cursor
+    const nw = Math.min(base.w * 3, Math.max(base.w / 8, v.w / factor)), nh = nw * (base.h / base.w);
+    v = { tid: t.id, bw: W, x: cx - (cx - v.x) * (nw / v.w), y: cy - (cy - v.y) * (nh / v.h), w: nw, h: nh }; apply();
+  };
+  const toMap = (ev) => { const r = svg.getBoundingClientRect(); return { x: v.x + ((ev.clientX - r.left) / r.width) * v.w, y: v.y + ((ev.clientY - r.top) / r.height) * v.h }; };
+  const fit = () => { v = { tid: t.id, bw: W, ...base }; apply(); };
+  wrap.addEventListener('wheel', (e) => { e.preventDefault(); const c = toMap(e); zoomAt(e.deltaY < 0 ? 1.15 : 1 / 1.15, c.x, c.y); }, { passive: false });
+  let drag = null;
+  wrap.addEventListener('pointerdown', (e) => { if (e.button !== 0 || e.target.closest('button')) return; drag = { x: e.clientX, y: e.clientY, vx: v.x, vy: v.y }; wrap.classList.add('dragging'); try { wrap.setPointerCapture(e.pointerId); } catch {} });
+  wrap.addEventListener('pointermove', (e) => { if (!drag) return; const r = svg.getBoundingClientRect(); v = { ...v, x: drag.vx - ((e.clientX - drag.x) / r.width) * v.w, y: drag.vy - ((e.clientY - drag.y) / r.height) * v.h }; apply(); });
+  const end = () => { drag = null; wrap.classList.remove('dragging'); };
+  wrap.addEventListener('pointerup', end); wrap.addEventListener('pointercancel', end); wrap.addEventListener('lostpointercapture', end);
+  wrap.addEventListener('dblclick', (e) => { if (!e.target.closest('button')) fit(); });
+  wrap.addEventListener('keydown', (e) => { if (e.key === '+' || e.key === '=') { e.preventDefault(); zoomAt(1.25, v.x + v.w / 2, v.y + v.h / 2); } else if (e.key === '-') { e.preventDefault(); zoomAt(1 / 1.25, v.x + v.w / 2, v.y + v.h / 2); } else if (e.key === '0') { e.preventDefault(); fit(); } else if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) { e.preventDefault(); const s = v.w * 0.08; v = { ...v, x: v.x + (e.key === 'ArrowRight' ? s : e.key === 'ArrowLeft' ? -s : 0), y: v.y + (e.key === 'ArrowDown' ? s : e.key === 'ArrowUp' ? -s : 0) }; apply(); } });
+  const bar = $('dpMap').querySelector('.asc-zoom');
+  bar.querySelector('[data-map="in"]').addEventListener('click', () => zoomAt(1.25, v.x + v.w / 2, v.y + v.h / 2));
+  bar.querySelector('[data-map="out"]').addEventListener('click', () => zoomAt(1 / 1.25, v.x + v.w / 2, v.y + v.h / 2));
+  bar.querySelector('[data-map="fit"]').addEventListener('click', fit);
+  apply();
+}
 function dpRenderMap(t) {
   const repo = dpRepoOf(t);
   const runs = dpRunsFor(t.id); const last = runs[0] || null;
@@ -846,8 +872,12 @@ function dpRenderMap(t) {
     <text class="health-txt ${verifyStatus}" x="${srvX + 16}" y="${y + nh + 22}">${t.healthUrl ? `health ${esc(cut(t.healthUrl.replace(/^https?:\/\//, ''), 26))} · ${esc(verifyStatus === 'pending' ? 'not checked' : verifyStatus)}` : 'no health check configured'}</text>
     ${pills}${legend}
   </svg>`;
-  $('dpMap').innerHTML = `<div class="asc-mapbar"><span class="hint">Live map of this target: nodes and arrows follow the ${last ? 'latest' : 'next'} run.</span><span class="spacer"></span><button data-act="map-releases" style="padding:.15rem .55rem;font-size:.72rem">${dp.releases ? 'Refresh releases' : 'Load releases from the server'}</button></div>${svg}`;
+  $('dpMap').innerHTML = `<div class="asc-mapbar"><span class="hint">Live map of this target: nodes and arrows follow the ${last ? 'latest' : 'next'} run. Wheel to zoom, drag to pan, double-click to fit.</span><span class="spacer"></span>
+      <span class="asc-zoom" role="group" aria-label="Zoom"><button type="button" data-map="out" title="Zoom out (-)" aria-label="Zoom out">−</button><span id="dpMapZoom" aria-live="polite">100%</span><button type="button" data-map="in" title="Zoom in (+)" aria-label="Zoom in">+</button><button type="button" data-map="fit" title="Fit the whole map (0)">Fit</button></span>
+      <button data-act="map-releases" style="padding:.15rem .55rem;font-size:.72rem">${dp.releases ? 'Refresh releases' : 'Load releases from the server'}</button></div>
+    <div class="asc-map-wrap" id="dpMapWrap" tabindex="0" aria-label="Deploy map: wheel to zoom, drag to pan, +/- keys to zoom, 0 to fit" style="--map-ar:${(W / H).toFixed(4)}">${svg}</div>`;
   $('dpMap').querySelector('[data-act="map-releases"]').addEventListener('click', async (e) => { e.stopPropagation(); try { dp.releases = await api(`/api/deploy/targets/${t.id}/releases`); dpRenderMap(t); } catch (err) { toast(err.message, 'error'); } });
+  dpMapZoomInit(t, W, H);
 }
 
 /* ---------- plan ---------- */
@@ -1132,85 +1162,344 @@ $('dpRepoForm').addEventListener('submit', async (e) => {
 });
 
 /* ---------- modals: target ---------- */
+/* ===== Deployment target form (create / edit) ==================================================
+   Intent-first layout: Source (what) → Server (where) → progressive disclosure (Environment, Health
+   checks, Release settings, Automation details, Advanced overrides). Field ids are unchanged so
+   templates, the wizard hand-off and dpTargetFormBody() keep working. Defaults are applied to NEW
+   targets only; an existing target is shown exactly as stored (custom ports, paths, strategies). */
+const TF_FIELD_FOR = [ // server-side validation message prefix → field id
+  ['transport.host', 'dtFtpHost'], ['transport.user', 'dtFtpUser'], ['transport.passwordRef', 'dtFtpPass'], ['transport.profileId', 'dtSftpProfile'], ['transport.port', 'dtFtpPort'],
+  ['paths.docroot', 'dtDocroot'], ['paths.home', 'dtHome'], ['paths.root', 'dtRoot'], ['ssh.profileId', 'dtProfile'], ['healthUrl', 'dtHealth'], ['overrides', 'dtOverrides'],
+  ['autoShip.branch', 'dtAutoBranch'], ['name', 'dtName'], ['repoId', 'dtRepo'], ['envFile', 'dtEnvTarget'], ['paas.tokenRef', 'dtPaasToken'], ['paas.provider', 'dtPaasProvider'], ['process.', 'dtProcName'], ['domain.email', 'dtSslEmail'], ['domain.', 'dtDomain'], ['keepReleases', 'dtKeep'], ['docrootStrategy', 'dtStrategy'], ['web.', 'dtWeb'], ['buildMode', 'dtBuild'],
+];
+let tfState = { isNew: true, nameTouched: false, homeTouched: false, docrootTouched: false, rootTouched: false, portTouched: false, testOk: false, testedSig: null, secretFor: null };
+const tfRepo = () => dp.repos.find((r) => r.id === $('dtRepo').value) || null;
+const tfRepoBranch = () => { const r = tfRepo(); return r?.source?.branch || r?.lastFetch?.branch || ''; };
+const tfSlug = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9_.-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'app';
+const tfProfileOf = (id) => dp.profiles.find((p) => p.id === id) || null;
+/** Releases folder derived from the deployment directory when the user left it empty (new targets). */
+function tfDeriveHome(docroot, transport) {
+  if (transport !== 'sftp') return '/'; // FTP accounts are chrooted: "/" is the account home
+  const parts = String(docroot || '').split('/').filter(Boolean);
+  return parts.length >= 2 ? '/' + parts.slice(0, -1).join('/') : '/';
+}
+function tfUniqueName(base) {
+  const taken = new Set(dp.targets.filter((x) => x.id !== dp.editingTarget?.id).map((x) => x.name));
+  let n = base, i = 2; while (taken.has(n)) n = `${base}-${i++}`; return n;
+}
+function tfParseConnUrl(str) {
+  const m = /^(sftp|ftps?):\/\/(?:([^:@/]+)(?::[^@/]*)?@)?([^:/\s]+)(?::(\d+))?(\/[^\s]*)?$/i.exec(String(str || '').trim());
+  if (!m) return null;
+  return { kind: m[1].toLowerCase(), user: m[2] ? decodeURIComponent(m[2]) : '', host: m[3], port: m[4] ? Number(m[4]) : null, path: m[5] ? m[5].replace(/\/+$/, '') || '/' : '' };
+}
+
 function dpOpenTargetModal(t) {
-  dp.editingTarget = t;
-  $('dpTargetTitle').textContent = t ? `Edit target "${t.name}"` : 'Add a deployment target';
+  dp.editingTarget = t && t.id ? t : null; // a template application passes { ...data, id: undefined }: a prefilled NEW target
+  const isNew = !dp.editingTarget;
+  tfState = { isNew, nameTouched: !!t?.name, homeTouched: !!t?.paths?.home, docrootTouched: !!t?.paths?.docroot, rootTouched: !!t?.paths?.root, portTouched: !!t?.transport?.port, testOk: false, testedSig: null, secretFor: null };
+  $('dpTargetTitle').textContent = isNew ? 'New deployment' : 'Edit deployment';
+  $('btnDtSubmit').textContent = isNew ? 'Test & create' : 'Test & save';
+  $('btnDtSaveAnyway').hidden = true;
   $('dtName').value = t?.name || '';
   dpFillSelect($('dtRepo'), dp.repos.map((r) => ({ value: r.id, label: r.name })), t?.repoId || dp.repos[0]?.id, dp.repos.length ? null : 'connect a repository first');
-  $('dtType').value = t?.type || 'vps-ssh'; $('dtBuild').value = t?.buildMode || 'auto';
+  $('dtType').value = t?.type || 'shared-hosting'; $('dtBuild').value = t?.buildMode && t.buildMode !== 'provider' ? t.buildMode : 'auto';
   const profs = dp.profiles.map((p) => ({ value: p.id, label: `${p.name} (${p.user}@${p.host})` }));
-  dpFillSelect($('dtProfile'), profs, t?.ssh?.profileId, profs.length ? 'SSH profile' : 'no SSH profiles: add one in SSH servers');
-  dpFillSelect($('dtSftpProfile'), profs, t?.transport?.profileId, profs.length ? 'SSH profile' : 'no SSH profiles: add one in SSH servers');
+  dpFillSelect($('dtProfile'), profs, t?.ssh?.profileId, profs.length ? 'Choose a server' : 'no SSH servers yet: add one');
+  dpFillSelect($('dtSftpProfile'), profs, t?.transport?.profileId, profs.length ? 'Choose a server' : 'no SSH servers yet: add one');
   $('dtRoot').value = t?.paths?.root || ''; $('dtWeb').value = t?.web?.server || 'nginx'; $('dtReload').value = t?.web?.reloadCmd || ''; $('dtFpm').value = t?.web?.phpFpmReload || '';
   $('dtProc').value = t?.process?.manager || 'none'; $('dtProcName').value = t?.process?.unit || t?.process?.name || '';
   $('dtDomain').value = t?.domain?.name || ''; $('dtSsl').checked = !!t?.domain?.ssl; $('dtSslEmail').value = t?.domain?.email || ''; $('dtWww').checked = !!t?.domain?.www;
-  $('dtTransport').value = t?.transport?.kind || 'sftp'; $('dtFtpHost').value = t?.transport?.host || ''; $('dtFtpPort').value = t?.transport?.port || ''; $('dtFtpUser').value = t?.transport?.user || '';
-  const secretOpts = dp.secrets.map((s) => ({ value: `\${vault:${s.name}}`, label: s.name }));
-  dpFillSelect($('dtFtpPass'), secretOpts, t?.transport?.passwordRef, secretOpts.length ? 'secret' : 'add a secret first');
+  $('dtTransport').value = t?.transport?.kind || 'sftp'; $('dtFtpHost').value = t?.transport?.host || ''; $('dtFtpPort').value = t?.transport?.port || ''; $('dtFtpUser').value = t?.transport?.user || ''; $('dtConnUrl').value = '';
+  dpRefreshSecretSelects(null, null, t);
   $('dtFtpSecure').value = t?.transport?.secure === 'implicit' ? 'implicit' : 'explicit';
   $('dtHome').value = t?.paths?.home || ''; $('dtDocroot').value = t?.paths?.docroot || ''; $('dtStrategy').value = t?.docrootStrategy || 'auto';
-  $('dtHealth').value = t?.healthUrl || ''; $('dtHealthRemote').checked = !!t?.healthRemote; $('dtKeep').value = t?.keepReleases || '';
-  dpFillSelect($('dtEnvVault'), dp.secrets.map((s) => ({ value: s.name, label: s.name })), t?.envFile?.fromVault || '', 'none');
+  $('dtHealthEnabled').checked = !!t?.healthUrl; $('dtHealth').value = t?.healthUrl || ''; $('dtHealthRemote').checked = !!t?.healthRemote; $('dtKeep').value = t?.keepReleases || '';
   $('dtEnvMode').value = t?.envFile?.mode || 'upload'; $('dtEnvTarget').value = t?.envFile?.target || '';
   $('dtOverrides').value = t?.overrides ? JSON.stringify(t.overrides, null, 2) : '';
   const provs = dp.status?.paasProviders || [];
   dpFillSelect($('dtPaasProvider'), provs.map((p) => ({ value: p.id, label: p.label })), t?.paas?.provider || 'vercel');
-  dpFillSelect($('dtPaasToken'), dp.secrets.map((x) => ({ value: '${vault:' + x.name + '}', label: x.name })), t?.paas?.tokenRef, dp.secrets.length ? 'token secret' : 'store the platform token in the vault first');
   $('dtPaasProd').checked = t?.paas?.prod !== false;
   dpPaasFields(t);
-  $('dtAutoEnabled').checked = !!t?.autoShip?.enabled; $('dtAutoMode').value = t?.autoShip?.mode || 'webhook'; $('dtAutoBranch').value = t?.autoShip?.branch || ''; $('dtAutoPoll').value = t?.autoShip?.pollMinutes || ''; $('dtAutoRotate').checked = false;
-  dpFillTemplates(t); $('dtAdvanced').open = !!(t && (t.envFile?.fromVault || t.overrides || t.autoShip?.enabled || (t.keepReleases && t.keepReleases !== 5)));
-  dpTargetSync(); $('dpTargetModal').showModal();
+  $('dtAutoEnabled').checked = !!t?.autoShip?.enabled; $('dtAutoMode').value = t?.autoShip?.mode || 'webhook'; $('dtAutoBranch').value = t?.autoShip?.branch || ''; $('dtAutoPoll').value = t?.autoShip?.pollMinutes || '';
+  dpFillTemplates(dp.editingTarget);
+  // disclosures start open only when they hold something non-default
+  $('dtSecEnv').open = !!t?.envFile?.fromVault;
+  $('dtSecHealth').open = !!t?.healthUrl;
+  $('dtSecRelease').open = !!(t && (t.docrootStrategy && t.docrootStrategy !== 'auto' || (t.keepReleases && ![2, 5].includes(Number(t.keepReleases))) || (t.paths?.home && t.type === 'shared-hosting' && t.paths.home !== tfDeriveHome(t.paths.docroot, t.transport?.kind))));
+  $('dtSecAuto').open = !!(t?.autoShip?.enabled && (t.autoShip.mode === 'poll' || t.autoShip.branch));
+  $('dtSecOverrides').open = !!t?.overrides;
+  $('dtConnAdv').open = !!(t?.transport && t.transport.kind !== 'sftp' && (t.transport.port && t.transport.port !== (t.transport.secure === 'implicit' ? 990 : 21) || t.transport.secure === 'implicit'));
+  $('dtVpsAdv').open = !!(t?.domain?.name || (t?.process?.manager && t.process.manager !== 'none') || (t?.buildMode && t.buildMode !== 'auto' && t.type === 'vps-ssh'));
+  tfClearErrors(); tfSetTestResult(null);
+  if (isNew && !t?.name) tfPrefillName();
+  dpTargetSync();
+  dpTargetWebhookInfo();
+  $('dpTargetModal').showModal();
+  setTimeout(() => $(isNew ? 'dtRepo' : 'dtName').focus(), 30);
 }
+function tfPrefillName() {
+  if (tfState.nameTouched) return;
+  const r = tfRepo(); if (!r) return;
+  $('dtName').value = tfUniqueName(`${tfSlug(r.name)}-prod`);
+}
+/** Secret selects (FTP password, platform token, environment file): refresh from dp.secrets, keep or set a value. */
+function dpRefreshSecretSelects(newName, forId, t) {
+  const refOpts = dp.secrets.map((s) => ({ value: `\${vault:${s.name}}`, label: s.name }));
+  const keep = (id, cur) => { const v = $(id).value; return newName && forId === id ? (id === 'dtEnvVault' ? newName : `\${vault:${newName}}`) : (v || cur || ''); };
+  dpFillSelect($('dtFtpPass'), refOpts, keep('dtFtpPass', t?.transport?.passwordRef), refOpts.length ? 'Choose a secret' : 'no secrets yet: add one');
+  dpFillSelect($('dtPaasToken'), refOpts, keep('dtPaasToken', t?.paas?.tokenRef), refOpts.length ? 'Choose a secret' : 'no secrets yet: add one');
+  dpFillSelect($('dtEnvVault'), dp.secrets.map((s) => ({ value: s.name, label: s.name })), keep('dtEnvVault', t?.envFile?.fromVault || ''), 'None');
+}
+
+/* ---- conditional rendering, derived defaults, summaries ---- */
 function dpTargetSync() {
-  const type = $('dtType').value, tr = $('dtTransport').value;
-  $('dpTargetModal').querySelectorAll('[data-type]').forEach((d) => { d.hidden = d.dataset.type !== type; });
-  $('dpTargetModal').querySelectorAll('[data-transport]').forEach((d) => { d.hidden = (d.dataset.transport === 'sftp') !== (tr === 'sftp'); });
-  $('dtBuild').disabled = type !== 'vps-ssh';
-  if (type === 'shared-hosting') $('dtBuild').value = 'local';
-  if (type === 'paas') $('dtBuild').value = 'auto';
-  const auto = $('dtAutoEnabled').checked, mode = $('dtAutoMode').value;
-  $('dtAutoRow').hidden = !auto; $('dtAutoHint').hidden = !auto;
-  $('dpTargetModal').querySelectorAll('[data-auto]').forEach((d) => { d.hidden = d.dataset.auto !== mode; });
+  const type = $('dtType').value, tr = $('dtTransport').value, isFtp = tr !== 'sftp';
+  const M = $('dpTargetModal');
+  M.querySelectorAll('[data-type]').forEach((d) => { d.hidden = d.dataset.type !== type; });
+  M.querySelectorAll('[data-type-only]').forEach((d) => { d.hidden = d.dataset.typeOnly !== type; });
+  M.querySelectorAll('[data-transport]').forEach((d) => { const k = d.dataset.transport; d.hidden = k === 'sftp' ? isFtp : k === 'ftps' ? tr !== 'ftps' : !isFtp; });
+  // build strategy is implied: shared hosting always builds locally, platforms decide themselves
+  if (type === 'shared-hosting') $('dtBuild').value = 'local'; else if (type === 'paas') $('dtBuild').value = 'auto';
+  // protocol defaults (placeholders, never overwriting an explicit port)
+  const defPort = tr === 'ftps' && $('dtFtpSecure').value === 'implicit' ? 990 : 21;
+  $('dtFtpPort').placeholder = String(defPort);
+  $('dtPortHelp').textContent = `Default for ${tr.toUpperCase()}: ${defPort}. Only change it for a custom port.`;
+  if (tfState.isNew && !tfState.docrootTouched && type === 'shared-hosting') {
+    const prof = tfProfileOf($('dtSftpProfile').value);
+    $('dtDocroot').value = !isFtp && prof?.user && prof.user !== 'root' ? `/home/${prof.user}/public_html` : '/public_html';
+  }
+  if (tfState.isNew && !tfState.rootTouched && type === 'vps-ssh') $('dtRoot').value = `/var/www/${tfSlug($('dtName').value)}`;
+  const derivedHome = tfDeriveHome($('dtDocroot').value.trim(), tr);
+  $('dtHome').placeholder = derivedHome;
+  $('dtHomeHelp').textContent = $('dtHome').value.trim() ? 'Custom releases folder for this target.' : `Derived from the deployment directory: ${derivedHome}. Leave empty to keep deriving it.`;
+  $('dtStrategy').querySelectorAll('option').forEach((o) => { o.disabled = isFtp && !['auto', 'in-place'].includes(o.value); });
+  if (type === 'shared-hosting' && isFtp && !['auto', 'in-place'].includes($('dtStrategy').value)) $('dtStrategy').value = 'auto';
+  // environment / health / automation subordinate fields
+  const envOn = !!$('dtEnvVault').value;
+  M.querySelectorAll('[data-env="on"]').forEach((d) => { d.hidden = !envOn; });
+  const healthOn = $('dtHealthEnabled').checked;
+  M.querySelectorAll('[data-health="on"]').forEach((d) => { d.hidden = !healthOn; });
+  $('dtHealthRemoteWrap').hidden = type !== 'vps-ssh';
+  const autoOn = $('dtAutoEnabled').checked, mode = $('dtAutoMode').value;
+  $('dtSecAuto').hidden = !autoOn;
+  M.querySelectorAll('[data-auto]').forEach((d) => { d.hidden = d.dataset.auto !== mode; });
+  $('dtProcNameWrap').hidden = $('dtProc').value === 'none';
+  $('dtTestBox').hidden = false;
+  // branch shown from the repository; automation may follow another one
+  const branch = tfRepoBranch();
+  $('dtBranchView').value = branch || 'default branch';
+  $('dtAutoBranchLabel').textContent = $('dtAutoBranch').value.trim() || branch || 'the default branch';
+  // summaries in collapsed headers
+  $('dtEnvSum').textContent = envOn ? `${$('dtEnvVault').value} · ${$('dtEnvMode').selectedOptions[0]?.textContent.toLowerCase() || ''} · ${$('dtEnvTarget').value.trim() || 'shared/.env'}` : 'None';
+  $('dtHealthSum').textContent = healthOn ? ($('dtHealth').value.trim().replace(/^https?:\/\//, '') || 'URL missing') + ($('dtHealthRemote').checked && type === 'vps-ssh' ? ' · from the server' : '') : 'Off';
+  const keep = $('dtKeep').value || (type === 'shared-hosting' ? 2 : 5);
+  const method = type === 'shared-hosting' ? ($('dtStrategy').selectedOptions[0]?.textContent.split(' (')[0].split(':')[0] || 'Auto') : type === 'vps-ssh' ? 'Atomic symlink swap' : 'Platform release';
+  $('dtReleaseSum').textContent = `${method} · keep ${keep}`;
+  $('dtAutoSum').textContent = autoOn ? `${mode === 'poll' ? `poll every ${$('dtAutoPoll').value || 5} min` : 'webhook'} · ${$('dtAutoBranch').value.trim() || branch || 'default branch'}` : '';
+  $('dtOverridesSum').textContent = $('dtOverrides').value.trim() ? 'Configured' : 'None';
+  $('dtConnSum').textContent = isFtp ? `${tr.toUpperCase()} · port ${$('dtFtpPort').value || defPort}${tr === 'ftps' ? ` · ${$('dtFtpSecure').value} TLS` : ''}` : 'SSH profile settings';
+  $('dtVpsSum').textContent = [$('dtDomain').value.trim() ? `domain ${$('dtDomain').value.trim()}` : '', $('dtProc').value !== 'none' ? $('dtProc').value : '', $('dtBuild').value !== 'auto' ? `build ${$('dtBuild').value}` : ''].filter(Boolean).join(' · ') || 'defaults';
+  // subtitle: repo · branch → destination
+  const repo = tfRepo(); let dest = '';
+  if (type === 'shared-hosting') { const prof = tfProfileOf($('dtSftpProfile').value); dest = isFtp ? `${$('dtFtpUser').value.trim() || '…'}@${$('dtFtpHost').value.trim() || '…'}:${$('dtDocroot').value.trim() || '…'}` : `${prof ? `${prof.user}@${prof.host}` : 'SFTP server'}:${$('dtDocroot').value.trim() || '…'}`; }
+  else if (type === 'vps-ssh') { const prof = tfProfileOf($('dtProfile').value); dest = `${prof ? `${prof.user}@${prof.host}` : 'SSH server'}:${$('dtRoot').value.trim() || '…'}`; }
+  else dest = (dp.status?.paasProviders || []).find((p) => p.id === $('dtPaasProvider').value)?.label || 'platform';
+  $('dtSubtitle').textContent = `${repo?.name || 'repository'} · ${branch || 'default branch'} → ${dest}`;
 }
-$('dtAutoEnabled').addEventListener('change', dpTargetSync); $('dtAutoMode').addEventListener('change', dpTargetSync);
-$('dtType').addEventListener('change', dpTargetSync); $('dtTransport').addEventListener('change', dpTargetSync);
+/* any edit invalidates a previous connection test */
+$('dpTargetForm').addEventListener('input', (e) => {
+  const id = e.target.id;
+  if (id === 'dtName') tfState.nameTouched = true;
+  if (id === 'dtHome') tfState.homeTouched = true;
+  if (id === 'dtDocroot') tfState.docrootTouched = true;
+  if (id === 'dtRoot') tfState.rootTouched = true;
+  if (id === 'dtFtpPort') tfState.portTouched = true;
+  if (id !== 'dtOverrides') tfClearError(id);
+  tfState.testOk = false; $('btnDtSaveAnyway').hidden = true;
+  dpTargetSync();
+});
+['dtType', 'dtTransport', 'dtAutoEnabled', 'dtAutoMode', 'dtHealthEnabled', 'dtEnvVault', 'dtEnvMode', 'dtProc', 'dtStrategy', 'dtFtpSecure', 'dtSftpProfile', 'dtProfile', 'dtBuild', 'dtPaasProvider'].forEach((id) => $(id).addEventListener('change', () => { tfState.testOk = false; $('btnDtSaveAnyway').hidden = true; dpTargetSync(); }));
+$('dtRepo').addEventListener('change', () => { tfPrefillName(); dpTargetSync(); });
+$('dtHealthEnabled').addEventListener('change', () => { if ($('dtHealthEnabled').checked) setTimeout(() => $('dtHealth').focus(), 20); });
 $('dtTemplate').addEventListener('change', () => { const v = $('dtTemplate').value; if (v === '__manage') { $('dtTemplate').value = ''; dpManageTemplates(); } else if (v) dpApplyTemplate(v); });
 $('btnDtSaveTemplate').addEventListener('click', dpSaveTemplateFromForm);
 $('dtWeb').addEventListener('change', () => { const w = $('dtWeb').value; const def = { nginx: 'sudo -n systemctl reload nginx', apache: 'sudo -n systemctl reload apache2', none: '' }; if (!$('dtReload').value || Object.values(def).includes($('dtReload').value)) $('dtReload').value = def[w] || ''; });
-$('dtName').addEventListener('input', () => { if (!$('dtRoot').dataset.touched && !dp.editingTarget) $('dtRoot').value = `/var/www/${$('dtName').value.trim().toLowerCase().replace(/[^a-z0-9_.-]+/g, '-') || 'app'}`; });
-$('dtRoot').addEventListener('input', () => { $('dtRoot').dataset.touched = '1'; });
+const tfApplyConnUrl = (strict) => {
+  const u = tfParseConnUrl($('dtConnUrl').value); if (!u) { if (strict && $('dtConnUrl').value.trim()) tfShowError('dtConnUrl', 'Use the form protocol://user@host:port/path'); return; }
+  $('dtTransport').value = u.kind;
+  if (u.kind === 'sftp') toast('SFTP uses a server profile: pick the server for ' + u.host, 'warning');
+  else { $('dtFtpHost').value = u.host; if (u.user) $('dtFtpUser').value = u.user; if (u.port) { $('dtFtpPort').value = u.port; tfState.portTouched = true; } }
+  if (u.path) { $('dtDocroot').value = u.path; tfState.docrootTouched = true; }
+  $('dtConnUrl').value = ''; dpTargetSync();
+};
+$('dtConnUrl').addEventListener('change', () => tfApplyConnUrl(true));
+$('dtConnUrl').addEventListener('input', () => tfApplyConnUrl(false)); // a pasted URL applies immediately
+$('dpTargetModal').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-act]'); if (!b) return;
+  if (b.dataset.act === 'new-secret') { tfState.secretFor = b.dataset.for; dpOpenSecretModal(); }
+  if (b.dataset.act === 'add-server') { $('addServerForm').hidden = false; setTimeout(() => $('asName')?.focus(), 30); }
+});
+// a server added from the form becomes selectable without leaving the form
+$('serverFormModal')?.addEventListener('close', async () => {
+  if (!$('dpTargetModal').open) return;
+  try { const d = await api('/api/ssh/sessions'); dp.profiles = d.sessions; } catch { return; }
+  const profs = dp.profiles.map((p) => ({ value: p.id, label: `${p.name} (${p.user}@${p.host})` }));
+  const newest = dp.profiles[dp.profiles.length - 1];
+  for (const id of ['dtProfile', 'dtSftpProfile']) { const cur = $(id).value; dpFillSelect($(id), profs, cur || (newest && !cur ? newest.id : ''), profs.length ? 'Choose a server' : 'no SSH servers yet: add one'); }
+  dpTargetSync();
+});
 function dpPaasFields(t) {
   const p = (dp.status?.paasProviders || []).find((x) => x.id === $('dtPaasProvider').value);
   $('dtPaasHint').textContent = p ? `${p.tokenHint}. CLI: ${p.cli} (${p.install}). ${p.buildLocal ? 'The app is built locally and the output directory is uploaded.' : 'The platform builds the app itself.'}` : '';
-  $('dtPaasFields').innerHTML = (p?.fields || []).map((f) => `<div><label>${esc(f.label)}${f.required ? '' : ' <span class="hint">(optional)</span>'}</label><input data-paas-field="${esc(f.key)}" placeholder="${esc(f.placeholder || '')}" value="${esc((t?.paas && t.paas.provider === p.id && t.paas[f.key]) || '')}"></div>`).join('');
+  $('dtPaasFields').innerHTML = (p?.fields || []).map((f) => `<div class="tf-field"><label for="dtPaas-${esc(f.key)}">${esc(f.label)}${f.required || /optional/i.test(f.label) ? '' : ' <span class="hint">(optional)</span>'}</label><input id="dtPaas-${esc(f.key)}" data-paas-field="${esc(f.key)}" placeholder="${esc(f.placeholder || '')}" value="${esc((t?.paas && t.paas.provider === p.id && t.paas[f.key]) || '')}"></div>`).join('');
 }
 $('dtPaasProvider').addEventListener('change', () => dpPaasFields(dp.editingTarget));
 $('btnDpTargetCancel').addEventListener('click', () => $('dpTargetModal').close());
-$('dpTargetForm').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const type = $('dtType').value;
-  let overrides = null;
-  if ($('dtOverrides').value.trim()) { try { overrides = JSON.parse($('dtOverrides').value); } catch (err) { return toast('Overrides: invalid JSON · ' + err.message, 'error'); } }
-  const body = dpTargetFormBody(overrides);
-  try {
-    const r = await api(dp.editingTarget ? `/api/deploy/targets/${dp.editingTarget.id}` : '/api/deploy/targets', { method: dp.editingTarget ? 'PUT' : 'POST', body: JSON.stringify(body) });
-    $('dpTargetModal').close(); toast('Target saved', 'success'); await loadDeploy(); dpSelect(r.id);
-  } catch (err) { toast(err.message, 'error'); }
-});
+
+/* ---- errors next to their fields; collapsed sections show a count ---- */
+function tfFieldWrap(id) { return $(id)?.closest('.tf-field') || $(id)?.closest('label.chk')?.parentElement || null; }
+function tfShowError(id, msg) {
+  const wrap = tfFieldWrap(id); if (!wrap) return false;
+  let err = wrap.querySelector(':scope > .tf-err'); if (!err) { err = document.createElement('p'); err.className = 'tf-err'; wrap.appendChild(err); }
+  err.textContent = msg; err.hidden = false; err.id = err.id || `${id}-err`;
+  const ctl = $(id); if (ctl) { ctl.setAttribute('aria-invalid', 'true'); ctl.setAttribute('aria-describedby', err.id); }
+  const det = wrap.closest('details'); if (det) det.open = true;
+  tfCountIssues();
+  return true;
+}
+function tfClearError(id) { const wrap = tfFieldWrap(id); const err = wrap?.querySelector(':scope > .tf-err'); if (err && err.id !== 'dtOverridesErr') err.remove(); else if (err) err.hidden = true; $(id)?.removeAttribute('aria-invalid'); tfCountIssues(); }
+function tfClearErrors() { $('dpTargetModal').querySelectorAll('.tf-err:not(#dtOverridesErr):not(#dtFormError)').forEach((e) => e.remove()); $('dtOverridesErr').hidden = true; $('dpTargetModal').querySelectorAll('[aria-invalid]').forEach((e) => e.removeAttribute('aria-invalid')); $('dtFormError').hidden = true; tfCountIssues(); }
+function tfCountIssues() {
+  $('dpTargetModal').querySelectorAll('details.tf-more').forEach((d) => { const n = [...d.querySelectorAll('.tf-err')].filter((e) => !e.hidden).length; const b = d.querySelector(':scope > summary .tf-issues'); if (b) { b.hidden = !n; b.textContent = n ? `${n} issue${n === 1 ? '' : 's'}` : ''; } });
+}
+function tfMapServerError(msg) {
+  const m = String(msg || '');
+  for (const [prefix, id] of TF_FIELD_FOR) if (m.startsWith(prefix) || m.includes(` ${prefix}`)) return id;
+  if (/a target named/.test(m)) return 'dtName';
+  return null;
+}
+function tfFriendlyConnError(msg) {
+  const m = String(msg || '');
+  if (/ENOTFOUND|getaddrinfo/i.test(m)) return 'The host name could not be resolved. Check the host.';
+  if (/ECONNREFUSED|ETIMEDOUT|EHOSTUNREACH|timed out|Timed out/i.test(m)) return 'The server did not answer on that port. Check the host, the port and that the service is running.';
+  if (/530|Login|authentication|Authentication|password|Permission denied|publickey/i.test(m)) return 'Could not authenticate with this server. Check the username and the selected credential.';
+  if (/certificate|self.signed|TLS|handshake/i.test(m)) return 'The TLS handshake failed. Try the other TLS mode under Advanced connection settings.';
+  return m.replace(/^connection failed:\s*/i, '');
+}
+/** Client-side validation → [{ id, msg }] */
+function tfValidate() {
+  const errs = []; const type = $('dtType').value, tr = $('dtTransport').value;
+  const need = (id, msg) => { if (!$(id).value.trim()) errs.push({ id, msg }); };
+  need('dtName', 'Give this deployment a name.'); need('dtRepo', 'Choose a repository.');
+  if (type === 'shared-hosting') {
+    if (tr === 'sftp') need('dtSftpProfile', 'Choose the SSH server profile.');
+    else { need('dtFtpHost', 'Enter the FTP host.'); need('dtFtpUser', 'Enter the FTP username.'); need('dtFtpPass', 'Choose the vault secret holding the password.'); if ($('dtFtpPort').value && !(Number($('dtFtpPort').value) >= 1 && Number($('dtFtpPort').value) <= 65535)) errs.push({ id: 'dtFtpPort', msg: 'Port must be between 1 and 65535.' }); }
+    const dr = $('dtDocroot').value.trim(); if (!dr) errs.push({ id: 'dtDocroot', msg: 'Enter the deployment directory (for example /public_html).' }); else if (!dr.startsWith('/') || dr.includes('..')) errs.push({ id: 'dtDocroot', msg: 'Use an absolute path without "..".' });
+    const home = $('dtHome').value.trim(); if (home && (!home.startsWith('/') || home.includes('..'))) errs.push({ id: 'dtHome', msg: 'Use an absolute path without "..".' });
+  } else if (type === 'vps-ssh') {
+    need('dtProfile', 'Choose the SSH server profile.');
+    const root = $('dtRoot').value.trim(); if (!root) errs.push({ id: 'dtRoot', msg: 'Enter the deployment directory (for example /var/www/shop).' }); else if (!root.startsWith('/') || root.split('/').filter(Boolean).length < 2) errs.push({ id: 'dtRoot', msg: 'Use an absolute path at least two levels deep, such as /var/www/shop.' });
+    if ($('dtProc').value !== 'none') need('dtProcName', $('dtProc').value === 'systemd' ? 'Enter the systemd unit name.' : 'Enter the pm2 app name.');
+    if ($('dtSsl').checked && $('dtDomain').value.trim() && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test($('dtSslEmail').value.trim())) errs.push({ id: 'dtSslEmail', msg: "Let's Encrypt needs a contact e-mail." });
+  } else need('dtPaasToken', 'Choose the vault secret holding the platform token.');
+  if ($('dtHealthEnabled').checked) { const u = $('dtHealth').value.trim(); if (!/^https?:\/\/\S+/.test(u)) errs.push({ id: 'dtHealth', msg: 'Enter the full URL to check, starting with http:// or https://.' }); }
+  if ($('dtEnvVault').value && $('dtEnvTarget').value.includes('..')) errs.push({ id: 'dtEnvTarget', msg: 'Use a path relative to the deployment directory.' });
+  const keep = $('dtKeep').value; if (keep && !(Number(keep) >= 2 && Number(keep) <= 50)) errs.push({ id: 'dtKeep', msg: 'Keep between 2 and 50 releases.' });
+  if ($('dtAutoEnabled').checked && $('dtAutoMode').value === 'poll' && $('dtAutoPoll').value && !(Number($('dtAutoPoll').value) >= 1 && Number($('dtAutoPoll').value) <= 1440)) errs.push({ id: 'dtAutoPoll', msg: 'Poll between 1 and 1440 minutes.' });
+  if ($('dtOverrides').value.trim()) { try { const o = JSON.parse($('dtOverrides').value); if (!o || typeof o !== 'object' || Array.isArray(o)) errs.push({ id: 'dtOverrides', msg: 'Overrides must be a JSON object.' }); } catch (e) { errs.push({ id: 'dtOverrides', msg: 'Invalid JSON: ' + e.message }); } }
+  return errs;
+}
+function tfShowErrors(errs) {
+  tfClearErrors();
+  for (const e of errs) { if (e.id === 'dtOverrides') { $('dtOverridesErr').textContent = e.msg; $('dtOverridesErr').hidden = false; $('dtSecOverrides').open = true; $('dtOverrides').setAttribute('aria-invalid', 'true'); } else if (!tfShowError(e.id, e.msg)) { $('dtFormError').textContent = e.msg; $('dtFormError').hidden = false; } }
+  tfCountIssues();
+  const first = errs[0] && $(errs[0].id); if (first) { try { first.focus({ preventScroll: false }); } catch {} }
+}
+
+/* ---- payload: unchanged contract, derived defaults filled in ---- */
 function dpTargetFormBody(overrides) {
   if (overrides === undefined && $('dtOverrides').value.trim()) { try { overrides = JSON.parse($('dtOverrides').value); } catch { overrides = null; } }
   const type = $('dtType').value;
-  const body = { name: $('dtName').value.trim(), repoId: $('dtRepo').value, type, buildMode: $('dtBuild').value, healthUrl: $('dtHealth').value.trim(), healthRemote: $('dtHealthRemote').checked, keepReleases: Number($('dtKeep').value) || undefined, overrides: overrides || null,
+  const body = { name: $('dtName').value.trim(), repoId: $('dtRepo').value, type, buildMode: type === 'shared-hosting' ? 'local' : $('dtBuild').value, healthUrl: $('dtHealthEnabled').checked ? $('dtHealth').value.trim() : '', healthRemote: type === 'vps-ssh' && $('dtHealthEnabled').checked && $('dtHealthRemote').checked, keepReleases: Number($('dtKeep').value) || undefined, overrides: overrides || null,
     envFile: $('dtEnvVault').value ? { fromVault: $('dtEnvVault').value, mode: $('dtEnvMode').value, target: $('dtEnvTarget').value.trim() || 'shared/.env' } : null,
-    autoShip: $('dtAutoEnabled').checked ? { enabled: true, mode: $('dtAutoMode').value, branch: $('dtAutoBranch').value.trim() || null, pollMinutes: Number($('dtAutoPoll').value) || undefined, rotateSecret: $('dtAutoRotate').checked } : { enabled: false } };
+    autoShip: $('dtAutoEnabled').checked ? { enabled: true, mode: $('dtAutoMode').value, branch: $('dtAutoBranch').value.trim() || null, pollMinutes: Number($('dtAutoPoll').value) || undefined } : { enabled: false } };
   if (type === 'paas') { const paas = { provider: $('dtPaasProvider').value, tokenRef: $('dtPaasToken').value, prod: $('dtPaasProd').checked }; $('dtPaasFields').querySelectorAll('[data-paas-field]').forEach((i) => { paas[i.dataset.paasField] = i.value.trim(); }); Object.assign(body, { paas }); }
   else if (type === 'vps-ssh') Object.assign(body, { domain: $('dtDomain').value.trim() ? { name: $('dtDomain').value.trim(), ssl: $('dtSsl').checked, email: $('dtSslEmail').value.trim(), www: $('dtWww').checked } : null, ssh: { profileId: $('dtProfile').value }, paths: { root: $('dtRoot').value.trim() }, web: { server: $('dtWeb').value, reloadCmd: $('dtReload').value.trim(), phpFpmReload: $('dtFpm').value.trim() }, process: { manager: $('dtProc').value, unit: $('dtProc').value === 'systemd' ? $('dtProcName').value.trim() : '', name: $('dtProc').value === 'pm2' ? $('dtProcName').value.trim() : '' } });
   else {
-    const tr = $('dtTransport').value;
-    Object.assign(body, { transport: tr === 'sftp' ? { kind: 'sftp', profileId: $('dtSftpProfile').value } : { kind: tr, host: $('dtFtpHost').value.trim(), port: Number($('dtFtpPort').value) || undefined, user: $('dtFtpUser').value.trim(), passwordRef: $('dtFtpPass').value, secure: $('dtFtpSecure').value === 'implicit' ? 'implicit' : true }, paths: { home: $('dtHome').value.trim(), docroot: $('dtDocroot').value.trim() }, docrootStrategy: $('dtStrategy').value });
+    const tr = $('dtTransport').value, docroot = $('dtDocroot').value.trim();
+    Object.assign(body, { transport: tr === 'sftp' ? { kind: 'sftp', profileId: $('dtSftpProfile').value } : { kind: tr, host: $('dtFtpHost').value.trim(), port: Number($('dtFtpPort').value) || undefined, user: $('dtFtpUser').value.trim(), passwordRef: $('dtFtpPass').value, secure: $('dtFtpSecure').value === 'implicit' ? 'implicit' : true }, paths: { home: $('dtHome').value.trim() || tfDeriveHome(docroot, tr), docroot }, docrootStrategy: $('dtStrategy').value });
   }
   return body;
+}
+
+/* ---- connection test (real backend probe of the draft), Test & save ---- */
+function tfSetTestResult(state, html) {
+  const box = $('dtTestResult'); box.className = 'tf-test-result' + (state ? ' ' + state : ''); box.innerHTML = html || '';
+  $('btnDtTest').disabled = state === 'testing';
+}
+async function tfRunTest(body) {
+  tfSetTestResult('testing', '<span class="spinner"></span> Connecting…');
+  try {
+    const r = await api('/api/deploy/targets/test', { method: 'POST', body: JSON.stringify({ ...body, id: dp.editingTarget?.id || undefined }) });
+    const dir = r.dir ? (r.dir.exists ? `<b>${esc(r.dir.path)}</b> exists${r.dir.writable === false ? ' but is <b>not writable</b>' : r.dir.writable ? ' and is writable' : ''}` : `<b>${esc(r.dir.path)}</b> does not exist yet: it will be created on the first deploy`) : '';
+    const who = r.host ? `${esc(r.user || '')}@${esc(r.host)}` : (r.cli ? `${esc(r.cli)} CLI ready` : 'connected');
+    tfSetTestResult('ok', `✓ Connection successful · ${who}${r.canExec === false ? ' · file transfer only (no shell)' : ''}${dir ? '<br>' + dir : ''}${r.strategy ? `<br>Publishing method: <b>${esc(r.strategy)}</b>` : ''}`);
+    tfState.testOk = true; tfState.testedSig = JSON.stringify(body);
+    return true;
+  } catch (e) {
+    const fid = tfMapServerError(e.message);
+    if (fid) tfShowError(fid, e.message);
+    tfSetTestResult('bad', `✕ ${esc(tfFriendlyConnError(e.message))}${fid ? '' : `<br><span class="hint">${esc(e.message)}</span>`}`);
+    tfState.testOk = false;
+    return false;
+  }
+}
+$('btnDtTest').addEventListener('click', async () => { const errs = tfValidate().filter((e) => !['dtName', 'dtRepo'].includes(e.id)); if (errs.length) return tfShowErrors(errs); await tfRunTest(dpTargetFormBody()); });
+async function tfSave(body) {
+  try {
+    const r = await api(dp.editingTarget ? `/api/deploy/targets/${dp.editingTarget.id}` : '/api/deploy/targets', { method: dp.editingTarget ? 'PUT' : 'POST', body: JSON.stringify(body) });
+    $('dpTargetModal').close(); toast(dp.editingTarget ? 'Deployment saved' : 'Deployment created', 'success'); await loadDeploy(); dpSelect(r.id);
+  } catch (err) {
+    const fid = tfMapServerError(err.message);
+    if (fid) tfShowErrors([{ id: fid, msg: err.message }]); else { $('dtFormError').textContent = err.message; $('dtFormError').hidden = false; }
+  }
+}
+$('dpTargetForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const errs = tfValidate(); if (errs.length) return tfShowErrors(errs);
+  tfClearErrors();
+  const body = dpTargetFormBody();
+  $('btnDtSubmit').disabled = true;
+  try {
+    const ok = tfState.testOk && tfState.testedSig === JSON.stringify(body) ? true : await tfRunTest(body);
+    if (!ok) { $('btnDtSaveAnyway').hidden = false; return; }
+    await tfSave(body);
+  } finally { $('btnDtSubmit').disabled = false; }
+});
+$('btnDtSaveAnyway').addEventListener('click', async () => { const errs = tfValidate(); if (errs.length) return tfShowErrors(errs); await tfSave(dpTargetFormBody()); });
+
+/* ---- webhook: URL + secret shown for saved targets; rotation is an explicit, confirmed action ---- */
+async function dpTargetWebhookInfo() {
+  const t = dp.editingTarget, box = $('dtWebhookInfo');
+  if (!t || !t.autoShip?.enabled) { box.innerHTML = `<span class="hint">${t ? 'Enable automatic deployment and save: the webhook URL and its secret appear here.' : 'The webhook URL and its secret appear here once the target is saved.'}</span>`; return; }
+  try {
+    const w = await api(`/api/deploy/targets/${t.id}/webhook`);
+    if (!w.enabled) { box.innerHTML = '<span class="hint">Automatic deployment is off.</span>'; return; }
+    box.innerHTML = `<div class="tf-kv"><span>URL</span><code>${esc(w.url || 'listener not running')}</code><button type="button" class="tf-mini" data-copy="${esc(w.url || '')}">Copy</button></div>
+      <div class="tf-kv"><span>Secret</span><code id="dtHookSecret" data-secret="${esc(w.secret || '')}">••••••••••••••••</code><button type="button" class="tf-mini" id="btnDtHookReveal">Reveal</button><button type="button" class="tf-mini" data-copy="${esc(w.secret || '')}">Copy</button><button type="button" class="tf-mini warn" id="btnDtRotate">Rotate secret…</button></div>`;
+    box.querySelectorAll('[data-copy]').forEach((b) => b.addEventListener('click', async () => { try { await navigator.clipboard.writeText(b.dataset.copy); toast('Copied', 'success'); } catch { toast('Clipboard blocked', 'warning'); } }));
+    $('btnDtHookReveal').addEventListener('click', () => { const c = $('dtHookSecret'); const shown = c.textContent !== '••••••••••••••••'; c.textContent = shown ? '••••••••••••••••' : c.dataset.secret; $('btnDtHookReveal').textContent = shown ? 'Reveal' : 'Hide'; });
+    $('btnDtRotate').addEventListener('click', async () => {
+      const ok = await confirmDialog({ title: 'Rotate the webhook secret', message: `Pushes signed with the current secret will be <b>rejected</b> as soon as it is rotated. Update the webhook configuration on ${esc(w.mode === 'webhook' ? 'the git provider' : 'the provider')} with the new secret afterwards.`, okLabel: 'Rotate secret', okClass: 'warn' });
+      if (!ok) return;
+      try {
+        const fresh = dp.targets.find((x) => x.id === t.id) || t;
+        const body = { ...fresh, autoShip: { ...(fresh.autoShip || {}), enabled: true, rotateSecret: true } }; delete body.locked; delete body.lastRun; delete body.preShip; delete body.lastProbe;
+        await api(`/api/deploy/targets/${t.id}`, { method: 'PUT', body: JSON.stringify(body) });
+        toast('Webhook secret rotated', 'success'); await loadDeploy(); dp.editingTarget = dp.targets.find((x) => x.id === t.id) || t; dpTargetWebhookInfo();
+      } catch (e) { toast(e.message, 'error'); }
+    });
+  } catch (e) { box.innerHTML = `<span class="hint">${esc(e.message)}</span>`; }
 }
 
 /* ---------- modals: secret ---------- */
@@ -1218,7 +1507,7 @@ function dpOpenSecretModal() { $('dsName').value = ''; $('dsValue').value = ''; 
 $('btnDpSecretCancel').addEventListener('click', () => $('dpSecretModal').close());
 $('dpSecretForm').addEventListener('submit', async (e) => {
   e.preventDefault();
-  try { await api(`/api/deploy/secrets/${encodeURIComponent($('dsName').value.trim())}`, { method: 'PUT', body: JSON.stringify({ value: $('dsValue').value }) }); $('dpSecretModal').close(); toast('Secret stored', 'success'); await loadDeploy(); if ($('dpTargetModal').open) dpOpenTargetModal(dp.editingTarget); if ($('dpRepoModal').open) dpOpenRepoModal(dp.editingRepo); }
+  try { await api(`/api/deploy/secrets/${encodeURIComponent($('dsName').value.trim())}`, { method: 'PUT', body: JSON.stringify({ value: $('dsValue').value }) }); $('dpSecretModal').close(); toast('Secret stored', 'success'); await loadDeploy(); if ($('dpTargetModal').open) { dpRefreshSecretSelects($('dsName').value.trim(), tfState.secretFor, dp.editingTarget); tfState.secretFor = null; dpTargetSync(); } if ($('dpRepoModal').open) dpOpenRepoModal(dp.editingRepo); }
   catch (err) { toast(err.message, 'error'); }
 });
 
@@ -1233,6 +1522,7 @@ $('btnDpRefresh').addEventListener('click', () => loadDeploy());
 $('btnDpTheme').addEventListener('click', () => toggleTheme());
 $('btnDpSettings').addEventListener('click', () => { showSettings(); if (typeof showSettingsSection === 'function') showSettingsSection('deploy'); });
 $('btnDpClose').addEventListener('click', closeDeploy);
+$('btnDpNew')?.addEventListener('click', () => dpOpenWizard());
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && dpOpen() && !document.querySelector('dialog[open]')) { if (!$('dpAddMenu').hidden) $('dpAddMenu').hidden = true; else closeDeploy(); }
 });

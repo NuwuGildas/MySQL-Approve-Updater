@@ -34,7 +34,7 @@ const DEPLOY_CLI = require('./lib/deploy/cli').isCliInvocation(process.argv);
 const express = require('express');
 const mysql = require('mysql2/promise');
 const sqlLiteral = require('mysql2').escape; // value → safe SQL literal (backup scripts only)
-const { Client: SSHClient } = require('ssh2');
+const { Client: SSHClient, utils: sshUtils } = require('ssh2');
 
 const RULES_FILE = path.join(DATA_DIR, 'rules.json');
 const AUDIT_FILE = path.join(DATA_DIR, 'audit.log');
@@ -1145,6 +1145,7 @@ function maskProfile(p) {
     name: p.name,
     db: { host: p.db.host, port: p.db.port, user: p.db.user, database: p.db.database, passwordSet: !!p.db.password },
     ssh: {
+      authKind: p.ssh?.authKind || '',
       enabled: !!(p.ssh && p.ssh.enabled),
       host: p.ssh?.host || '', port: p.ssh?.port || 22, user: p.ssh?.user || '',
       privateKeyPath: p.ssh?.privateKeyPath || '',
@@ -1152,6 +1153,38 @@ function maskProfile(p) {
     },
   };
 }
+
+/* ---- SSH keys managed by this app ----
+   One ed25519 key pair ("Server Tools key") lives in DATA_DIR/deploy-keys/server-tools.key (owner-only); its
+   public half is what users add to a server's authorized_keys. Pasted private keys are stored the same way,
+   one file per profile. Private keys never leave this machine and are never returned by the API. */
+const APP_KEY_DIR = path.join(DATA_DIR, 'deploy-keys');
+const APP_KEY_PATH = path.join(APP_KEY_DIR, 'server-tools.key');
+function ensureAppKey() {
+  fs.mkdirSync(APP_KEY_DIR, { recursive: true });
+  if (!fs.existsSync(APP_KEY_PATH)) {
+    const pair = sshUtils.generateKeyPairSync('ed25519', { comment: 'server-tools' });
+    fs.writeFileSync(APP_KEY_PATH, pair.private, { mode: 0o600 });
+    fs.writeFileSync(APP_KEY_PATH + '.pub', pair.public.trim() + '\n', { mode: 0o644 });
+    logEvent('info', 'Generated the Server Tools SSH key (deploy-keys/server-tools.key)');
+  }
+  const publicKey = fs.readFileSync(APP_KEY_PATH + '.pub', 'utf8').trim();
+  const b64 = publicKey.split(/\s+/)[1] || '';
+  const fingerprint = 'SHA256:' + crypto.createHash('sha256').update(Buffer.from(b64, 'base64')).digest('base64').replace(/=+$/, '');
+  return { privateKeyPath: APP_KEY_PATH, publicKey, fingerprint, installCmd: `mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo "${publicKey}" >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys` };
+}
+/** Validate a pasted private key and store it for one profile. Returns the file path. */
+function storePastedKey(profileId, pem, passphrase) {
+  const text = String(pem || '').replace(/\r\n/g, '\n').trim() + '\n';
+  if (!/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(text)) throw httpError(400, 'That does not look like a private key (expected a -----BEGIN ... PRIVATE KEY----- block)');
+  const parsed = sshUtils.parseKey(text, passphrase || undefined);
+  if (parsed instanceof Error) throw httpError(400, `The private key could not be read: ${parsed.message}${/passphrase|encrypted|decrypt/i.test(parsed.message) ? ' (check the passphrase)' : ''}`);
+  fs.mkdirSync(APP_KEY_DIR, { recursive: true });
+  const file = path.join(APP_KEY_DIR, `profile-${String(profileId).replace(/[^A-Za-z0-9_-]/g, '')}.key`);
+  fs.writeFileSync(file, text, { mode: 0o600 });
+  return file;
+}
+app.get('/api/ssh/app-key', (req, res) => { const k = ensureAppKey(); res.json({ publicKey: k.publicKey, fingerprint: k.fingerprint, installCmd: k.installCmd }); });
 
 function sanitizeProfile(body, existing) {
   const name = String(body.name || '').trim();
@@ -1190,8 +1223,15 @@ function sanitizeProfile(body, existing) {
       passphrase: sshIn.passphrase ? String(sshIn.passphrase) : (existing?.ssh?.passphrase || ''),
     },
   };
+  // authentication choice: the app-managed key, a pasted private key, a key file path, or a password
+  const auth = String(sshIn.auth || '').trim();
+  if (auth === 'app-key') { profile.ssh.privateKeyPath = ensureAppKey().privateKeyPath; profile.ssh.password = ''; profile.ssh.authKind = 'app-key'; }
+  else if (sshIn.privateKeyInline) { profile.ssh.privateKeyPath = storePastedKey(profile.id, sshIn.privateKeyInline, profile.ssh.passphrase); profile.ssh.authKind = 'own-key'; }
+  else if (auth === 'password') { profile.ssh.privateKeyPath = ''; profile.ssh.passphrase = ''; profile.ssh.authKind = 'password'; }
+  else profile.ssh.authKind = existing?.ssh?.authKind || (profile.ssh.privateKeyPath ? 'own-key' : profile.ssh.password ? 'password' : '');
   if (profile.ssh.enabled && !profile.ssh.host) throw httpError(400, 'SSH is enabled but the SSH host is empty');
   if (sshOnly && !profile.ssh.enabled) throw httpError(400, 'An SSH server needs SSH enabled with a host');
+  if (sshOnly && !profile.ssh.privateKeyPath && !profile.ssh.password) throw httpError(400, 'Choose how to authenticate: the Server Tools key, your own key, or a password');
   return profile;
 }
 
@@ -2426,6 +2466,32 @@ app.post('/api/ssh/sessions/:id/connect', wrap(async (req, res) => {
   try { s.meta = await pullVmMeta(s.client); }
   catch (e) { s.meta = { error: e.message, pulledAt: new Date().toISOString() }; }
   res.json(sshSessionView(p));
+}));
+
+/* Bootstrap the Claude CLI on a server (opt-in when adding it): installs with the official script when
+   missing, then the user logs in from the server's terminal. The output is returned, never a token. */
+app.post('/api/ssh/sessions/:id/bootstrap-claude', wrap(async (req, res) => {
+  const p = profileById(req.params.id);
+  if (!p || !p.ssh?.enabled || !p.ssh.host) throw httpError(400, 'That profile has no SSH configured');
+  let s = sshSessions.get(p.id);
+  if (!s) {
+    let client;
+    try { client = await sshClientFor(p.ssh); }
+    catch (e) { throw httpError(400, `SSH connection failed: ${e.message}`); }
+    s = { client, connectedAt: new Date().toISOString(), meta: null, host: p.ssh.host, user: p.ssh.user, name: p.name };
+    client.on('close', () => { if (sshSessions.get(p.id)?.client === client) sshSessions.delete(p.id); });
+    sshSessions.set(p.id, s);
+    logEvent('info', `SSH session connected: ${p.ssh.user}@${p.ssh.host} ("${p.name}")`);
+  }
+  const cmd = 'if command -v claude >/dev/null 2>&1; then echo "ALREADY $(claude --version 2>/dev/null | head -1)"; ' +
+    'elif command -v curl >/dev/null 2>&1; then curl -fsSL https://claude.ai/install.sh | bash 2>&1 | tail -n 8; echo "PATH_HINT $HOME/.local/bin"; ' +
+    'elif command -v wget >/dev/null 2>&1; then wget -qO- https://claude.ai/install.sh | bash 2>&1 | tail -n 8; echo "PATH_HINT $HOME/.local/bin"; ' +
+    'else echo "NOTOOL"; fi; command -v claude >/dev/null 2>&1 && echo "OK $(command -v claude)" || ([ -x "$HOME/.local/bin/claude" ] && echo "OK $HOME/.local/bin/claude") || echo "MISSING"';
+  const out = await execOnClient(s.client, cmd, 180000);
+  const already = /^ALREADY /m.test(out), ok = /^OK /m.test(out);
+  audit({ action: 'ssh-bootstrap-claude', profile: p.name, sshHost: p.ssh.host, ok: ok || already });
+  logEvent(ok || already ? 'info' : 'warn', `Claude CLI bootstrap on "${p.name}": ${already ? 'already installed' : ok ? 'installed' : 'failed'}`);
+  res.json({ ok: ok || already, alreadyInstalled: already, output: out.trim().slice(-1500), next: 'Open the server terminal and run "claude" once to log in; the CLI stores its own credentials on the server.' });
 }));
 
 app.post('/api/ssh/sessions/:id/refresh', wrap(async (req, res) => {

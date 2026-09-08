@@ -13,7 +13,11 @@
 <meta name="theme-color" content="#0f1419">
 <link rel="stylesheet" href="/vendor/gooey-toast/styles.css">
 <script>(function(){try{var t=localStorage.getItem("st-theme")||"dark";if(t==="system")t=matchMedia("(prefers-color-scheme: light)").matches?"light":"dark";document.documentElement.dataset.theme=t;}catch(e){}})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap">
 <link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="layout.css">
 <link rel="stylesheet" href="/vendor/introjs/introjs.min.css">
 <link rel="stylesheet" href="/vendor/tabulator/css/tabulator_midnight.min.css">
 <link rel="stylesheet" href="/vendor/codemirror/lib/codemirror.css">
@@ -46,12 +50,11 @@
   </filter>
 </svg>
 <header>
-  <img class="app-logo" id="homeLogo" src="/assets/logo/robot-logo.svg" alt="Back to Compass" title="Back to Compass" style="cursor:pointer">
-  <h1 id="homeTitle" title="Back to Compass" style="cursor:pointer">Server Tools</h1>
-  <button id="btnCompass" title="Back to Compass"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg><span>Compass</span></button>
-  <span class="tool-crumb" id="toolCrumb"></span>
-  <span class="sub" id="dbInfo">…</span>
-  <span class="sub"><span class="dot" id="sseDot"></span> live</span>
+  <button id="btnNav" class="iconbtn" title="Navigation" aria-label="Open navigation" aria-controls="appNav" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+  <img class="app-logo" id="homeLogo" src="/assets/logo/robot-logo.svg" alt="" aria-hidden="true">
+  <h1 id="homeTitle">Server Tools</h1>
+  <span class="tool-crumb" id="toolCrumb" hidden></span>
+  <span class="sub sse-link" title="This indicator shows the browser's live link to Server Tools, not the database or a server"><span class="dot" id="sseDot"></span> app link</span>
   <span class="spacer"></span>
   <div class="ai-agent" title="AI assistant: works across every module">
     <button class="ai-real" id="btnAiAgent" title="AI assistant" aria-label="AI assistant"></button>
@@ -68,18 +71,15 @@
   <button id="btnPause" class="tool-only">Pause</button>
   <button id="btnResume" class="tool-only">Resume</button>
   <button id="btnAbort" class="warn tool-only">Abort</button>
-  <button id="btnConns" title="Manage database / SSH connection profiles">Connections</button>
-  <button id="btnTheme" class="iconbtn theme-toggle" title="Switch light / dark"><svg class="ico-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg><svg class="ico-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></button>
+  <button id="btnTheme" style="display: none;" class="iconbtn theme-toggle" title="Switch light / dark"><svg class="ico-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg><svg class="ico-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></button>
   <button id="btnSettings" class="iconbtn" title="Settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
-  <select id="moreMenu" class="tool-only" title="More actions">
-    <option value="">More…</option>
-    <option value="tour">Guided tour</option>
-    <option value="audit">History</option>
-    <option value="servers">SSH servers</option>
-    <option value="deploy">The Ascension</option>
-    <option value="ssh">SSH console</option>
-  </select>
 </header>
+<nav id="appNav" class="app-nav" aria-label="Main navigation"></nav>
+<div id="navScrim" aria-hidden="true"></div>
+<div id="pageHead" hidden>
+  <div><h1 id="pageTitle" tabindex="-1">Server Tools</h1><p id="pageDesc"></p></div>
+  <span id="pageContextWrap" hidden title="Active database profile"><span class="dot ok" aria-hidden="true"></span><span class="sub" id="dbInfo">…</span></span>
+</div>
 
 <!-- Compass: the orchestrator hub. Tiles are rendered from the TOOLS registry in app.js -->
 <section id="compass" aria-label="Compass">
@@ -277,6 +277,12 @@
     <button class="btn-dock" title="Drawer orientation: vertical (right) or horizontal (bottom); applies to all drawers">Vertical</button>
     <button id="btnAuditClose" title="Close (Esc)">✕</button>
   </div>
+  <div class="audit-filters">
+    <input id="auditSearch" type="search" placeholder="Search events…" aria-label="Search history" autocomplete="off">
+    <select id="auditTime" aria-label="Time range"><option value="all">All time</option><option value="today">Last 24 hours</option><option value="7d">Last 7 days</option><option value="30d">Last 30 days</option></select>
+    <select id="auditOutcome" aria-label="Outcome"><option value="all">Any outcome</option><option value="succeeded">Succeeded / approved</option><option value="failed">Failed / rejected</option></select>
+    <button id="btnAuditClear" type="button" hidden>Clear filters</button>
+  </div>
   <div id="auditChips"></div>
   <div id="auditBody"></div>
 </aside>
@@ -286,7 +292,7 @@
     <span class="ag-ico"><img class="ai-mini rest" src="/assets/robot-logo-animated_1.svg" alt="" aria-hidden="true"><img class="ai-mini focus" src="/assets/robot-logo-focused.svg" alt="" aria-hidden="true"></span>
     <div class="ag-title">
       <h2>AI Agent</h2>
-      <div class="ag-sub" id="agentStatus"></div>
+      <div class="ag-sub"><span id="agentStatus"></span><span class="ag-ctx" id="agentCtx"></span></div>
     </div>
     <div class="ag-tools">
       <div class="ag-menu-wrap">
@@ -297,6 +303,8 @@
             <input id="agentModel" list="agentModelList" placeholder="provider default" spellcheck="false" title="Model override (Enter to apply)">
             <datalist id="agentModelList"></datalist>
           </div>
+          <div class="ag-menu-sep"></div>
+          <button id="btnAgentDock" role="menuitem"><b>Dock beside the workspace</b><span>Wide screens only: the page makes room for the assistant</span></button>
           <div class="ag-menu-sep"></div>
           <button id="btnAgentReset" hidden role="menuitem"><b>Reset chat</b><span>Clear the conversation and start over</span></button>
           <button id="btnAgentDisconnect" hidden class="danger" role="menuitem"><b>Disconnect</b><span>Forget the stored provider choice</span></button>
@@ -384,7 +392,9 @@
 <dialog id="schemaModal">
   <div style="display:flex;align-items:center;gap:.8rem;margin-bottom:.6rem;flex-wrap:wrap">
     <h2 style="margin:0;font-size:.85rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)">Schema map <span class="sec-hint" id="schemaMapInfo"></span></h2>
-    <input id="schemaFilter" placeholder="filter tables… e.g. jeuxcom" style="max-width:230px">
+    <input id="schemaFilter" placeholder="filter tables… e.g. jeuxcom" style="max-width:230px" aria-label="Filter tables">
+    <button id="btnSchemaRefresh" type="button" title="Reload the schema from the database">Refresh</button>
+    <button id="btnSchemaFit" type="button" title="Re-layout and fit the graph to the view">Fit to view</button>
     <span class="hint" style="margin:0">drag to pan · scroll to zoom · solid line = FK constraint · dashed = inferred from column name</span>
     <span class="spacer"></span>
     <button id="btnCloseSchema">Close</button>
@@ -415,6 +425,8 @@
 </dialog>
 
 <main>
+  <div id="sessionBar" class="session-bar" aria-label="Approval session"></div>
+  <div id="pausedBanner" class="paused-banner" role="status" hidden><b>Session paused.</b> Approve, Reject and Skip are blocked (server-side too) until you resume. <button type="button" onclick="document.getElementById('btnResume').click()">Resume</button></div>
   <!-- (1) Rules -->
   <section class="panel" id="rulesPanel">
     <div class="panel-head">
@@ -575,12 +587,32 @@
     </div>
     <div class="row">
       <div><label for="asUser">User</label><input id="asUser" required placeholder="root"></div>
-      <div><label for="asPass">Password</label><input id="asPass" type="password" autocomplete="new-password"></div>
     </div>
-    <div class="row">
-      <div style="flex:2"><label for="asKey">Private key path (optional, overrides password)</label><input id="asKey" placeholder="C:\\Users\\you\\.ssh\\id_ed25519"></div>
-      <div><label for="asPhrase">Passphrase</label><input id="asPhrase" type="password" autocomplete="new-password"></div>
+    <div class="auth-head"><span class="auth-title">Authentication <span class="hint" style="margin:0" title="How this app proves who it is to the server">?</span></span><span class="spacer"></span><a class="auth-guide" href="https://www.ssh.com/academy/ssh/public-key-authentication" target="_blank" rel="noopener">Full SSH guide →</a></div>
+    <div class="auth-choice" id="asAuthChoice" role="radiogroup" aria-label="Authentication">
+      <button type="button" role="radio" aria-checked="true" class="on" data-auth="app-key"><b>Server Tools key</b><span>Recommended. No key handling</span></button>
+      <button type="button" role="radio" aria-checked="false" data-auth="own-key"><b>My own key</b><span>Paste a private key</span></button>
+      <button type="button" role="radio" aria-checked="false" data-auth="password"><b>Password</b><span>Plain SSH password</span></button>
     </div>
+    <div class="auth-panel" id="asAuthApp">
+      <p><b>1.</b> Run this once on the server (as the SSH user above), or paste the key into your provider's <i>SSH keys</i> panel:</p>
+      <div class="auth-cmd"><code id="asAppKeyCmd">loading the key…</code><button type="button" id="btnAsCopyKey">Copy</button></div>
+      <p><b>2.</b> The same key works for every server you add. Server Tools keeps the private half on this machine only (owner-readable file) and never shows it. <span class="hint" style="margin:0" id="asAppKeyFp"></span></p>
+    </div>
+    <div class="auth-panel" id="asAuthOwn" hidden>
+      <label for="asKeyInline">Private key</label>
+      <textarea id="asKeyInline" rows="5" spellcheck="false" autocomplete="off" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
+      <div class="row">
+        <div><label for="asPhrase">Passphrase (if the key has one)</label><input id="asPhrase" type="password" autocomplete="new-password"></div>
+        <div><label for="asKey">…or a key file on this machine</label><input id="asKey" placeholder="C:\Users\you\.ssh\id_ed25519"></div>
+      </div>
+      <p class="hint">Pasted keys are stored owner-only under <code>deploy-keys/</code>; they are never sent back to the browser.</p>
+    </div>
+    <div class="auth-panel" id="asAuthPass" hidden>
+      <label for="asPass">Password</label><input id="asPass" type="password" autocomplete="new-password">
+    </div>
+    <label class="chk" style="margin-top:.6rem"><input type="checkbox" id="asBootstrapClaude"> Auto-install Claude CLI</label>
+    <p class="hint" style="margin:.1rem 0 0 1.5rem">Bootstrap the agent right after connecting. You'll log in to Claude from the server (run <code>claude</code> in its terminal).</p>
     <div style="display:flex;gap:.5rem;margin-top:.6rem">
       <button type="submit" class="primary">Save server</button>
       <button type="button" id="btnAddServerCancel">Cancel</button>
@@ -588,6 +620,45 @@
   </form>
   <div id="serversList"></div>
 </aside>
+
+<aside id="connectorsDrawer" aria-label="Connectors" inert>
+  <div class="ssh-head">
+    <h2 style="margin:0;font-size:.85rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)">Connectors <span class="sec-hint" id="connectorsCount"></span></h2>
+    <span class="spacer"></span>
+    <button id="btnCnAdd" class="primary">+ Connect an account</button>
+    <button id="btnCnRefresh" title="Reload">Refresh</button>
+  </div>
+  <p class="hint" style="margin:.2rem 0 .8rem">GitHub and GitLab accounts, each backed by a personal access token kept in the encrypted vault. Browse a connector's repositories to connect one for deployment.</p>
+  <div id="connectorsList" class="cn-list"></div>
+</aside>
+
+<dialog id="cnModal" aria-label="Connector">
+  <form id="cnForm" method="dialog" novalidate>
+    <h3 id="cnModalTitle" style="margin:0 0 .6rem;font-size:1rem">Connect an account</h3>
+    <div class="auth-choice" id="cnKindChoice" role="radiogroup" aria-label="Provider">
+      <button type="button" role="radio" aria-checked="true" class="on" data-kind="github"><b>GitHub</b><span>github.com or GitHub Enterprise</span></button>
+      <button type="button" role="radio" aria-checked="false" data-kind="gitlab"><b>GitLab</b><span>gitlab.com or self-managed</span></button>
+    </div>
+    <div class="tf-grid" style="margin-top:.7rem">
+      <div class="tf-field"><label for="cnName">Name</label><input id="cnName" required maxlength="60" placeholder="GitHub" autocomplete="off"></div>
+      <div class="tf-field" id="cnBaseWrap"><label for="cnBase">Base URL <span class="hint">(optional)</span></label><input id="cnBase" autocomplete="off"></div>
+      <div class="tf-field tf-span"><label for="cnToken">Personal access token</label><input id="cnToken" type="password" autocomplete="off" placeholder="paste the token: it is stored in the vault, never shown again"><p class="tf-help" id="cnScopeHint"></p><p class="tf-help" id="cnTokenHelp"></p></div>
+      <div class="tf-field tf-span"><label for="cnTokenRef">…or a vault secret that already holds the token</label><select id="cnTokenRef"></select></div>
+    </div>
+    <p class="tf-err" id="cnErr" hidden></p>
+    <div class="modal-foot"><button type="button" id="btnCnCancel">Cancel</button><span class="spacer"></span><button type="submit" class="primary" id="btnCnSave">Save &amp; verify</button></div>
+  </form>
+</dialog>
+
+<dialog id="cnReposModal" aria-label="Repositories">
+  <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.5rem;flex-wrap:wrap">
+    <h3 id="cnReposTitle" style="margin:0;font-size:1rem;flex:1;min-width:0">Repositories</h3>
+    <span class="hint" id="cnReposCount"></span>
+    <button type="button" id="btnCnReposClose" class="iconbtn" title="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+  </div>
+  <input id="cnReposFilter" type="search" placeholder="Filter by name or description…" autocomplete="off" aria-label="Filter repositories">
+  <div id="cnReposList" class="cn-repos"></div>
+</dialog>
 
 <aside id="deployDrawer" aria-label="The Ascension" inert>
   <header class="asc-head">
@@ -597,8 +668,9 @@
     </div>
     <div class="asc-status" id="dpSysStatus" title="System status"></div>
     <span class="spacer"></span>
+    <button id="btnDpNew" class="primary asc-new-btn" title="Guided setup in five steps: source, framework, destination, access, review">New deployment</button>
     <div class="asc-add">
-      <button id="btnDpAdd" class="primary asc-add-btn">+ Add <span class="asc-caret">▾</span></button>
+      <button id="btnDpAdd" class="asc-add-btn" title="Add a single resource or import/export configuration">Add <span class="asc-caret">▾</span></button>
       <div class="asc-menu" id="dpAddMenu" hidden>
         <button data-act="add-repo"><b>Repository</b><span>Git URL or local folder</span></button>
         <button data-act="add-target"><b>Target</b><span>VPS over SSH or shared hosting</span></button>
@@ -613,7 +685,7 @@
     <button id="btnDpTheme" class="iconbtn asc-icon theme-toggle" title="Switch light / dark"><svg class="ico-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg><svg class="ico-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></button>
     <button id="btnDpRefresh" class="iconbtn asc-icon" title="Refresh repos, targets and runs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v5h-5"/></svg></button>
     <button id="btnDpSettings" class="iconbtn asc-icon" title="Deploy settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
-    <button id="btnDpClose" class="iconbtn asc-icon" title="Back to Compass (Esc)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    <button id="btnDpClose" class="iconbtn asc-icon" title="Back to Home (Esc)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
   </header>
   <div id="deployBody">
     <nav id="deployNav" aria-label="Workspace">
@@ -647,10 +719,12 @@
         <div class="dp-cards" id="dpCards"></div>
         <div id="dpReview"></div>
         <div class="dp-tabs" id="dpTabs">
+          <span class="dp-tabgroup" title="These tabs describe the selected run">Run</span>
           <button data-tab="overview" class="on">Overview</button>
           <button data-tab="map">Map</button>
           <button data-tab="plan">Plan</button>
           <button data-tab="log">Log</button>
+          <span class="dp-tabgroup" title="These tabs describe the target">Target</span>
           <button data-tab="releases">Releases</button>
           <button data-tab="setup">Setup</button>
           <button data-tab="manifest">Manifest</button>
@@ -850,96 +924,151 @@
 </dialog>
 
 <dialog id="dpTargetModal" aria-label="Deploy target">
-  <form id="dpTargetForm" method="dialog">
-    <div class="row" style="align-items:center">
-      <h3 id="dpTargetTitle" style="flex:1;margin:0">Add a deploy target</h3>
-      <div style="flex:0 0 260px"><select id="dtTemplate" title="Start from a saved configuration"><option value="">Start from a template…</option></select></div>
-    </div>
-    <div class="row">
-      <div style="flex:2"><label for="dtName">Name</label><input id="dtName" required placeholder="prod"></div>
-      <div style="flex:2"><label for="dtRepo">Repo</label><select id="dtRepo" required></select></div>
-    </div>
-    <div class="row">
-      <div style="flex:2"><label for="dtType">Type</label><select id="dtType"><option value="vps-ssh">VPS / server over SSH</option><option value="shared-hosting">Shared hosting (SFTP / FTP)</option><option value="paas">Platform (Vercel, Netlify, Cloudflare, Fly.io, Render)</option></select></div>
-      <div><label for="dtBuild">Build</label><select id="dtBuild"><option value="auto">auto</option><option value="remote">remote (on the server)</option><option value="local">local (ship artifact)</option></select></div>
-    </div>
-    <div data-type="vps-ssh">
-      <div class="row">
-        <div style="flex:2"><label for="dtProfile">SSH profile</label><select id="dtProfile"></select></div>
-        <div style="flex:2"><label for="dtRoot">App root on the server</label><input id="dtRoot" placeholder="/var/www/shop"></div>
+  <form id="dpTargetForm" method="dialog" novalidate>
+    <header class="tf-head">
+      <div class="tf-title">
+        <h3 id="dpTargetTitle">New deployment</h3>
+        <p class="tf-subtitle" id="dtSubtitle" aria-live="polite"></p>
       </div>
-      <div class="row">
-        <div><label for="dtWeb">Web server</label><select id="dtWeb"><option value="nginx">nginx</option><option value="apache">apache</option><option value="none">none / other</option></select></div>
-        <div style="flex:2"><label for="dtReload">Reload command <span class="hint">(filled from the web server)</span></label><input id="dtReload" placeholder="sudo -n systemctl reload nginx"></div>
-        <div style="flex:2"><label for="dtFpm">PHP-FPM reload <span class="hint">(PHP apps)</span></label><input id="dtFpm" placeholder="sudo -n systemctl reload php8.3-fpm"></div>
+      <div class="tf-head-tools">
+        <select id="dtTemplate" title="Start from a saved configuration" aria-label="Start from a template"><option value="">Start from a template…</option></select>
       </div>
-      <div class="row" style="align-items:flex-end">
-        <div style="flex:2"><label for="dtDomain">Domain <span class="hint">(optional: nginx vhost written after each deploy)</span></label><input id="dtDomain" placeholder="shop.example.com"></div>
-        <div><label class="chk" style="margin:0 0 .4rem"><input type="checkbox" id="dtSsl"> Let's Encrypt</label></div>
-        <div style="flex:2"><label for="dtSslEmail">Certificate e-mail</label><input id="dtSslEmail" placeholder="ops@example.com"></div>
-        <div><label class="chk" style="margin:0 0 .4rem"><input type="checkbox" id="dtWww"> also www.</label></div>
+    </header>
+
+    <!-- ===== Source: what am I deploying? ===== -->
+    <section class="tf-sec" aria-labelledby="tfSrcH">
+      <h4 id="tfSrcH">Source</h4>
+      <div class="tf-grid">
+        <div class="tf-field"><label for="dtName">Name</label><input id="dtName" required maxlength="80" placeholder="shop-prod" autocomplete="off"><p class="tf-help">Prefilled from the repository; edit freely.</p></div>
+        <div class="tf-field"><label for="dtRepo">Repository</label><select id="dtRepo" required></select></div>
+        <div class="tf-field"><label for="dtBranchView">Branch</label><input id="dtBranchView" readonly tabindex="-1" aria-describedby="dtBranchHelp"><p class="tf-help" id="dtBranchHelp">Repository branch; the automation section can follow another one.</p></div>
       </div>
-      <div class="row dp-adv-only">
-        <div><label for="dtProc">Process manager (Node / Python)</label><select id="dtProc"><option value="none">none</option><option value="systemd">systemd</option><option value="pm2">pm2</option></select></div>
-        <div style="flex:2"><label for="dtProcName">systemd unit / pm2 app name</label><input id="dtProcName" placeholder="shop.service or shop"></div>
+      <label class="chk tf-auto"><input type="checkbox" id="dtAutoEnabled"> <span>Deploy automatically when <code id="dtAutoBranchLabel">main</code> changes</span></label>
+    </section>
+
+    <!-- ===== Server: where is it going? ===== -->
+    <section class="tf-sec" aria-labelledby="tfSrvH">
+      <h4 id="tfSrvH">Server</h4>
+      <div class="tf-grid">
+        <div class="tf-field"><label for="dtType">Destination</label><select id="dtType"><option value="shared-hosting">Shared hosting (SFTP / FTP)</option><option value="vps-ssh">Your own server over SSH</option><option value="paas">Platform (Vercel, Netlify, Cloudflare, Fly.io, Render)</option></select></div>
       </div>
-    </div>
-    <div data-type="paas" hidden>
-      <div class="row">
-        <div style="flex:2"><label for="dtPaasProvider">Platform</label><select id="dtPaasProvider"></select></div>
-        <div style="flex:2"><label for="dtPaasToken">API token (vault secret)</label><select id="dtPaasToken"></select></div>
-        <div><label class="chk" style="margin-top:1.4rem"><input type="checkbox" id="dtPaasProd" checked> production deploy</label></div>
+
+      <div data-type="shared-hosting" hidden>
+        <div class="tf-grid">
+          <div class="tf-field"><label for="dtTransport">Connection method</label><select id="dtTransport"><option value="sftp">SFTP (SSH server profile)</option><option value="ftps">FTPS (FTP over TLS)</option><option value="ftp">FTP (unencrypted)</option></select></div>
+          <div class="tf-field" data-transport="sftp"><label for="dtSftpProfile">Server</label><select id="dtSftpProfile"></select><p class="tf-help">Host, user and key come from the server profile. <button type="button" class="tf-link" data-act="add-server">Add a server…</button></p></div>
+          <div class="tf-field" data-transport="ftp" hidden><label for="dtFtpHost">Host</label><input id="dtFtpHost" placeholder="ftp.example.com" autocomplete="off"></div>
+          <div class="tf-field" data-transport="ftp" hidden><label for="dtFtpUser">Username</label><input id="dtFtpUser" placeholder="acme" autocomplete="off"></div>
+          <div class="tf-field" data-transport="ftp" hidden><label for="dtFtpPass">Password / secret</label><div class="tf-inline"><select id="dtFtpPass"></select><button type="button" class="tf-mini" data-act="new-secret" data-for="dtFtpPass" title="Store a new secret in the vault">+ Secret</button></div></div>
+          <div class="tf-field"><label for="dtDocroot">Deployment directory</label><input id="dtDocroot" placeholder="/public_html" autocomplete="off"><p class="tf-help">The folder your web server serves. Releases are staged next to it.</p></div>
+        </div>
+        <details class="tf-more tf-more-sub" id="dtConnAdv">
+          <summary>Advanced connection settings <span class="tf-sum" id="dtConnSum"></span></summary>
+          <div class="tf-grid">
+            <div class="tf-field" data-transport="ftp"><label for="dtFtpPort">Port</label><input id="dtFtpPort" type="number" min="1" max="65535" placeholder="21"><p class="tf-help" id="dtPortHelp">Default for the selected method; only change it for a custom port.</p></div>
+            <div class="tf-field" data-transport="ftps" hidden><label for="dtFtpSecure">TLS mode</label><select id="dtFtpSecure"><option value="explicit">Explicit (AUTH TLS, port 21)</option><option value="implicit">Implicit (port 990)</option></select></div>
+            <div class="tf-field tf-span" data-transport="ftp"><label for="dtConnUrl">Paste a connection URL</label><input id="dtConnUrl" placeholder="ftp://acme@ftp.example.com:21/public_html" autocomplete="off"><p class="tf-help">Fills method, host, port, username and directory. Passwords in the URL are ignored: pick a vault secret instead.</p></div>
+          </div>
+        </details>
       </div>
-      <p class="hint" id="dtPaasHint" style="margin:.2rem 0 0"></p>
-      <div class="row" id="dtPaasFields"></div>
-    </div>
-    <div data-type="shared-hosting" hidden>
-      <div class="row">
-        <div><label for="dtTransport">Transport</label><select id="dtTransport"><option value="sftp">SFTP (SSH profile)</option><option value="ftps">FTPS</option><option value="ftp">FTP (insecure)</option></select></div>
-        <div style="flex:2" data-transport="sftp"><label for="dtSftpProfile">SSH profile</label><select id="dtSftpProfile"></select></div>
-        <div style="flex:2" data-transport="ftp" hidden><label for="dtFtpHost">Host</label><input id="dtFtpHost" placeholder="ftp.example.com"></div>
-        <div data-transport="ftp" hidden><label for="dtFtpPort">Port</label><input id="dtFtpPort" type="number" placeholder="21"></div>
+
+      <div data-type="vps-ssh" hidden>
+        <div class="tf-grid">
+          <div class="tf-field"><label for="dtProfile">Server</label><select id="dtProfile"></select><p class="tf-help">An SSH server profile. <button type="button" class="tf-link" data-act="add-server">Add a server…</button></p></div>
+          <div class="tf-field"><label for="dtRoot">Deployment directory</label><input id="dtRoot" placeholder="/var/www/shop" autocomplete="off"><p class="tf-help">Releases, shared files and the <code>current</code> link live here.</p></div>
+          <div class="tf-field"><label for="dtWeb">Web server</label><select id="dtWeb"><option value="nginx">nginx</option><option value="apache">apache</option><option value="none">none / other</option></select></div>
+        </div>
+        <details class="tf-more tf-more-sub" id="dtVpsAdv">
+          <summary>Domain, reload commands and runtime <span class="tf-sum" id="dtVpsSum"></span></summary>
+          <div class="tf-grid">
+            <div class="tf-field"><label for="dtDomain">Domain <span class="hint">(optional)</span></label><input id="dtDomain" placeholder="shop.example.com" autocomplete="off"><p class="tf-help">An nginx vhost is written after each deploy.</p></div>
+            <div class="tf-field"><label for="dtSslEmail">Certificate e-mail</label><input id="dtSslEmail" placeholder="ops@example.com" autocomplete="off">
+              <div class="tf-checks"><label class="chk"><input type="checkbox" id="dtSsl"> Let's Encrypt certificate</label><label class="chk"><input type="checkbox" id="dtWww"> also www.</label></div></div>
+            <div class="tf-field"><label for="dtReload">Reload command</label><input id="dtReload" placeholder="sudo -n systemctl reload nginx" autocomplete="off"><p class="tf-help">Filled from the web server choice.</p></div>
+            <div class="tf-field"><label for="dtFpm">PHP-FPM reload <span class="hint">(PHP apps)</span></label><input id="dtFpm" placeholder="sudo -n systemctl reload php8.3-fpm" autocomplete="off"></div>
+            <div class="tf-field"><label for="dtProc">Process manager <span class="hint">(Node / Python)</span></label><select id="dtProc"><option value="none">none</option><option value="systemd">systemd</option><option value="pm2">pm2</option></select></div>
+            <div class="tf-field" id="dtProcNameWrap"><label for="dtProcName">systemd unit / pm2 app name</label><input id="dtProcName" placeholder="shop.service or shop" autocomplete="off"></div>
+            <div class="tf-field"><label for="dtBuild">Build location</label><select id="dtBuild"><option value="auto">Auto (on the server when it has the toolchain)</option><option value="remote">On the server</option><option value="local">On this machine, upload the artifact</option></select></div>
+          </div>
+        </details>
       </div>
-      <div class="row" data-transport="ftp" hidden>
-        <div><label for="dtFtpUser">User</label><input id="dtFtpUser" placeholder="acme"></div>
-        <div><label for="dtFtpPass">Password secret</label><select id="dtFtpPass"></select></div>
-        <div><label for="dtFtpSecure">FTPS mode</label><select id="dtFtpSecure"><option value="explicit">explicit (AUTH TLS)</option><option value="implicit">implicit (port 990)</option></select></div>
+
+      <div data-type="paas" hidden>
+        <div class="tf-grid">
+          <div class="tf-field"><label for="dtPaasProvider">Platform</label><select id="dtPaasProvider"></select></div>
+          <div class="tf-field"><label for="dtPaasToken">API token</label><div class="tf-inline"><select id="dtPaasToken"></select><button type="button" class="tf-mini" data-act="new-secret" data-for="dtPaasToken" title="Store a new secret in the vault">+ Secret</button></div></div>
+          <div class="tf-field"><label class="chk" style="margin-top:1.6rem"><input type="checkbox" id="dtPaasProd" checked> Production deploy</label></div>
+        </div>
+        <p class="tf-help" id="dtPaasHint"></p>
+        <div class="tf-grid" id="dtPaasFields"></div>
       </div>
-      <div class="row">
-        <div style="flex:2"><label for="dtHome">Home / releases folder</label><input id="dtHome" placeholder="/home/acme (or / for FTP)"></div>
-        <div style="flex:2"><label for="dtDocroot">Document root</label><input id="dtDocroot" placeholder="/home/acme/public_html"></div>
-        <div><label for="dtStrategy">Docroot strategy</label><select id="dtStrategy"><option value="auto">auto</option><option value="symlink">symlink</option><option value="htaccess">.htaccess</option><option value="in-place">in-place (FTP)</option></select></div>
+
+      <div class="tf-test" id="dtTestBox">
+        <button type="button" id="btnDtTest">Test connection</button>
+        <div class="tf-test-result" id="dtTestResult" role="status" aria-live="polite"></div>
       </div>
-    </div>
-    <div class="row">
-      <div style="flex:3"><label for="dtHealth">Health check URL <span class="hint">(verified after each deploy; failures roll back)</span></label><input id="dtHealth" placeholder="https://shop.example.com/up"></div>
-    </div>
-    <details class="dp-adv" id="dtAdvanced">
-      <summary>Advanced settings <span class="hint">releases to keep, .env from the vault, overrides, auto-ship</span></summary>
-      <div class="row">
-        <div><label class="chk" style="margin-top:1.4rem"><input type="checkbox" id="dtHealthRemote"> check health from the server</label></div>
-        <div><label for="dtKeep">Keep releases</label><input id="dtKeep" type="number" min="2" max="50" placeholder="5"></div>
-        <div style="flex:2"><label class="chk" style="margin-top:1.4rem"><button type="button" id="btnDtSaveTemplate" class="dp-mini" style="padding:.2rem .6rem">Save these settings as a template…</button></label></div>
+    </section>
+
+    <!-- ===== Progressive disclosure ===== -->
+    <details class="tf-more" id="dtSecEnv">
+      <summary>Environment <span class="tf-sum" id="dtEnvSum"></span><span class="tf-issues" hidden></span></summary>
+      <div class="tf-grid">
+        <div class="tf-field"><label for="dtEnvVault">Environment file</label><div class="tf-inline"><select id="dtEnvVault"><option value="">None</option></select><button type="button" class="tf-mini" data-act="new-secret" data-for="dtEnvVault" title="Store a new secret in the vault">+ Secret</button></div><p class="tf-help">A vault secret whose value is the file content (for example a full <code>.env</code>).</p></div>
+        <div class="tf-field" data-env="on"><label for="dtEnvMode">When deploying</label><select id="dtEnvMode"><option value="upload">Upload it if missing</option><option value="always">Overwrite it every deploy</option><option value="keep">Never write it</option></select></div>
+        <div class="tf-field" data-env="on"><label for="dtEnvTarget">Destination</label><input id="dtEnvTarget" placeholder="shared/.env" autocomplete="off"><p class="tf-help">Relative to the deployment directory.</p></div>
       </div>
-      <div class="row">
-        <div style="flex:2"><label for="dtEnvVault">.env from vault (optional)</label><select id="dtEnvVault"><option value="">none</option></select></div>
-        <div><label for="dtEnvMode">Mode</label><select id="dtEnvMode"><option value="upload">upload once if missing</option><option value="always">overwrite every deploy</option><option value="keep">never write</option></select></div>
-        <div style="flex:2"><label for="dtEnvTarget">Path (relative to app root)</label><input id="dtEnvTarget" placeholder="shared/.env"></div>
-      </div>
-      <label for="dtOverrides">Manifest overrides for this target (JSON, optional)</label>
-      <textarea id="dtOverrides" class="dp-code" rows="4" spellcheck="false" placeholder='{ "build": { "env": { "APP_URL": "https://shop.example.com" } } }'></textarea>
     </details>
-    <div class="dp-card" style="margin:.7rem 0 0;padding:.55rem .75rem">
-      <label class="chk" style="margin:0"><input type="checkbox" id="dtAutoEnabled"> <b>Auto-ship</b>deploy automatically when the branch changes</label>
-      <div class="row" id="dtAutoRow" hidden>
-        <div><label for="dtAutoMode">Trigger</label><select id="dtAutoMode"><option value="webhook">Webhook (GitHub / GitLab / Bitbucket / Gitea push)</option><option value="poll">Poll the remote with git ls-remote</option></select></div>
-        <div><label for="dtAutoBranch">Branch to follow</label><input id="dtAutoBranch" placeholder="defaults to the repo branch"></div>
-        <div data-auto="poll" hidden><label for="dtAutoPoll">Every (minutes)</label><input id="dtAutoPoll" type="number" min="1" max="1440" placeholder="5"></div>
-        <div data-auto="webhook"><label class="chk" style="margin-top:1.4rem"><input type="checkbox" id="dtAutoRotate"> rotate the webhook secret</label></div>
+
+    <details class="tf-more" id="dtSecHealth">
+      <summary>Health checks <span class="tf-sum" id="dtHealthSum"></span><span class="tf-issues" hidden></span></summary>
+      <label class="chk"><input type="checkbox" id="dtHealthEnabled"> Verify the deployment after publishing</label>
+      <div class="tf-grid" data-health="on">
+        <div class="tf-field tf-span"><label for="dtHealth">URL to check</label><input id="dtHealth" type="url" placeholder="https://shop.example.com/up" autocomplete="off"><p class="tf-help">Expected to answer 2xx/3xx within a minute. If it fails, the previous release is restored.</p></div>
+        <div class="tf-field" id="dtHealthRemoteWrap"><label class="chk" style="margin-top:.2rem"><input type="checkbox" id="dtHealthRemote"> Run the check from the server (curl over SSH)</label></div>
       </div>
-      <p class="hint" id="dtAutoHint" hidden style="margin:.35rem 0 0">Webhook pushes are verified with a per-target secret (HMAC or token). The listener binds to 127.0.0.1:3001 by default: expose it with a tunnel or reverse proxy (set <code>DEPLOY_HOOK_BIND</code> / <code>DEPLOY_HOOK_PORT</code> in <code>.env</code>). Polling needs no inbound access.</p>
+    </details>
+
+    <details class="tf-more" id="dtSecRelease">
+      <summary>Release settings <span class="tf-sum" id="dtReleaseSum"></span><span class="tf-issues" hidden></span></summary>
+      <div class="tf-grid">
+        <div class="tf-field"><label for="dtKeep">Previous releases to keep</label><input id="dtKeep" type="number" min="2" max="50" placeholder="auto" autocomplete="off"><p class="tf-help">Rollback can only go back this far.</p></div>
+        <div class="tf-field" data-type-only="shared-hosting"><label for="dtStrategy">Publishing method</label><select id="dtStrategy"><option value="auto">Auto (detected on the server)</option><option value="symlink">Symlink the document root to the release</option><option value="htaccess">.htaccess rewrite into the release</option><option value="in-place">In place: upload, then swap folders (FTP)</option></select></div>
+        <div class="tf-field" data-type-only="shared-hosting"><label for="dtHome">Releases folder</label><input id="dtHome" placeholder="auto" autocomplete="off"><p class="tf-help" id="dtHomeHelp">Where releases and shared files are kept. Leave empty to derive it from the deployment directory.</p></div>
+      </div>
+    </details>
+
+    <details class="tf-more" id="dtSecAuto" hidden>
+      <summary>Automation details <span class="tf-sum" id="dtAutoSum"></span><span class="tf-issues" hidden></span></summary>
+      <div class="tf-grid">
+        <div class="tf-field"><label for="dtAutoMode">Trigger</label><select id="dtAutoMode"><option value="webhook">Webhook from GitHub / GitLab / Bitbucket / Gitea</option><option value="poll">Poll the remote (git ls-remote)</option></select></div>
+        <div class="tf-field"><label for="dtAutoBranch">Branch to follow</label><input id="dtAutoBranch" placeholder="repository branch" autocomplete="off"><p class="tf-help">Leave empty to follow the repository branch.</p></div>
+        <div class="tf-field" data-auto="poll" hidden><label for="dtAutoPoll">Check every (minutes)</label><input id="dtAutoPoll" type="number" min="1" max="1440" placeholder="5"></div>
+        <div class="tf-field tf-span" data-auto="webhook" id="dtWebhookWrap">
+          <label>Webhook</label>
+          <div class="tf-webhook" id="dtWebhookInfo"><span class="hint">The webhook URL and its secret appear here once the target is saved.</span></div>
+        </div>
+      </div>
+      <p class="tf-help" id="dtAutoHint">Pushes are verified with a per-target secret (HMAC or token). The listener binds to 127.0.0.1:3001 by default: expose it with a tunnel or reverse proxy (<code>DEPLOY_HOOK_BIND</code> / <code>DEPLOY_HOOK_PORT</code> in <code>.env</code>). Polling needs no inbound access.</p>
+    </details>
+
+    <details class="tf-more" id="dtSecOverrides">
+      <summary>Advanced overrides <span class="tf-sum" id="dtOverridesSum"></span><span class="tf-issues" hidden></span></summary>
+      <div class="tf-field tf-span">
+        <label for="dtOverrides">Manifest overrides</label>
+        <p class="tf-help">Target-specific JSON that overrides the repository deployment manifest (build env, hooks, runtime…).</p>
+        <textarea id="dtOverrides" class="dp-code" rows="6" spellcheck="false" placeholder='{ "build": { "env": { "APP_URL": "https://shop.example.com" } } }'></textarea>
+        <p class="tf-err" id="dtOverridesErr" hidden></p>
+      </div>
+      <div class="tf-actions-row"><button type="button" id="btnDtSaveTemplate" class="tf-mini">Save these settings as a template…</button></div>
+    </details>
+
+    <p class="tf-err tf-form-error" id="dtFormError" hidden></p>
+    <div class="modal-foot tf-foot">
+      <button type="button" id="btnDpTargetCancel">Cancel</button>
+      <span class="spacer"></span>
+      <button type="button" id="btnDtSaveAnyway" hidden>Save without testing</button>
+      <button type="submit" class="primary" id="btnDtSubmit">Test &amp; create</button>
     </div>
-    <div class="modal-foot"><button type="button" id="btnDpTargetCancel">Cancel</button><button type="submit" class="primary">Save target</button></div>
   </form>
 </dialog>
 
@@ -1113,6 +1242,22 @@
   <div id="sshConsoleHost"></div>
 </aside>
 
+<dialog id="connFormModal" aria-label="Connection profile">
+  <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.6rem">
+    <h2 style="margin:0;font-size:.85rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)">Connection profile</h2>
+    <span class="spacer"></span>
+    <button type="button" class="iconbtn" id="btnConnFormClose" title="Close (Esc)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+  </div>
+  <div id="connFormHost"></div>
+</dialog>
+<dialog id="serverFormModal" aria-label="Add server">
+  <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.6rem">
+    <h2 style="margin:0;font-size:.85rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)">Add server</h2>
+    <span class="spacer"></span>
+    <button type="button" class="iconbtn" id="btnServerFormClose" title="Close (Esc)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+  </div>
+  <div id="serverFormHost"></div>
+</dialog>
 <dialog id="confirmModal">
   <h2 id="confirmTitle" style="margin:0 0 .6rem;font-size:.85rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)"></h2>
   <div id="confirmMsg"></div>
@@ -1125,11 +1270,9 @@
 <div id="toast"></div>
 
 <!-- quick access: floating compass; hover/focus lists every module -->
-<div id="quickFab" class="qfab" aria-label="Quick access" popover="manual">
-  <div class="qfab-menu" id="qfabMenu" role="menu"></div>
-  <button class="qfab-btn" title="Quick access to all modules" aria-haspopup="menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/><circle cx="12" cy="12" r="1" fill="currentColor"/></svg></button>
-</div>
 <script src="app.js"></script>
 <script src="deploy.js"></script>
+<script src="connectors.js"></script>
+<script src="navigation.js"></script>
 </body>
 </html>
