@@ -46,7 +46,7 @@ dock beside the workspace on wide screens from its ⋯ menu.
 **Connectors.** The Connectors page (`#/connectors`) holds GitHub and GitLab accounts. Paste a personal
 access token once (or point at a vault secret): it is stored in the encrypted vault under a
 `GITHUB_TOKEN_*` / `GITLAB_TOKEN_*` name, verified against the provider (`/user`), and the card shows the
-account, its scopes and the verification state. "Browse repositories" lists what the token can see and
+account, its scopes and the verification state. "Browse repositories" opens the connector's repositories view (`#/connectors/<id>/repos`), listing what the token can see;
 **Connect** prefills the repository form with the clone URL, default branch and the token reference.
 GitHub Enterprise and self-managed GitLab work through the base URL. API: `/api/connectors`
 (list, create, update, verify, repos, delete). Tokens never leave the vault.

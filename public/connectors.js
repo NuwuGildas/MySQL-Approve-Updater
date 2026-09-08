@@ -8,10 +8,25 @@ const CN_LOGO = {
   github: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5A11.5 11.5 0 0 0 .5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.2.8-.6v-2.1c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.7 1.3 3.4 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.7 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.2 1.2a11 11 0 0 1 5.8 0c2.2-1.5 3.2-1.2 3.2-1.2.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.4-2.7 5.4-5.3 5.7.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A11.5 11.5 0 0 0 23.5 12 11.5 11.5 0 0 0 12 .5z"/></svg>',
   gitlab: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M22.7 13.5 21.5 9.8l-2.4-7.4a.6.6 0 0 0-1.1 0L15.6 9.8H8.4L6 2.4a.6.6 0 0 0-1.1 0L2.5 9.8l-1.2 3.7a1.2 1.2 0 0 0 .4 1.3L12 22.3l10.3-7.5a1.2 1.2 0 0 0 .4-1.3z"/></svg>',
 };
+/* status as an icon-only badge: the label lives in title/aria-label */
+const CN_STATUS = {
+  ok: { label: 'Verified', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>' },
+  error: { label: 'Verification failed', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 6v7"/><circle cx="12" cy="17.5" r="1" fill="currentColor" stroke="none"/></svg>' },
+  unverified: { label: 'Not verified yet', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 7v5l3 2"/><circle cx="12" cy="12" r="8"/></svg>' },
+};
 const cnProvider = (kind) => cn.providers.find((p) => p.id === kind) || { label: kind };
 
-function openConnectors() { $('connectorsDrawer').classList.add('open'); return loadConnectors(); }
-const closeConnectors = () => $('connectorsDrawer').classList.remove('open');
+/* openConnectors(connectorId) shows that connector's repositories view; without an id, the account list. */
+async function openConnectors(reposOf) {
+  $('connectorsDrawer').classList.add('open');
+  if (!reposOf) { cnShowMain(); return loadConnectors(); }
+  if (!cn.list.length) await loadConnectors();
+  const c = cn.list.find((x) => x.id === reposOf);
+  if (!c) { toast('That connector no longer exists', 'warning'); if (typeof navigate === 'function') navigate('#/connectors', { replace: true }); return; }
+  return cnShowRepos(c);
+}
+const closeConnectors = () => { $('connectorsDrawer').classList.remove('open'); cnShowMain(); };
+function cnShowMain() { $('cnMain').hidden = false; $('cnReposView').hidden = true; cn.reposFor = null; }
 
 async function loadConnectors() {
   const host = $('connectorsList');
@@ -28,7 +43,7 @@ async function loadConnectors() {
       <div class="cn-card-head">
         <span class="cn-logo ${esc(c.kind)}">${CN_LOGO[c.kind] || ''}</span>
         <div class="cn-id"><div class="cn-name">${esc(c.name)}</div><div class="cn-sub">${esc(cnProvider(c.kind).label)}${c.baseUrl && !/api\.github\.com|gitlab\.com$/.test(c.baseUrl) ? ` · ${esc(c.baseUrl.replace(/^https?:\/\//, ''))}` : ''}</div></div>
-        <span class="badge ${c.status === 'ok' ? 'approved' : c.status === 'error' ? 'failed' : 'plan'}">${c.status === 'ok' ? 'verified' : c.status === 'error' ? 'error' : 'unverified'}</span>
+        <span class="cn-status ${esc(c.status)}" role="img" data-status="${esc(c.status)}" aria-label="${CN_STATUS[c.status]?.label || c.status}" title="${CN_STATUS[c.status]?.label || c.status}">${CN_STATUS[c.status]?.icon || ''}</span>
       </div>
       ${c.status === 'ok' && c.account ? `<div class="cn-account">${c.account.avatar ? `<img src="${esc(c.account.avatar)}" alt="" width="28" height="28">` : ''}<div><b>${esc(c.account.name || c.account.login)}</b> <span class="hint">@${esc(c.account.login)}</span>${c.account.scopes?.length ? `<div class="cn-scopes">${c.account.scopes.map((s) => `<span class="chip">${esc(s)}</span>`).join('')}</div>` : ''}</div></div>` : c.status === 'error' ? `<div class="cn-error">${esc(c.error || 'verification failed')}</div>` : ''}
       <div class="cn-meta"><span class="hint">secret <code>${esc(c.secretName)}</code></span>${c.verifiedAt ? `<span class="hint">checked ${esc(dpFmtAgo(c.verifiedAt))}</span>` : ''}</div>
@@ -46,7 +61,7 @@ async function cnAction(id, act, btn) {
   try {
     if (act === 'verify') { btn.disabled = true; const r = await api(`/api/connectors/${id}/verify`, { method: 'POST' }); toast(r.status === 'ok' ? `Verified as @${r.account.login}` : r.error, r.status === 'ok' ? 'success' : 'error'); await loadConnectors(); }
     else if (act === 'edit') cnOpenModal(c);
-    else if (act === 'repos') await cnOpenRepos(c);
+    else if (act === 'repos') { if (typeof navigate === 'function') navigate(`#/connectors/${id}/repos`); else await cnShowRepos(c); }
     else if (act === 'remove') {
       const ok = await confirmDialog({ title: `Remove ${c.name}`, message: `Remove the <b>${esc(c.name)}</b> connector? Repositories already connected keep working: they reference the vault secret <code>${esc(c.secretName)}</code>, which stays in the vault.`, okLabel: 'Remove', okClass: 'reject' });
       if (!ok) return;
@@ -97,15 +112,18 @@ $('cnForm').addEventListener('submit', async (e) => {
   finally { $('btnCnSave').disabled = false; $('btnCnSave').textContent = 'Save & verify'; }
 });
 
-/* ---- repositories of a connector → connect one ---- */
-async function cnOpenRepos(c) {
-  cn.reposFor = c; cn.rows = [];
-  $('cnReposTitle').textContent = `${c.name} · repositories`;
+/* ---- repositories of a connector (a view of the Connectors page) → connect one ---- */
+async function cnShowRepos(c) {
+  const same = cn.reposFor && cn.reposFor.id === c.id && cn.rows.length;
+  cn.reposFor = c;
+  $('cnMain').hidden = true; $('cnReposView').hidden = false;
+  $('cnReposTitle').firstChild.textContent = `${c.name} · repositories `;
+  $('cnReposHint').textContent = `Repositories the ${cnProvider(c.kind).label} token of ${c.name}${c.account ? ' (@' + c.account.login + ')' : ''} can see. Connect one to prefill "connect a repository" with its URL, default branch and token.`;
+  if (same) { cnRenderRepos(); return; } // back from the repo modal: keep the list and the filter
+  cn.rows = []; $('cnReposFilter').value = ''; $('cnReposCount').textContent = '';
   $('cnReposList').innerHTML = '<div class="empty" style="padding:1rem"><span class="spinner"></span> Loading repositories…</div>';
-  $('cnReposFilter').value = '';
-  $('cnReposModal').showModal();
-  try { const r = await api(`/api/connectors/${c.id}/repos`); cn.rows = r.repos; cnRenderRepos(); }
-  catch (e) { $('cnReposList').innerHTML = `<div class="empty" style="padding:1rem;color:var(--red)">${esc(e.message)}</div>`; }
+  try { const r = await api(`/api/connectors/${c.id}/repos`); if (cn.reposFor !== c) return; cn.rows = r.repos; cnRenderRepos(); }
+  catch (e) { if (cn.reposFor === c) $('cnReposList').innerHTML = `<div class="empty" style="padding:1rem;color:var(--red)">${esc(e.message)}</div>`; }
 }
 function cnRenderRepos() {
   const q = $('cnReposFilter').value.trim().toLowerCase();
@@ -116,10 +134,11 @@ function cnRenderRepos() {
   $('cnReposList').querySelectorAll('[data-i]').forEach((b) => b.addEventListener('click', () => cnConnectRepo(cn.rows[Number(b.dataset.i)])));
 }
 $('cnReposFilter').addEventListener('input', cnRenderRepos);
-$('btnCnReposClose').addEventListener('click', () => $('cnReposModal').close());
+$('btnCnReposBack').addEventListener('click', () => { if (typeof navigate === 'function') navigate('#/connectors'); else cnShowMain(); });
+$('btnCnReposRefresh').addEventListener('click', () => { if (cn.reposFor) { cn.rows = []; cnShowRepos(cn.reposFor); } });
+$('dpRepoModal').addEventListener('close', () => { if (cn.reposFor && !$('cnReposView').hidden) setTimeout(cnRenderRepos, 300); }); // a just-connected repo shows its badge
 async function cnConnectRepo(r) {
   const c = cn.reposFor; if (!c) return;
-  $('cnReposModal').close();
   if (typeof loadDeploy === 'function' && !dp.loaded) await loadDeploy();
   dpOpenRepoModal(null);
   $('drName').value = r.name.split('/').pop(); $('drKind').value = 'git'; $('drUrl').value = r.url || r.sshUrl || ''; $('drBranch').value = r.defaultBranch || '';

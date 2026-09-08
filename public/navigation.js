@@ -102,7 +102,7 @@ function applyRoute(resolved, path, options = {}) {
     case 'deploy': { const targetId = resolved.parts[0] === 'targets' ? resolved.parts[1] : undefined; openDeploy(targetId).then(() => { if (targetId && !dp.targets.some((t) => t.id === targetId)) { toast('That deploy target no longer exists', 'warning'); navigate('#/deployments', { replace: true }); } }); break; }
     case 'servers': openServers(); if (resolved.parts[1] === 'terminal' && resolved.parts[0]) openServerTerminal(resolved.parts[0]); break;
     case 'history': openAudit(); break;
-    case 'connectors': openConnectors(); break;
+    case 'connectors': openConnectors(resolved.parts[1] === 'repos' ? resolved.parts[0] : undefined); break;
     case 'settings': { const sec = resolved.parts[0] || lastSettingsSection; lastSettingsSection = sec; renderSettings(); const d = $('settingsModal'); if (!d.open) d.show(); showSettingsSection(sec); break; }
     case 'connections': { $('connForm').hidden = true; loadConns().catch((e) => toast(e.message, 'error')); const d = $('connModal'); if (!d.open) d.show(); break; }
   }
@@ -120,7 +120,7 @@ function focusPageHeading(id) {
   const h = id === 'deploy' ? $('deployDrawer').querySelector('.asc-title h2')
     : id === 'servers' ? $('serversDrawer').querySelector('h2')
     : id === 'history' ? $('auditDrawer').querySelector('h2')
-    : id === 'connectors' ? $('connectorsDrawer').querySelector('h2')
+    : id === 'connectors' ? ($('cnReposView').hidden ? $('cnMain') : $('cnReposView')).querySelector('h2')
     : id === 'home' ? $('compass').querySelector('h2')
     : id === 'schema' ? $('schemaModal').querySelector('h2')
     : id === 'settings' ? $('settingsModal').querySelector('.settings-titlebar b')
