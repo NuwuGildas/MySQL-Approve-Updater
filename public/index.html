@@ -55,6 +55,12 @@
   <h1 id="homeTitle">Server Tools</h1>
   <span class="tool-crumb" id="toolCrumb" hidden></span>
   <span class="sub sse-link" title="This indicator shows the browser's live link to Server Tools, not the database or a server"><span class="dot" id="sseDot"></span> app link</span>
+  <div class="proj-switch" id="projSwitch" title="Active project: the AI assistant keeps one conversation per project">
+    <label for="projSelect" class="sr-only">Active project</label>
+    <span class="proj-dot" id="projDot" aria-hidden="true"></span>
+    <select id="projSelect" aria-describedby="projSwitchHint"><option value="general">General</option></select>
+    <span id="projSwitchHint" class="sr-only">Switching projects reloads the assistant conversation for that project.</span>
+  </div>
   <span class="spacer"></span>
   <div class="ai-agent" title="AI assistant: works across every module">
     <button class="ai-real" id="btnAiAgent" title="AI assistant" aria-label="AI assistant"></button>
@@ -79,6 +85,7 @@
 <div id="pageHead" hidden>
   <div><h1 id="pageTitle" tabindex="-1">Server Tools</h1><p id="pageDesc"></p></div>
   <span id="pageContextWrap" hidden title="Active database profile"><span class="dot ok" aria-hidden="true"></span><span class="sub" id="dbInfo">…</span></span>
+  <span id="pageProject" class="page-project" title="Active project"><span class="proj-dot" aria-hidden="true"></span><span class="sub">Project · <b id="pageProjectName">General</b></span></span>
 </div>
 
 <!-- Compass: the orchestrator hub. Tiles are rendered from the TOOLS registry in app.js -->
@@ -292,7 +299,7 @@
     <span class="ag-ico"><img class="ai-mini rest" src="/assets/robot-logo-animated_1.svg" alt="" aria-hidden="true"><img class="ai-mini focus" src="/assets/robot-logo-focused.svg" alt="" aria-hidden="true"></span>
     <div class="ag-title">
       <h2>AI Agent</h2>
-      <div class="ag-sub"><span id="agentStatus"></span><span class="ag-ctx" id="agentCtx"></span></div>
+      <div class="ag-sub"><span id="agentStatus"></span><span class="ag-ctx" id="agentCtx"></span><span class="ag-ctx ag-proj" id="agentProj"></span></div>
     </div>
     <div class="ag-tools">
       <div class="ag-menu-wrap">
