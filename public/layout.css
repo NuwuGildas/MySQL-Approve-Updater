@@ -65,6 +65,26 @@ body.shell #serversDrawer .btn-dock, body.shell #auditDrawer .btn-dock, body.she
 #pageContextWrap .sub { font-size: .78rem; }
 body.page-home #pageHead { display: none; } /* Home has its own hero */
 
+/* project context: header switcher (global), page-header chip, assistant sub-line */
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.proj-switch { display: inline-flex; align-items: center; gap: .4rem; max-width: 220px; min-width: 0; padding: .15rem .5rem .15rem .6rem; border: 1px solid var(--border); border-radius: 99px; background: var(--panel2); }
+.proj-switch:focus-within { border-color: var(--accent); }
+.proj-switch select { min-width: 0; max-width: 160px; background: transparent; border: 0; color: var(--text); font: inherit; font-size: .8rem; font-weight: 600; padding: .15rem 0; cursor: pointer; text-overflow: ellipsis; }
+.proj-switch select:focus { outline: none; }
+.proj-switch select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.proj-switch[data-readonly] select { cursor: default; }
+.proj-dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--proj-color, var(--accent)); }
+.page-project { display: inline-flex; align-items: center; gap: .4rem; font-size: .78rem; color: var(--muted); background: var(--panel); border: 1px solid var(--border); border-radius: 99px; padding: .2rem .7rem; }
+.page-project b { color: var(--text); font-weight: 600; }
+#pageContextWrap:not([hidden]) + .page-project { margin-left: 0; }
+#pageContextWrap[hidden] + .page-project { margin-left: auto; }
+.ag-proj:empty { display: none; }
+@media (max-width: 767px) {
+  .proj-switch { max-width: 44vw; }
+  .proj-switch select { max-width: 32vw; }
+  .page-project { margin-left: 0 !important; }
+}
+
 /* Updates: the session controls moved from the header into a session bar above the panels */
 .session-bar { grid-column: 1 / -1; display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; padding: .5rem .8rem; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; }
 .session-bar:empty { display: none; }

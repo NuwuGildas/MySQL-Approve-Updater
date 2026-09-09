@@ -298,7 +298,7 @@ function makeRuleCard(r) {
         } else if (act === 'dup') {
           openRuleModal({ ...r, id: '', name: r.name + ' (copy)' }, '- duplicate: adjust and save as a new rule');
         } else if (act === 'addchat') {
-          await api('/api/agent/context', { method: 'POST', body: JSON.stringify({ ruleId: r.id }) });
+          await api('/api/agent/context', { method: 'POST', body: projectBody({ ruleId: r.id }) });
           if ($('agentDrawer').classList.contains('open')) {
             appendAgentMsg('note', '', null, { kind: 'context', rule: r });
             $('agentInput').focus();
@@ -758,7 +758,7 @@ function wireAiReviewButtons(root) {
   root.querySelectorAll('[data-sendreview]').forEach((b) => b.addEventListener('click', async () => {
     b.disabled = true;
     try {
-      await api('/api/agent/context-review', { method: 'POST', body: JSON.stringify({ changeId: b.dataset.sendreview }) });
+      await api('/api/agent/context-review', { method: 'POST', body: projectBody({ changeId: b.dataset.sendreview }) });
       b.textContent = 'Sent ✓';
       const c = state.session?.changes.find((x) => x.id === b.dataset.sendreview);
       if ($('agentDrawer').classList.contains('open')) {
@@ -2337,6 +2337,70 @@ function startTour() {
   t.start();
 }
 /* ---------- AI agent ---------- */
+/* ---------- project context: the active project scopes the assistant's conversation ----------
+   Projects come from GET /api/projects (lib/projects). The selection lives in localStorage and is sent
+   as projectId with every assistant call; switching reloads the chat when the assistant is open. */
+const PROJECT_KEY = 'st-project';
+const DEFAULT_PROJECT_ID = 'general';
+let projects = [];
+let currentProjectId = (() => { try { return localStorage.getItem(PROJECT_KEY) || DEFAULT_PROJECT_ID; } catch { return DEFAULT_PROJECT_ID; } })();
+const currentProject = () => projects.find((p) => p.id === currentProjectId) || null;
+const currentProjectName = () => currentProject()?.name || (currentProjectId === DEFAULT_PROJECT_ID ? 'General' : currentProjectId);
+/** URL with the active project (and any extra query params) appended, for GET assistant calls. */
+function projectUrl(path, extra = {}) {
+  const q = new URLSearchParams({ ...extra, projectId: currentProjectId });
+  return `${path}?${q}`;
+}
+/** Body for POST assistant calls: the given fields plus the active project. */
+const projectBody = (fields = {}) => JSON.stringify({ ...fields, projectId: currentProjectId });
+function renderProjectContext() {
+  const p = currentProject();
+  const name = currentProjectName();
+  const color = p?.color || '';
+  const sel = $('projSelect');
+  if (sel) {
+    sel.innerHTML = (projects.length ? projects : [{ id: DEFAULT_PROJECT_ID, name: 'General' }])
+      .map((x) => `<option value="${esc(x.id)}"${x.id === currentProjectId ? ' selected' : ''}>${esc(x.name)}</option>`).join('');
+    sel.value = currentProjectId;
+    $('projSwitch').style.setProperty('--proj-color', color || 'var(--accent)');
+    $('projSwitch').title = `Active project: ${name}${p?.description ? ' — ' + p.description : ''}`;
+  }
+  const chip = $('pageProject');
+  if (chip) { $('pageProjectName').textContent = name; chip.style.setProperty('--proj-color', color || 'var(--accent)'); }
+  const ag = $('agentProj');
+  if (ag) ag.textContent = `· ${name}`;
+}
+async function loadProjects() {
+  try {
+    const d = await api('/api/projects');
+    projects = Array.isArray(d.projects) ? d.projects : [];
+    if (d.readOnly) $('projSwitch')?.setAttribute('data-readonly', '1'); else $('projSwitch')?.removeAttribute('data-readonly');
+  } catch (e) {
+    projects = [];
+    toast('Could not load projects: ' + e.message, 'warning');
+  }
+  // a stored id whose project is gone falls back to General (or the first project) without losing the list
+  if (projects.length && !projects.some((p) => p.id === currentProjectId)) {
+    currentProjectId = projects.some((p) => p.id === DEFAULT_PROJECT_ID) ? DEFAULT_PROJECT_ID : projects[0].id;
+    try { localStorage.setItem(PROJECT_KEY, currentProjectId); } catch {}
+  }
+  renderProjectContext();
+  return projects;
+}
+/** Switch the active project: persist, refresh the context chips and reload the assistant conversation. */
+function setProject(id) {
+  if (!id || id === currentProjectId) return;
+  if (agentBusy) { toast('Wait for the assistant to finish (or stop it) before switching projects', 'warning'); renderProjectContext(); return; }
+  currentProjectId = id;
+  try { localStorage.setItem(PROJECT_KEY, id); } catch {}
+  renderProjectContext();
+  document.dispatchEvent(new CustomEvent('st:project', { detail: { id, project: currentProject() } }));
+  toast(`Project: ${currentProjectName()}`);
+  if ($('agentDrawer').classList.contains('open')) openAgent(); // re-fetches the conversation for this project
+}
+$('projSelect').addEventListener('change', (e) => setProject(e.target.value));
+loadProjects();
+
 let agentBusy = false;
 let agentFeedEl = null; // live-feed container of the in-flight "Working…" bubble
 
@@ -2462,7 +2526,7 @@ async function openAgent() { // never closes whatever view/module is open: the w
   $('btnAgentReset').hidden = $('btnAgentDisconnect').hidden = true;
   setAgentStatus('Checking for local agents…', 'busy');
   try {
-    const st = await api('/api/agent?probe=1');
+    const st = await api(projectUrl('/api/agent', { probe: '1' }));
     document.body.classList.toggle('agent-on', st.connected);
     if (st.connected) showAgentChat(st);
     else showAgentConnect(st);
@@ -2477,7 +2541,7 @@ function setAgentStatus(text, state) {
 }
 
 // gate agent-dependent UI (e.g. "add to chat" on rule cards) from startup
-api('/api/agent').then((st) => document.body.classList.toggle('agent-on', st.connected)).catch(() => {});
+api(projectUrl('/api/agent')).then((st) => document.body.classList.toggle('agent-on', st.connected)).catch(() => {});
 
 function showAgentConnect(st) {
   setAgentStatus('Not connected', 'off');
@@ -2596,6 +2660,7 @@ function showAgentChat(st) {
   $('agentModelList').innerHTML = suggestions.map((m) => `<option value="${esc(m)}">`).join('');
   $('agentModel').value = st.model || '';
   agentModelSaved = st.model || '';
+  renderProjectContext(); // the sub-line names the project this conversation belongs to
   $('agentMessages').innerHTML = '';
   for (const m of st.chat || []) appendAgentMsg(m.role, m.text, null, m);
   for (const p of st.proposals || []) appendAgentProposal(p);
@@ -2615,6 +2680,7 @@ function renderAgentEmpty() {
   el.innerHTML = `<span class="ag-ico"><img class="ai-mini" src="/assets/robot-logo-animated_1.svg" alt="" aria-hidden="true"></span>
     <h3>What would you like to explore?</h3>
     <p>Ask about rules, schema or data. Access is read-only; changes come back as proposals for you to approve.</p>
+    <p class="hint" style="margin:0">Conversation for project <b>${esc(currentProjectName())}</b>. Switch projects in the header to change context.</p>
     <div class="ag-sugg">${AGENT_STARTERS.map(([label], i) => `<button type="button" class="chip-btn" data-starter="${i}">${esc(label)}</button>`).join('')}</div>`;
   el.querySelectorAll('[data-starter]').forEach((b) => b.addEventListener('click', () => {
     $('agentInput').value = AGENT_STARTERS[+b.dataset.starter][1];
@@ -2775,7 +2841,7 @@ async function agentSend() {
   agentFeedEl = pending.querySelector('.agent-feed'); // the SSE 'agent' listener streams progress lines into it
   document.body.classList.add('agent-busy'); // pulses the header button icon too
   try {
-    const r = await api('/api/agent/chat', { method: 'POST', body: JSON.stringify({ message: msg, module: currentModuleLabel() }) });
+    const r = await api('/api/agent/chat', { method: 'POST', body: projectBody({ message: msg, module: currentModuleLabel() }) });
     pending.remove();
     if (r.cancelled) { appendAgentMsg('note', 'Reply stopped by the user.'); return; }
     appendAgentMsg('ai', r.reply, r.actions);
@@ -2831,7 +2897,7 @@ async function saveAgentModel() {
 $('agentModel').addEventListener('change', saveAgentModel); // fires on datalist pick and on blur-with-change
 $('agentModel').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); $('agentModel').blur(); } });
 $('btnAgentReset').addEventListener('click', async () => {
-  await api('/api/agent/reset', { method: 'POST' }).catch((e) => toast(e.message));
+  await api('/api/agent/reset', { method: 'POST', body: projectBody() }).catch((e) => toast(e.message));
   $('agentMessages').innerHTML = '';
   renderAgentEmpty();
 });
