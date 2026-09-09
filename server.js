@@ -1606,15 +1606,19 @@ const { spawn } = require('child_process');
 const AGENT_FILE = path.join(DATA_DIR, 'agent.json');
 let agentConfig = null;
 try { agentConfig = JSON.parse(fs.readFileSync(AGENT_FILE, 'utf8')); } catch {}
-const CHAT_FILE = path.join(DATA_DIR, 'agent-chat.json');
-let agentChat = []; // conversation: { role: 'user'|'assistant'|'note', text, ... }: persisted so it resumes across restarts
-try { const c = JSON.parse(fs.readFileSync(CHAT_FILE, 'utf8')); if (Array.isArray(c)) agentChat = c; } catch {}
-let chatSaveChain = Promise.resolve();
-function saveChat() {
-  chatSaveChain = chatSaveChain.then(() => fsp.writeFile(CHAT_FILE, JSON.stringify(agentChat), 'utf8')).catch(() => {});
+/* Conversations ({ role: 'user'|'assistant'|'note', text, ... }) are kept per project in
+   project-chats.json (lib/projects/chat.js) so they resume across restarts and each project has its
+   own memory. The legacy single agent-chat.json is imported once into "General" and kept as a .bak.
+   Every agent route takes an optional projectId (body or query); omitted → the General project. */
+const { createChatStore } = require('./lib/projects/chat');
+const chatStore = createChatStore(DATA_DIR, { log: (level, msg) => logEvent(level, `agent chat: ${msg}`) });
+/* project id for a chat request: missing/empty → General; unknown → 404 (projectStore is declared further down, resolved at request time) */
+function chatProjectId(req) {
+  const raw = req.body?.projectId !== undefined ? req.body.projectId : req.query?.projectId;
+  const id = chatStore.resolveProjectId(raw);
+  if (id !== chatStore.DEFAULT_PROJECT_ID && !projectStore.get(id)) throw httpError(404, 'Project not found');
+  return id;
 }
-const MAX_CHAT = 200; // keep a long resumable history (was 20 in-memory)
-function trimChat() { if (agentChat.length > MAX_CHAT) agentChat.splice(0, agentChat.length - MAX_CHAT); }
 
 const AGENT_PROVIDERS = {
   claude: { label: 'Claude Code (CLI)', short: 'Claude Code', cmd: 'claude', kind: 'cli' },
@@ -1909,6 +1913,7 @@ function parseAgentToolCall(s) {
 
 app.get('/api/agent', wrap(async (req, res) => {
   const probe = req.query.probe === '1';
+  const projectId = chatProjectId(req);
   const providers = {};
   for (const [k, v] of Object.entries(AGENT_PROVIDERS)) {
     providers[k] = { label: v.label, cmd: v.cmd, kind: v.kind, available: probe ? await probeProvider(k) : undefined };
@@ -1916,7 +1921,7 @@ app.get('/api/agent', wrap(async (req, res) => {
   res.json({
     connected: !!agentConfig?.provider, provider: agentConfig?.provider || null,
     model: agentConfig?.model || null, // the stored key/token is never sent to the browser
-    providers, chat: agentChat, proposals: agentProposals.filter((p) => p.status === 'pending'),
+    providers, projectId, chat: chatStore.get(projectId), proposals: agentProposals.filter((p) => p.status === 'pending'),
   });
 }));
 
@@ -1931,8 +1936,9 @@ app.post('/api/agent/proposal/:id', wrap(async (req, res) => {
   if (!handler) throw httpError(500, `No handler for proposal kind "${kind}"`);
   if (decision === 'approved') await handler.approve(prop);
   prop.status = decision;
+  const propProject = prop.projectId || chatStore.DEFAULT_PROJECT_ID;
   if (kind === 'rule') {
-    agentChat.push({
+    chatStore.push(propProject, {
       role: 'note', kind: 'decision', decision, proposalAction: prop.action, ruleName: prop.rule.name,
       text: `User ${decision} the agent's rule-${prop.action} proposal "${prop.rule.name}".`,
     });
@@ -1940,11 +1946,10 @@ app.post('/api/agent/proposal/:id', wrap(async (req, res) => {
     logEvent(decision === 'approved' ? 'info' : 'warn', `AI agent rule proposal ${decision}: "${prop.rule.name}"`);
   } else {
     const label = handler.label(prop);
-    agentChat.push({ role: 'note', kind: 'decision', decision, proposalKind: kind, proposalAction: prop.action, targetName: prop.targetName, text: `User ${decision} the agent's ${label}.` });
+    chatStore.push(propProject, { role: 'note', kind: 'decision', decision, proposalKind: kind, proposalAction: prop.action, targetName: prop.targetName, text: `User ${decision} the agent's ${label}.` });
     audit({ action: `agent-${kind}-${decision}`, target: prop.targetName, proposalAction: prop.action });
     logEvent(decision === 'approved' ? 'info' : 'warn', `AI agent ${label} ${decision}`);
   }
-  saveChat();
   res.json({ ok: true, status: decision });
 }));
 
@@ -2060,13 +2065,13 @@ async function refreshClaudeToken() {
 
 app.post('/api/agent/disconnect', wrap(async (req, res) => {
   agentConfig = null;
-  agentChat = []; saveChat();
+  chatStore.resetAll();
   try { await fsp.unlink(AGENT_FILE); } catch {}
   logEvent('info', 'AI agent disconnected');
   res.json({ ok: true });
 }));
 
-app.post('/api/agent/reset', (req, res) => { agentChat = []; saveChat(); res.json({ ok: true }); });
+app.post('/api/agent/reset', wrap(async (req, res) => { const projectId = chatProjectId(req); chatStore.reset(projectId); res.json({ ok: true, projectId }); }));
 
 /* switch the model live (all providers; empty string = provider default) */
 app.post('/api/agent/model', wrap(async (req, res) => {
@@ -2085,13 +2090,12 @@ app.post('/api/agent/context-review', wrap(async (req, res) => {
   const change = session.changes.find((c) => c.id === String(req.body?.changeId || ''));
   if (!change?.aiReview || change.aiReview.status !== 'done') throw httpError(400, 'No completed review on that change');
   const cols = change.cols.map((c) => c.column).join(', ');
-  agentChat.push({
+  chatStore.push(chatProjectId(req), {
     role: 'note', kind: 'review',
     verdict: change.aiReview.verdict, summary: change.aiReview.summary,
     rule: session.ruleName, pk: change.pk, table: session.table, columns: cols,
     text: `The user shared a prior AI review of a pending change (rule "${session.ruleName}", table ${session.table}, ${session.pkColumn}=${change.pk}, column(s) ${cols}). Verdict: ${change.aiReview.verdict}. Summary: ${change.aiReview.summary}`,
   });
-  trimChat(); saveChat();
   logEvent('info', `AI review of pk=${change.pk} sent to chat as context`);
   res.json({ ok: true });
 }));
@@ -2101,11 +2105,10 @@ app.post('/api/agent/context', wrap(async (req, res) => {
   if (!agentConfig?.provider) throw httpError(400, 'No AI agent connected');
   const rule = rules.find((r) => r.id === String(req.body?.ruleId || ''));
   if (!rule) throw httpError(404, 'Rule not found');
-  agentChat.push({
+  chatStore.push(chatProjectId(req), {
     role: 'note', kind: 'context', rule,
     text: `The user attached rule "${rule.name}" (id ${rule.id}) as context for the conversation: ${JSON.stringify(rule)}`,
   });
-  trimChat(); saveChat();
   logEvent('info', `AI chat context: rule "${rule.name}" attached`);
   res.json({ ok: true, name: rule.name });
 }));
@@ -2121,19 +2124,19 @@ app.post('/api/agent/chat', wrap(async (req, res) => {
   if (!agentConfig?.provider) throw httpError(400, 'No AI agent connected');
   const message = String(req.body?.message || '').trim();
   if (!message) throw httpError(400, 'Empty message');
+  const projectId = chatProjectId(req);
   if (agentInflight) throw httpError(409, 'The agent is still answering the previous message. Stop it first.');
   const ac = new AbortController();
   agentInflight = ac;
   try {
-    await agentChatTurn(req, res, message, ac.signal);
+    await agentChatTurn(req, res, message, ac.signal, projectId);
   } finally {
     if (agentInflight === ac) agentInflight = null;
   }
 }));
 
-async function agentChatTurn(req, res, message, signal) {
-  agentChat.push({ role: 'user', text: message, ts: new Date().toISOString() });
-  trimChat(); saveChat();
+async function agentChatTurn(req, res, message, signal, projectId) {
+  chatStore.push(projectId, { role: 'user', text: message, ts: new Date().toISOString() });
   audit({ action: 'ai-chat', role: 'user', text: message });
   const actions = [];
   const propBefore = agentProposals.length;
@@ -2145,7 +2148,7 @@ async function agentChatTurn(req, res, message, signal) {
     const who = AGENT_PROVIDERS[agentConfig.provider].short + (agentConfig.model ? ` (${agentConfig.model})` : '');
     sseBroadcast('agent', { type: 'step', step: step + 1, msg: `thinking with ${who}` });
     // only the recent tail is sent to the model (full history is kept for resume/review)
-    const recent = agentChat.slice(-16);
+    const recent = chatStore.get(projectId).slice(-16);
     const prompt = agentSystemPrompt() + moduleNote + '\n\n--- Conversation ---\n' +
       recent.map((m) => `${m.role === 'user' ? 'User' : m.role === 'note' ? 'System note' : 'Assistant'}: ${m.text}`).join('\n\n') +
       transcriptExtra + '\n\nAssistant:';
@@ -2169,8 +2172,7 @@ async function agentChatTurn(req, res, message, signal) {
     catch (e) {
       if (e.cancelled || signal.aborted) {
         if (streaming) sseBroadcast('agent', { type: 'text-discard' });
-        agentChat.push({ role: 'note', kind: 'cancelled', text: 'Reply stopped by the user.', ts: new Date().toISOString() });
-        trimChat(); saveChat();
+        chatStore.push(projectId, { role: 'note', kind: 'cancelled', text: 'Reply stopped by the user.', ts: new Date().toISOString() });
         audit({ action: 'ai-chat-cancelled', tools: actions.map((a) => a.tool) });
         logEvent('info', 'AI chat: reply stopped by the user');
         return res.json({ cancelled: true, actions });
@@ -2189,8 +2191,7 @@ async function agentChatTurn(req, res, message, signal) {
     if (signal.aborted) { // stopped while the tool ran: record what happened, do not start another model step
       actions.push({ tool: call.tool, input: call.input || {}, ok, ms: Date.now() - t0 });
       sseBroadcast('agent', { type: 'tool-done', tool: call.tool, ok, ms: Date.now() - t0 });
-      agentChat.push({ role: 'note', kind: 'cancelled', text: 'Reply stopped by the user.', ts: new Date().toISOString() });
-      trimChat(); saveChat();
+      chatStore.push(projectId, { role: 'note', kind: 'cancelled', text: 'Reply stopped by the user.', ts: new Date().toISOString() });
       audit({ action: 'ai-chat-cancelled', tools: actions.map((a) => a.tool) });
       return res.json({ cancelled: true, actions });
     }
@@ -2202,10 +2203,11 @@ async function agentChatTurn(req, res, message, signal) {
     transcriptExtra += `\n\nAssistant: ${outRaw}\n\nTool result for ${call.tool}: ${resultStr}`;
   }
   if (reply == null) reply = 'I hit the tool-step limit before finishing. Ask again more specifically.';
-  agentChat.push({ role: 'assistant', text: reply, actions, ts: new Date().toISOString() });
-  trimChat(); saveChat();
+  chatStore.push(projectId, { role: 'assistant', text: reply, actions, ts: new Date().toISOString() });
   audit({ action: 'ai-chat', role: 'assistant', text: reply, tools: actions.map((a) => a.tool) });
-  res.json({ reply, actions, proposals: agentProposals.slice(propBefore).filter((p) => p.status === 'pending') });
+  const newProposals = agentProposals.slice(propBefore).filter((p) => p.status === 'pending');
+  for (const p of newProposals) if (!p.projectId) p.projectId = projectId; // so the decision note lands in the same conversation
+  res.json({ reply, actions, projectId, proposals: newProposals });
 }
 
 /* natural-language -> SQL for the read-only console.
@@ -2591,7 +2593,7 @@ const deployCtx = {
     run: (prompt) => agentRun(prompt),
     tools: AGENT_TOOLS,                 // deploy adds its read-only tools here
     proposals: agentProposals, kinds: agentProposalKinds,
-    chatNote: (note) => { agentChat.push({ role: 'note', ...note }); trimChat(); saveChat(); },
+    chatNote: (note) => { const { projectId, ...rest } = note || {}; chatStore.push(projectId, { role: 'note', ...rest }); },
   },
 };
 const deployModule = deploy.mount(deployCtx);

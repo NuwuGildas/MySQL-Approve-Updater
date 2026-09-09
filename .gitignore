@@ -27,3 +27,7 @@ crash.log
 
 # projects (lib/projects) runtime data
 projects.json*
+
+# per-project AI chat history (lib/projects/chat.js) + legacy single chat backup
+project-chats.json*
+agent-chat.json.*
