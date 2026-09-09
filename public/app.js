@@ -2366,6 +2366,9 @@ function renderProjectContext() {
     $('projSwitch').style.setProperty('--proj-color', color || 'var(--accent)');
     $('projSwitch').title = `Active project: ${name}${p?.description ? ' — ' + p.description : ''}`;
   }
+  const triggerName = $('projTriggerName');
+  if (triggerName) triggerName.textContent = name;
+  if (typeof renderProjectMenu === 'function') renderProjectMenu();
   const chip = $('pageProject');
   if (chip) { $('pageProjectName').textContent = name; chip.style.setProperty('--proj-color', color || 'var(--accent)'); }
   const ag = $('agentProj');
@@ -2400,6 +2403,23 @@ function setProject(id) {
   if ($('agentDrawer').classList.contains('open')) openAgent(); // re-fetches the conversation for this project
 }
 $('projSelect').addEventListener('change', (e) => setProject(e.target.value));
+function renderProjectMenu(filter = '') {
+  const host = $('projOptions'); if (!host) return;
+  const q = String(filter || '').trim().toLowerCase();
+  const list = (projects.length ? projects : [{ id: DEFAULT_PROJECT_ID, name: 'General' }]).filter((p) => !q || `${p.name} ${p.description || ''}`.toLowerCase().includes(q));
+  host.innerHTML = list.length ? list.map((p) => `<button type="button" role="option" aria-selected="${p.id === currentProjectId}" class="proj-option${p.id === currentProjectId ? ' active' : ''}" data-project-id="${esc(p.id)}"><span class="proj-option-dot" style="--proj-color:${esc(p.color || 'var(--accent)')}" aria-hidden="true"></span><span class="proj-option-copy"><b>${esc(p.name)}</b><small>${p.id === currentProjectId ? 'Active project' : esc(p.description || 'Switch conversation')}</small></span>${p.id === currentProjectId ? '<span class="proj-option-check" aria-hidden="true">✓</span>' : ''}</button>`).join('') : '<div class="proj-menu-empty">No projects match that search.</div>';
+  host.querySelectorAll('[data-project-id]').forEach((b) => b.addEventListener('click', () => { setProject(b.dataset.projectId); closeProjectMenu(); }));
+}
+function closeProjectMenu() { const m = $('projMenu'); if (!m) return; m.hidden = true; $('projTrigger')?.setAttribute('aria-expanded', 'false'); }
+(function wireProjectMenu() {
+  const trigger = $('projTrigger'), menu = $('projMenu'), search = $('projSearch'); if (!trigger || !menu) return;
+  trigger.addEventListener('click', () => { const open = !menu.hidden; menu.hidden = open; trigger.setAttribute('aria-expanded', String(!open)); if (!open) { renderProjectMenu(search?.value || ''); setTimeout(() => search?.focus(), 0); } });
+  search?.addEventListener('input', () => renderProjectMenu(search.value));
+  document.addEventListener('click', (e) => { if (!e.target.closest('#projSwitch')) closeProjectMenu(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !menu.hidden) { closeProjectMenu(); trigger.focus(); } });
+  $('projCreate')?.addEventListener('click', () => { closeProjectMenu(); if (typeof navigate === 'function') navigate('#/projects'); setTimeout(() => $('btnPjAdd')?.click(), 80); });
+  $('projManage')?.addEventListener('click', () => { closeProjectMenu(); if (typeof navigate === 'function') navigate('#/projects'); });
+})();
 loadProjects();
 
 let agentBusy = false;

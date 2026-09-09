@@ -53,7 +53,10 @@ function pjRender() {
     return;
   }
   const activeId = typeof currentProjectId !== 'undefined' ? currentProjectId : null;
-  host.innerHTML = rows.map((p) => {
+  const onlyGeneral = pj.list.length === 1 && pj.list[0].id === 'general';
+  const generalEmpty = onlyGeneral && !Object.values(pj.list[0].resources || {}).some((arr) => arr?.length);
+  const intro = generalEmpty ? `<section class="pj-welcome"><div class="pj-welcome-icon" aria-hidden="true">✦</div><div><p class="eyebrow">Your workspace is ready</p><h3>Create a project to keep work together</h3><p>Projects group reusable connections, servers, connectors, repositories and deploy targets. Each project also keeps its own assistant conversation.</p><button type="button" class="primary" id="btnPjWelcomeAdd" ${pj.readOnly ? 'disabled' : ''}>+ Create your first project</button></div></section>` : '';
+  host.innerHTML = intro + rows.map((p) => {
     const active = p.id === activeId;
     const kinds = pj.kinds.length ? pj.kinds : Object.keys(p.resources || {});
     const total = kinds.reduce((n, k) => n + (p.resources?.[k]?.length || 0), 0);
@@ -82,6 +85,7 @@ function pjRender() {
       </div>
     </article>`;
   }).join('');
+  $('btnPjWelcomeAdd')?.addEventListener('click', () => pjOpenModal(null));
   host.querySelectorAll('.pj-card [data-act]').forEach((b) => b.addEventListener('click', () => pjAction(b.closest('.pj-card').dataset.id, b.dataset.act, b)));
 }
 
