@@ -60,6 +60,7 @@
     <span class="proj-dot" id="projDot" aria-hidden="true"></span>
     <select id="projSelect" aria-describedby="projSwitchHint"><option value="general">General</option></select>
     <span id="projSwitchHint" class="sr-only">Switching projects reloads the assistant conversation for that project.</span>
+    <button type="button" class="iconbtn proj-manage" id="btnProjManage" title="Manage projects" aria-label="Manage projects"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="2.6"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg></button>
   </div>
   <span class="spacer"></span>
   <div class="ai-agent" title="AI assistant: works across every module">
@@ -670,6 +671,41 @@
   </form>
 </dialog>
 
+
+<aside id="projectsDrawer" aria-label="Projects" inert>
+  <div class="ssh-head">
+    <h2 style="margin:0;font-size:.85rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)">Projects <span class="sec-hint" id="projectsCount"></span></h2>
+    <span class="spacer"></span>
+    <button id="btnPjAdd" class="primary">+ New project</button>
+    <button id="btnPjRefresh" title="Reload">Refresh</button>
+  </div>
+  <p class="hint" style="margin:.2rem 0 .6rem">A project groups the connections, servers, connectors, repositories and deploy targets that belong together. The active project scopes the AI assistant's conversation; pick it here or in the header.</p>
+  <p class="pj-readonly" id="projectsReadOnly" role="status" hidden></p>
+  <input id="projectsFilter" type="search" placeholder="Filter by name or description…" autocomplete="off" aria-label="Filter projects">
+  <div id="projectsList" class="pj-list"></div>
+</aside>
+
+<dialog id="pjModal" aria-labelledby="pjModalTitle">
+  <form id="pjForm" method="dialog" novalidate>
+    <h3 id="pjModalTitle" style="margin:0 0 .6rem;font-size:1rem">New project</h3>
+    <div class="tf-grid">
+      <div class="tf-field tf-span"><label for="pjName">Name</label><input id="pjName" required maxlength="80" placeholder="Client site, Staging, Internal tools…" autocomplete="off"></div>
+      <div class="tf-field tf-span"><label for="pjDesc">Description <span class="hint">(optional)</span></label><textarea id="pjDesc" rows="3" maxlength="500" placeholder="What belongs in this project"></textarea><p class="tf-help" id="pjDescCount">0/500</p></div>
+      <div class="tf-field tf-span">
+        <label id="pjColorLabel">Colour <span class="hint">(optional, shown next to the project name)</span></label>
+        <div class="pj-color-row" role="radiogroup" aria-labelledby="pjColorLabel">
+          <span class="proj-dot pj-preview" id="pjPreviewDot" aria-hidden="true"></span>
+          <button type="button" role="radio" aria-checked="true" class="pj-color-none on" id="pjColorNone" title="No colour">None</button>
+          <div class="pj-swatches" id="pjSwatches"></div>
+          <label class="pj-color-custom" title="Custom colour"><span class="sr-only">Custom colour</span><input type="color" id="pjColorPick" value="#4f8ef7"></label>
+          <input type="hidden" id="pjColor" value="">
+        </div>
+      </div>
+    </div>
+    <p class="tf-err" id="pjErr" hidden></p>
+    <div class="modal-foot"><button type="button" id="btnPjCancel">Cancel</button><span class="spacer"></span><button type="submit" class="primary" id="btnPjSave">Create project</button></div>
+  </form>
+</dialog>
 
 <aside id="deployDrawer" aria-label="The Ascension" inert>
   <header class="asc-head">
@@ -1299,6 +1335,7 @@
 <script src="app.js"></script>
 <script src="deploy.js"></script>
 <script src="connectors.js"></script>
+<script src="projects.js"></script>
 <script src="navigation.js"></script>
 </body>
 </html>
