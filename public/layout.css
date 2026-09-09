@@ -67,46 +67,63 @@ body.page-home #pageHead { display: none; } /* Home has its own hero */
 
 /* project context: header switcher (global), page-header chip, assistant sub-line */
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
-  .proj-switch { display: inline-flex; align-items: center; gap: .4rem; max-width: 220px; min-width: 0; padding: .15rem .5rem .15rem .6rem; border: 1px solid var(--border); border-radius: 99px; background: var(--panel2); position: relative; }
-.proj-switch:focus-within { border-color: var(--accent); }
-.proj-switch select { min-width: 0; max-width: 160px; background: transparent; border: 0; color: var(--text); font: inherit; font-size: .8rem; font-weight: 600; padding: .15rem 0; cursor: pointer; text-overflow: ellipsis; }
-.proj-switch select:focus { outline: none; }
-.proj-switch select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
-.proj-switch[data-readonly] select { cursor: default; }
-.proj-switch .proj-manage { padding: .1rem .2rem; border: 0; background: transparent; color: var(--muted); border-radius: 50%; }
-.proj-switch .proj-manage:hover, .proj-switch .proj-manage:focus-visible { color: var(--text); }
-  .proj-switch .proj-manage svg { width: 14px; height: 14px; }
-  .proj-select-source { position: absolute !important; width: 1px !important; height: 1px !important; opacity: 0 !important; pointer-events: none !important; }
-  .proj-trigger { display: inline-flex; align-items: center; gap: .42rem; min-width: 7.2rem; max-width: 13rem; padding: .34rem .55rem .34rem .7rem; border: 1px solid color-mix(in srgb, var(--accent) 70%, var(--border)); border-radius: 999px; background: color-mix(in srgb, var(--panel2) 86%, var(--accent)); color: var(--text); font: inherit; font-size: .78rem; font-weight: 650; cursor: pointer; }
-  .proj-trigger:hover, .proj-trigger:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent); outline: none; }
-  .proj-trigger-chevron { color: var(--muted); font-size: .9rem; line-height: 1; }
-  .proj-menu { position: absolute; z-index: 80; top: calc(100% + .55rem); left: 50%; transform: translateX(-50%); width: min(20rem, calc(100vw - 2rem)); padding: .45rem; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); box-shadow: 0 18px 45px rgba(0,0,0,.34); }
-  .proj-menu[hidden] { display: none; }
-  .proj-search { display: flex; align-items: center; gap: .35rem; padding: .25rem .5rem; border-bottom: 1px solid var(--border); color: var(--muted); }
-  .proj-search input { min-width: 0; flex: 1; border: 0; background: transparent; color: var(--text); outline: none; padding: .35rem .1rem; }
-  .proj-options { max-height: 16rem; overflow: auto; padding: .35rem 0; }
-  .proj-option { width: 100%; display: flex; align-items: center; gap: .6rem; padding: .55rem .6rem; border: 0; border-radius: 8px; background: transparent; color: var(--text); text-align: left; cursor: pointer; }
-  .proj-option:hover, .proj-option:focus-visible, .proj-option.active { background: color-mix(in srgb, var(--accent) 14%, var(--panel2)); outline: none; }
-  .proj-option-dot { width: .55rem; height: .55rem; flex: none; border-radius: 50%; background: var(--proj-color, var(--accent)); }
-  .proj-option-copy { min-width: 0; display: grid; gap: .08rem; flex: 1; }
-  .proj-option-copy b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .proj-option-copy small { color: var(--muted); font-size: .7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .proj-option-check { color: var(--accent); font-weight: 700; }
-  .proj-menu-empty { padding: .8rem .6rem; color: var(--muted); font-size: .78rem; }
-  .proj-menu-foot { display: flex; justify-content: space-between; gap: .4rem; border-top: 1px solid var(--border); padding: .45rem .25rem .1rem; }
-  .proj-menu-action { border: 0; background: transparent; color: var(--accent); font: inherit; font-size: .75rem; cursor: pointer; padding: .35rem .45rem; border-radius: 6px; }
-  .proj-menu-action:hover, .proj-menu-action:focus-visible { background: color-mix(in srgb, var(--accent) 12%, transparent); outline: none; }
-.proj-dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--proj-color, var(--accent)); }
+/* Project switcher: a single pill (dot + name + chevron) with quiet icon buttons beside it, and a
+   menu anchored to the pill's left edge. No nested pills, no text glyphs standing in for icons. */
+.proj-switch { display: inline-flex; align-items: center; gap: .15rem; max-width: 260px; min-width: 0; position: relative; }
+.proj-select-source { position: absolute !important; width: 1px !important; height: 1px !important; opacity: 0 !important; pointer-events: none !important; }
+
+.proj-trigger { display: inline-flex; align-items: center; gap: .45rem; min-width: 0; max-width: 15rem; padding: .3rem .55rem .3rem .6rem; border: 1px solid var(--border); border-radius: 99px; background: var(--panel2); color: var(--text); font: inherit; font-size: .78rem; font-weight: 600; line-height: 1.2; cursor: pointer; transition: border-color .15s, background .15s, box-shadow .15s; }
+.proj-trigger #projTriggerName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proj-trigger:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); background: color-mix(in srgb, var(--accent) 8%, var(--panel2)); }
+.proj-trigger:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+.proj-trigger[aria-expanded="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--panel2)); }
+.proj-trigger-chevron { width: 13px; height: 13px; flex: none; color: var(--muted); transition: transform .18s ease; }
+.proj-trigger[aria-expanded="true"] .proj-trigger-chevron { transform: rotate(180deg); color: var(--accent); }
+.proj-dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--proj-color, var(--accent)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--proj-color, var(--accent)) 22%, transparent); }
+.proj-switch[data-readonly] .proj-trigger { cursor: default; }
+
+.proj-switch .proj-manage, .proj-switch .proj-res-btn { flex: none; padding: .25rem; border: 0; background: transparent; color: var(--muted); border-radius: 8px; }
+.proj-switch .proj-manage:hover, .proj-switch .proj-manage:focus-visible, .proj-switch .proj-res-btn:hover, .proj-switch .proj-res-btn:focus-visible { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); outline: none; }
+.proj-switch .proj-manage svg, .proj-switch .proj-res-btn svg { width: 14px; height: 14px; display: block; }
+
+.proj-menu { position: absolute; z-index: 80; top: calc(100% + .45rem); left: 0; width: min(19rem, calc(100vw - 2rem)); padding: .4rem; border: 1px solid var(--border); border-radius: 14px; background: var(--panel); box-shadow: 0 1px 2px rgba(0,0,0,.18), 0 16px 40px rgba(0,0,0,.34); animation: projMenuIn .13s ease-out; }
+@keyframes projMenuIn { from { opacity: 0; transform: translateY(-4px); } }
+.proj-menu[hidden] { display: none; }
+.proj-search { display: flex; align-items: center; gap: .4rem; padding: 0 .55rem; border: 1px solid var(--border); border-radius: 9px; background: var(--panel2); color: var(--muted); }
+.proj-search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent); }
+.proj-search svg { width: 14px; height: 14px; flex: none; }
+.proj-search input { min-width: 0; flex: 1; border: 0; background: transparent; color: var(--text); outline: none; font: inherit; font-size: .78rem; padding: .4rem 0; }
+.proj-search input::-webkit-search-cancel-button { filter: grayscale(1) opacity(.6); }
+
+.proj-options { max-height: 15rem; overflow: auto; padding: .35rem 0 .2rem; display: grid; gap: .1rem; }
+.proj-option { width: 100%; display: flex; align-items: center; gap: .55rem; padding: .45rem .55rem; border: 0; border-radius: 9px; background: transparent; color: var(--text); text-align: left; cursor: pointer; font: inherit; }
+.proj-option:hover, .proj-option:focus-visible { background: color-mix(in srgb, var(--accent) 10%, var(--panel2)); outline: none; }
+.proj-option.active { background: color-mix(in srgb, var(--accent) 14%, var(--panel2)); }
+.proj-option-dot { width: 9px; height: 9px; flex: none; border-radius: 50%; background: var(--proj-color, var(--accent)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--proj-color, var(--accent)) 20%, transparent); }
+.proj-option-copy { min-width: 0; display: grid; gap: .05rem; flex: 1; }
+.proj-option-copy b { font-size: .8rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proj-option-copy small { color: var(--muted); font-size: .69rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proj-option-check { flex: none; display: grid; place-items: center; width: 16px; height: 16px; color: var(--accent); }
+.proj-option-check svg { width: 13px; height: 13px; }
+.proj-menu-empty { padding: .9rem .6rem; color: var(--muted); font-size: .76rem; text-align: center; }
+
+.proj-menu-foot { display: flex; align-items: center; gap: .35rem; border-top: 1px solid var(--border); margin-top: .25rem; padding: .45rem .1rem .1rem; }
+.proj-menu-action { display: inline-flex; align-items: center; gap: .3rem; border: 0; background: transparent; color: var(--muted); font: inherit; font-size: .74rem; font-weight: 600; cursor: pointer; padding: .35rem .5rem; border-radius: 8px; }
+.proj-menu-action svg { width: 13px; height: 13px; flex: none; }
+.proj-menu-action:hover, .proj-menu-action:focus-visible { color: var(--text); background: color-mix(in srgb, var(--accent) 12%, transparent); outline: none; }
+.proj-menu-action.primary { color: var(--accent); }
+.proj-menu-action#projManage { margin-left: auto; }
+
 .page-project { display: inline-flex; align-items: center; gap: .4rem; font-size: .78rem; color: var(--muted); background: var(--panel); border: 1px solid var(--border); border-radius: 99px; padding: .2rem .7rem; }
 .page-project b { color: var(--text); font-weight: 600; }
 #pageContextWrap:not([hidden]) + .page-project { margin-left: 0; }
 #pageContextWrap[hidden] + .page-project { margin-left: auto; }
 .ag-proj:empty { display: none; }
   @media (max-width: 767px) {
-  .proj-switch { max-width: 44vw; }
-    .proj-switch select { max-width: 32vw; }
-    .proj-menu { left: auto; right: 0; transform: none; }
-    .proj-trigger { min-width: 6.4rem; max-width: 10rem; }
+  .proj-switch { max-width: 46vw; }
+  /* the switcher sits mid-header on phones: anchoring to it would push the menu off-screen, so pin it to the viewport */
+  .proj-menu { position: fixed; top: calc(var(--hdr-h) + .4rem); left: .75rem; right: .75rem; width: auto; }
+  .proj-trigger { max-width: 9.5rem; }
   .page-project { margin-left: 0 !important; }
 }
 

@@ -15,7 +15,7 @@ function setup(paasCfg, extra = {}) {
   d.vault.set('NETLIFY_TOKEN', 'nfp_secret_value');
   d.vault.set('VERCEL_TOKEN', 'vercel_secret_value');
   d.stores.repos.get().repos.push({ id: 'r1', name: 'landing', source: { kind: 'local', path: fx('plain-html') }, manifest: null });
-  d.stores.targets.get().targets.push({ id: 't1', name: 'edge-prod', repoId: 'r1', type: 'paas', paas: paasCfg, ...extra });
+  d.stores.targets.get().targets.push({ projectId: 'general', id: 't1', name: 'edge-prod', repoId: 'r1', type: 'paas', paas: paasCfg, ...extra });
   const engine = createEngine(ctx, d);
   const calls = [];
   paas.paasDeps.probe = async (cli) => `${cli} 1.2.3`;

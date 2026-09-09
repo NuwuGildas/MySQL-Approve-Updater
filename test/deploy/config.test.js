@@ -22,23 +22,23 @@ test('suggestTarget fills sensible defaults per kind and stack', () => {
 test('guided setup creates secrets, repo and target atomically; validation failures write nothing', async () => {
   const { ctx, d, cfg } = mk();
   // invalid target (missing docroot) → nothing created, secret not stored
-  await assert.rejects(cfg.setup({ secrets: { FTP_PW: 'pw' }, repo: { name: 'site', source: { kind: 'local', path: fx('plain-html') } }, target: { name: 'shared', type: 'shared-hosting', transport: { kind: 'ftp', host: 'h', user: 'u', passwordRef: '${vault:FTP_PW}' }, paths: { home: '/' } } }), /docroot/);
+  await assert.rejects(cfg.setup({ secrets: { FTP_PW: 'pw' }, repo: { name: 'site', source: { kind: 'local', path: fx('plain-html') } }, target: { projectId: 'general', name: 'shared', type: 'shared-hosting', transport: { kind: 'ftp', host: 'h', user: 'u', passwordRef: '${vault:FTP_PW}' }, paths: { home: '/' } } }), /docroot/);
   assert.equal(d.vault.names().length, 0); assert.equal(d.stores.repos.get().repos.length, 0);
   // secret referenced but not provided
-  await assert.rejects(cfg.setup({ repo: { name: 'site', source: { kind: 'local', path: fx('plain-html') } }, target: { name: 'shared', type: 'shared-hosting', transport: { kind: 'ftp', host: 'h', user: 'u', passwordRef: '${vault:NOPE}' }, paths: { home: '/', docroot: '/public_html' } } }), /NOPE is referenced/);
-  const out = await cfg.setup({ secrets: { FTP_PW: 'pw' }, repo: { name: 'site', source: { kind: 'local', path: fx('plain-html') } }, target: { name: 'shared', type: 'shared-hosting', transport: { kind: 'ftp', host: 'h', user: 'u', passwordRef: '${vault:FTP_PW}' }, paths: { home: '/', docroot: '/public_html' }, autoShip: { enabled: true, mode: 'poll', pollMinutes: 10 } } });
+  await assert.rejects(cfg.setup({ repo: { name: 'site', source: { kind: 'local', path: fx('plain-html') } }, target: { projectId: 'general', name: 'shared', type: 'shared-hosting', transport: { kind: 'ftp', host: 'h', user: 'u', passwordRef: '${vault:NOPE}' }, paths: { home: '/', docroot: '/public_html' } } }), /NOPE is referenced/);
+  const out = await cfg.setup({ secrets: { FTP_PW: 'pw' }, repo: { name: 'site', source: { kind: 'local', path: fx('plain-html') } }, target: { projectId: 'general', name: 'shared', type: 'shared-hosting', transport: { kind: 'ftp', host: 'h', user: 'u', passwordRef: '${vault:FTP_PW}' }, paths: { home: '/', docroot: '/public_html' }, autoShip: { enabled: true, mode: 'poll', pollMinutes: 10 } } });
   assert.equal(out.repo.name, 'site'); assert.equal(out.target.repoId, out.repo.id); assert.deepEqual(out.secrets, ['FTP_PW']);
   assert.equal(d.vault.get('FTP_PW'), 'pw'); assert.equal(d.stores.targets.get().targets.length, 1);
   assert.ok(ctx._audits.some((a) => a.action === 'deploy-target-add' && a.by === 'setup'));
   // reuse an existing repo by id
-  const out2 = await cfg.setup({ repoId: out.repo.id, target: { name: 'shared-2', type: 'shared-hosting', transport: { kind: 'ftp', host: 'h', user: 'u', passwordRef: '${vault:FTP_PW}' }, paths: { home: '/', docroot: '/public_html' } } });
+  const out2 = await cfg.setup({ repoId: out.repo.id, target: { projectId: 'general', name: 'shared-2', type: 'shared-hosting', transport: { kind: 'ftp', host: 'h', user: 'u', passwordRef: '${vault:FTP_PW}' }, paths: { home: '/', docroot: '/public_html' } } });
   assert.equal(out2.target.repoId, out.repo.id);
 });
 
 test('templates: save from a target, list, apply via duplicate, delete', async () => {
   const { ctx, d, cfg } = mk();
   d.vault.set('FTP_PW', 'pw');
-  const { target } = await cfg.setup({ repo: { name: 'site', source: { kind: 'local', path: fx('plain-html') } }, target: { name: 'prod', type: 'shared-hosting', transport: { kind: 'ftp', host: 'h', user: 'u', passwordRef: '${vault:FTP_PW}' }, paths: { home: '/', docroot: '/public_html' }, autoShip: { enabled: true, mode: 'webhook' } } });
+  const { target } = await cfg.setup({ repo: { name: 'site', source: { kind: 'local', path: fx('plain-html') } }, target: { projectId: 'general', name: 'prod', type: 'shared-hosting', transport: { kind: 'ftp', host: 'h', user: 'u', passwordRef: '${vault:FTP_PW}' }, paths: { home: '/', docroot: '/public_html' }, autoShip: { enabled: true, mode: 'webhook' } } });
   const tpl = await cfg.saveTemplate({ name: 'cPanel FTP', fromTargetId: target.id });
   assert.equal(tpl.type, 'shared-hosting'); assert.equal(tpl.data.name, undefined); assert.equal(tpl.data.repoId, undefined);
   assert.equal(tpl.data.autoShip.secret, undefined, 'webhook secret is not part of a template');
@@ -57,9 +57,9 @@ test('templates: save from a target, list, apply via duplicate, delete', async (
 test('export never carries secret values; import merges by name, remaps repo ids, reports missing secrets/profiles', async () => {
   const a = mk();
   a.d.vault.set('FTP_PW', 'pw-value');
-  const { repo, target } = await a.cfg.setup({ repo: { name: 'site', source: { kind: 'local', path: fx('plain-html') } }, target: { name: 'prod', type: 'shared-hosting', transport: { kind: 'ftp', host: 'h', user: 'u', passwordRef: '${vault:FTP_PW}' }, paths: { home: '/', docroot: '/public_html' }, autoShip: { enabled: true, mode: 'webhook' } } });
+  const { repo, target } = await a.cfg.setup({ repo: { name: 'site', source: { kind: 'local', path: fx('plain-html') } }, target: { projectId: 'general', name: 'prod', type: 'shared-hosting', transport: { kind: 'ftp', host: 'h', user: 'u', passwordRef: '${vault:FTP_PW}' }, paths: { home: '/', docroot: '/public_html' }, autoShip: { enabled: true, mode: 'webhook' } } });
   await a.cfg.saveTemplate({ name: 'tpl', fromTargetId: target.id });
-  a.d.stores.targets.get().targets.push(sanitizeTarget({ name: 'vps', repoId: repo.id, type: 'vps-ssh', ssh: { profileId: 'p1' }, paths: { root: '/var/www/site' } }, a.ctx, a.d.stores, null));
+  a.d.stores.targets.get().targets.push(sanitizeTarget({ projectId: 'general', name: 'vps', repoId: repo.id, type: 'vps-ssh', ssh: { profileId: 'p1' }, paths: { root: '/var/www/site' } }, a.ctx, a.d.stores, null));
   const doc = a.cfg.exportConfig();
   const json = JSON.stringify(doc);
   assert.ok(!json.includes('pw-value'), 'no secret values'); assert.ok(!json.includes(target.autoShip.secret), 'no webhook secret');

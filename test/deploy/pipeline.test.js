@@ -13,7 +13,7 @@ function setup(connOpts, targetExtra = {}) {
   const conn = fakeConn(connOpts);
   const type = registerFakeVps(conn);
   d.stores.repos.get().repos.push({ id: 'r1', name: 'shop', source: { kind: 'local', path: fx('laravel') }, manifest: null });
-  d.stores.targets.get().targets.push({ id: 't1', name: 'prod', repoId: 'r1', type, buildMode: 'auto', ssh: { profileId: 'p1' }, paths: { root: '/var/www/shop' }, web: { server: 'nginx', reloadCmd: 'sudo -n systemctl reload nginx', phpFpmReload: 'sudo -n systemctl reload php8.3-fpm' }, keepReleases: 3, ...targetExtra });
+  d.stores.targets.get().targets.push({ projectId: 'general', id: 't1', name: 'prod', repoId: 'r1', type, buildMode: 'auto', ssh: { profileId: 'p1' }, paths: { root: '/var/www/shop' }, web: { server: 'nginx', reloadCmd: 'sudo -n systemctl reload nginx', phpFpmReload: 'sudo -n systemctl reload php8.3-fpm' }, keepReleases: 3, ...targetExtra });
   const engine = createEngine(ctx, d);
   return { ctx, d, conn, engine };
 }

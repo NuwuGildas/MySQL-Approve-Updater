@@ -17,7 +17,7 @@ test('orphaned runs become failed/interrupted and a local target lock from that 
   fs.mkdirSync(path.join(root, '.ship-lock'), { recursive: true });
   fs.writeFileSync(path.join(root, '.ship-lock', 'owner'), 'run-dead me 2026-01-01T00:00:00.000Z');
   d.stores.repos.get().repos.push({ id: 'r1', name: 'shop', source: { kind: 'local', path: base } });
-  d.stores.targets.get().targets.push({ id: 't1', name: 'shop-local', repoId: 'r1', type: 'local', paths: { root } });
+  d.stores.targets.get().targets.push({ projectId: 'general', id: 't1', name: 'shop-local', repoId: 'r1', type: 'local', paths: { root } });
   const startedAt = new Date(Date.now() - 60000).toISOString();
   d.stores.runs.get().runs.push(
     { id: 'run-dead', targetId: 't1', repoId: 'r1', mode: 'ship', status: 'running', stage: 'package', startedAt, stages: [{ name: 'connect', status: 'ok', ms: 5 }, { name: 'package', status: 'running', _t: 1 }], logLines: 10, targetName: 'shop-local' },

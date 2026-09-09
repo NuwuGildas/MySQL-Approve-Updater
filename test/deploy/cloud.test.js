@@ -88,7 +88,14 @@ test('provision job: generates key, creates server, waits, registers profile + t
   const cloud = createCloud({ ctx, stores: d.stores, vault: d.vault, engine: { list: () => [] }, createTarget: async (b) => { created.push(b); return { id: 't-new', name: b.name }; } });
   await assert.rejects(cloud.provision({ provider: 'fakecloud', name: 'Bad Name!' }), /name must be/);
   await assert.rejects(cloud.provision({ provider: 'fakecloud', name: 'web-1' }), /tokenRef/);
-  const job = await cloud.provision({ provider: 'fakecloud', name: 'web-1', tokenRef: '${vault:DO_TOKEN}', recipe: 'php', createTarget: { repoId: 'r1', targetName: 'shop-prod' } });
+  for (const projectId of [undefined, null, '', 'missing']) {
+    await assert.rejects(cloud.provision({ provider: 'fakecloud', name: 'web-1', tokenRef: '${vault:DO_TOKEN}', projectId, createTarget: { repoId: 'r1' } }), (error) => error.status === 400 && /project/i.test(error.message));
+    assert.equal(cloud.list().length, 0, 'invalid ownership is rejected before provisioning a server');
+    assert.equal(ctx._audits.length, 0);
+    assert.equal(created.length, 0);
+    assert.equal(polls, 0);
+  }
+  const job = await cloud.provision({ provider: 'fakecloud', name: 'web-1', projectId: 'general', tokenRef: '${vault:DO_TOKEN}', recipe: 'php', createTarget: { repoId: 'r1', targetName: 'shop-prod' } });
   for (let i = 0; i < 100 && job.status === 'running'; i++) await new Promise((r) => setTimeout(r, 100));
   cloudDeps.waitTcp = origTcp; cloudDeps.waitCloudInit = origCi; cloudDeps.pollMs = origPoll;
   assert.equal(job.status, 'succeeded', job.error);
@@ -96,6 +103,7 @@ test('provision job: generates key, creates server, waits, registers profile + t
   const prof = ctx.connStore.profiles[1];
   assert.equal(prof.ssh.host, '192.0.2.10'); assert.equal(prof.sshOnly, true); assert.equal(prof.ssh.user, 'deploy');
   assert.equal(created.length, 1); assert.equal(created[0].paths.root, '/var/www/shop-prod'); assert.equal(created[0].web.phpFpmReload.includes('php8.3-fpm'), true);
+  assert.equal(created[0].projectId, 'general', 'the provisioned deployment inherits its selected project');
   const list = cloud.list();
   assert.equal(list[0].status, 'ready'); assert.equal(list[0].ip, '192.0.2.10'); assert.equal(list[0].targetId, 't-new');
   assert.ok(!JSON.stringify(job.toJSON()).includes('#cloud-config'), 'job JSON does not carry user-data');

@@ -1,5 +1,5 @@
-/* Project resources: assign the app's existing resources (DB connections, SSH servers, git connectors,
-   deploy repositories and targets) to a project, or remove them from it.
+/* Project resources: link reusable connections, servers, connectors and repositories.
+   Deployment targets belong to one project; their owner can only change through target settings.
 
    Backend contract (server.js, lib/projects):
      GET    /api/projects                              → { readOnly, kinds, projects: [{ id, name, color, resources: { kind: [{ id, name, detail, missing? }] } }] }
@@ -19,7 +19,7 @@ const PR_KINDS = [
   { kind: 'servers', label: 'Servers', one: 'server', hint: 'SSH-only server profiles. A database connection that tunnels over SSH is assigned as a connection.' },
   { kind: 'connectors', label: 'Connectors', one: 'connector', hint: 'GitHub and GitLab accounts.' },
   { kind: 'repos', label: 'Repositories', one: 'repository', hint: 'Deploy repositories (git or local folder).' },
-  { kind: 'targets', label: 'Targets', one: 'target', hint: 'Deploy targets (VPS, shared hosting, platform, local).' },
+  { kind: 'targets', label: 'Deployments', one: 'deployment', hint: 'Each deployment belongs to one project. Edit its Project setting to move it. Its server and repository remain reusable.' },
 ];
 const PR_KIND_CLASS = { connections: 'db', servers: 'ssh', connectors: 'git', repos: 'repo', targets: 'target' };
 
@@ -53,7 +53,7 @@ const PR_CATALOGS = {
     id: r.id, name: r.name, detail: r.source?.kind === 'local' ? `local · ${r.source.path || ''}` : `git · ${prShortUrl(r.source?.url)}${r.source?.branch ? ' #' + r.source.branch : ''}`,
   })),
   targets: async () => (await api('/api/deploy/targets')).targets.map((t) => ({
-    id: t.id, name: t.name, detail: `${t.type || ''}${t.transport?.host ? ' · ' + t.transport.host : t.host ? ' · ' + t.host : ''}${t.domain ? ' · ' + t.domain : ''}`,
+    id: t.id, name: t.name, projectId: t.projectId, detail: `${t.type || ''}${t.transport?.host ? ' · ' + t.transport.host : t.host ? ' · ' + t.host : ''}${t.domain?.name ? ' · ' + t.domain.name : ''}`,
   })),
 };
 
@@ -105,7 +105,7 @@ function prRows() {
   const rows = [];
   for (const { kind, one } of PR_KINDS) {
     const linked = new Map((p.resources?.[kind] || []).map((r) => [r.id, r]));
-    for (const item of pr.catalog[kind]) rows.push({ kind, one, ...item, assigned: linked.has(item.id) });
+    for (const item of pr.catalog[kind]) rows.push({ kind, one, ...item, assigned: kind === 'targets' ? item.projectId === p.id : linked.has(item.id) });
     for (const r of linked.values()) if (!pr.catalog[kind].some((x) => x.id === r.id)) rows.push({ kind, one, id: r.id, name: r.name || r.id, detail: pr.catalogErrors[kind] ? 'catalog unavailable' : `this ${one} no longer exists`, assigned: true, missing: !pr.catalogErrors[kind] });
   }
   return rows;
@@ -145,9 +145,9 @@ function prRender() {
   const shown = rows.filter((r) => (pr.tab === 'all' || r.kind === pr.tab) && matches(r));
   const host = $('prList');
   const kindErr = pr.tab !== 'all' && pr.catalogErrors[pr.tab] ? `<div class="pr-warn">Could not load ${esc(PR_KINDS.find((k) => k.kind === pr.tab).label.toLowerCase())}: ${esc(pr.catalogErrors[pr.tab])}</div>` : '';
-  const hint = pr.tab !== 'all' ? `<p class="hint pr-hint">${esc(PR_KINDS.find((k) => k.kind === pr.tab).hint)}</p>` : '';
+  const hint = `<p class="hint pr-hint">${esc(pr.tab !== 'all' ? PR_KINDS.find((k) => k.kind === pr.tab).hint : 'Connections, servers, connectors and repositories can be shared. Each deployment belongs to one project; edit it to change its project.')}</p>`;
   if (!shown.length) {
-    const why = q ? `Nothing matches “${esc(pr.query.trim())}”.` : pr.tab === 'all' ? 'There is nothing to assign yet: create a connection, server, connector, repository or target first.' : `No ${esc(PR_KINDS.find((k) => k.kind === pr.tab).label.toLowerCase())} to assign yet.`;
+    const why = q ? `Nothing matches “${esc(pr.query.trim())}”.` : pr.tab === 'targets' ? 'Create a deployment and choose the project it belongs to.' : pr.tab === 'all' ? 'There is nothing to assign yet: create a connection, server, connector, repository or deployment first.' : `No ${esc(PR_KINDS.find((k) => k.kind === pr.tab).label.toLowerCase())} to assign yet.`;
     host.innerHTML = `${hint}${kindErr}<div class="empty-block"><b>${q ? 'No match' : 'Nothing here'}</b>${why}${q ? '<br><button type="button" id="prClearSearch">Clear search</button>' : ''}</div>`;
     $('prClearSearch')?.addEventListener('click', () => { pr.query = ''; $('prSearch').value = ''; prRender(); $('prSearch').focus(); });
     return;
@@ -158,6 +158,8 @@ function prRender() {
   host.innerHTML = hint + kindErr + `<ul class="pr-rows" role="list">` + shown.map((r) => {
     const key = `${r.kind}/${r.id}`;
     const busy = pr.busy.has(key);
+    const owned = r.kind === 'targets';
+    const owner = owned ? pr.projects.find((p) => p.id === r.projectId)?.name || r.projectId || prProject()?.name : '';
     const action = r.assigned ? 'Remove' : 'Assign';
     const label = `${action} ${r.one} “${r.name}”${r.assigned ? ' from' : ' to'} project ${prProject()?.name || ''}`;
     return `<li class="pr-row${r.assigned ? ' assigned' : ''}${r.missing ? ' missing' : ''}" data-kind="${esc(r.kind)}" data-id="${esc(r.id)}">
@@ -165,18 +167,28 @@ function prRender() {
       <div class="pr-id">
         <div class="pr-name">${esc(r.name)}${r.live ? ' <span class="pr-live" title="SSH session connected"></span>' : ''}${r.missing ? ' <span class="badge failed" title="Linked, but the resource was deleted">missing</span>' : ''}</div>
         <div class="pr-detail">${esc(r.detail || '')}</div>
+        ${owned ? `<div class="hint">Project: ${esc(owner)}</div>` : ''}
       </div>
-      <button type="button" class="${r.assigned ? 'pr-remove' : 'primary pr-assign'}" data-act="${r.assigned ? 'unlink' : 'link'}" aria-pressed="${r.assigned}" aria-label="${esc(label)}" title="${esc(label)}" ${busy || locked ? 'disabled' : ''}>${busy ? '…' : r.assigned ? '✓ Assigned' : '+ Assign'}</button>
+      ${owned ? `<button type="button" data-act="edit-deployment" aria-label="Edit deployment ${esc(r.name)}" ${r.missing ? 'disabled' : ''}>Edit deployment</button>` : `<button type="button" class="${r.assigned ? 'pr-remove' : 'primary pr-assign'}" data-act="${r.assigned ? 'unlink' : 'link'}" aria-pressed="${r.assigned}" aria-label="${esc(label)}" title="${esc(label)}" ${busy || locked ? 'disabled' : ''}>${busy ? '…' : r.assigned ? '✓ Assigned' : '+ Assign'}</button>`}
     </li>`;
   }).join('') + '</ul>';
-  host.querySelectorAll('.pr-row [data-act]').forEach((b) => b.addEventListener('click', () => {
+  host.querySelectorAll('.pr-row [data-act]').forEach((b) => b.addEventListener('click', async () => {
     const li = b.closest('.pr-row');
+    if (b.dataset.act === 'edit-deployment') {
+      closeProjectResources();
+      if (typeof navigate === 'function') navigate(`#/deployments/targets/${encodeURIComponent(li.dataset.id)}`);
+      await openDeploy(li.dataset.id);
+      const target = dp.targets.find((t) => t.id === li.dataset.id);
+      if (target) dpOpenTargetModal(target);
+      return;
+    }
     prToggle(li.dataset.kind, li.dataset.id, b.dataset.act === 'link');
   }));
 }
 
 /** Link or unlink one resource, then refresh from the project the server returns. */
 async function prToggle(kind, resourceId, link) {
+  if (kind === 'targets') return toast('Edit the deployment to change its project.', 'warning');
   const p = prProject(); if (!p) return;
   const key = `${kind}/${resourceId}`;
   if (pr.busy.has(key)) return;

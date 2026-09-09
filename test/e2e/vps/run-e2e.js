@@ -40,7 +40,7 @@ const stores = createStores(dataDir);
 const vault = createVault(dataDir, { DEPLOY_MASTER_KEY: Buffer.alloc(32, 3).toString('hex') });
 const redact = createRedactor(() => vault.values());
 stores.repos.get().repos.push({ id: 'r', name: 'php-web', source: { kind: 'local', path: fixture }, manifest: null });
-stores.targets.get().targets.push({ id: 't', name: 'demo', repoId: 'r', type: 'vps-ssh', buildMode: 'auto', ssh: { profileId: 'e2e' }, paths: { root: '/var/www/demo' },
+stores.targets.get().targets.push({ projectId: 'general', id: 't', name: 'demo', repoId: 'r', type: 'vps-ssh', buildMode: 'auto', ssh: { profileId: 'e2e' }, paths: { root: '/var/www/demo' },
   web: { server: 'nginx', reloadCmd: 'sudo -n /usr/sbin/nginx -s reload', phpFpmReload: 'sudo -n /usr/sbin/service php8.3-fpm reload' }, process: { manager: 'none' },
   healthUrl: `http://127.0.0.1:${HTTP_PORT}/`, keepReleases: 2 });
 const engine = createEngine(ctx, { stores, vault, redact });

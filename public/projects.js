@@ -7,7 +7,7 @@
 'use strict';
 
 const pj = { list: [], kinds: [], readOnly: null, editing: null, q: '' };
-const PJ_KIND_LABEL = { connections: ['connection', 'connections'], servers: ['server', 'servers'], connectors: ['connector', 'connectors'], repos: ['repository', 'repositories'], targets: ['target', 'targets'] };
+const PJ_KIND_LABEL = { connections: ['connection', 'connections'], servers: ['server', 'servers'], connectors: ['connector', 'connectors'], repos: ['repository', 'repositories'], targets: ['deployment', 'deployments'] };
 const PJ_PALETTE = ['#4f8ef7', '#22b07d', '#f59e0b', '#ef4444', '#a855f7', '#06b6d4', '#ec4899', '#84cc16'];
 const pjLabel = (kind, n) => { const l = PJ_KIND_LABEL[kind] || [kind, kind]; return n === 1 ? l[0] : l[1]; };
 const pjFmtDate = (iso) => { if (!iso) return ''; const d = new Date(iso); return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }); };
@@ -43,7 +43,7 @@ function pjRender() {
   const q = pj.q.toLowerCase();
   const rows = pj.list.filter((p) => !q || `${p.name} ${p.description || ''}`.toLowerCase().includes(q));
   if (!pj.list.length) {
-    host.innerHTML = `<div class="pj-empty"><h3>No projects</h3><p>A project groups the connections, servers, connectors, repositories and deploy targets that belong together, and the AI assistant keeps one conversation per project.</p><button type="button" class="primary" id="btnPjEmptyAdd" ${pj.readOnly ? 'disabled' : ''}>+ New project</button></div>`;
+    host.innerHTML = `<div class="pj-empty"><h3>No projects</h3><p>Each project owns its deployments and AI conversation. Connections, servers, connectors and repositories can be shared across projects.</p><button type="button" class="primary" id="btnPjEmptyAdd" ${pj.readOnly ? 'disabled' : ''}>+ New project</button></div>`;
     $('btnPjEmptyAdd')?.addEventListener('click', () => pjOpenModal(null));
     return;
   }
@@ -55,7 +55,7 @@ function pjRender() {
   const activeId = typeof currentProjectId !== 'undefined' ? currentProjectId : null;
   const onlyGeneral = pj.list.length === 1 && pj.list[0].id === 'general';
   const generalEmpty = onlyGeneral && !Object.values(pj.list[0].resources || {}).some((arr) => arr?.length);
-  const intro = generalEmpty ? `<section class="pj-welcome"><div class="pj-welcome-icon" aria-hidden="true">✦</div><div><p class="eyebrow">Your workspace is ready</p><h3>Create a project to keep work together</h3><p>Projects group reusable connections, servers, connectors, repositories and deploy targets. Each project also keeps its own assistant conversation.</p><button type="button" class="primary" id="btnPjWelcomeAdd" ${pj.readOnly ? 'disabled' : ''}>+ Create your first project</button></div></section>` : '';
+  const intro = generalEmpty ? `<section class="pj-welcome"><div class="pj-welcome-icon" aria-hidden="true">✦</div><div><p class="eyebrow">Your workspace is ready</p><h3>Create a project to keep work together</h3><p>Each project owns its deployments and assistant conversation. Reuse connections, servers, connectors and repositories across projects.</p><button type="button" class="primary" id="btnPjWelcomeAdd" ${pj.readOnly ? 'disabled' : ''}>+ Create your first project</button></div></section>` : '';
   host.innerHTML = intro + rows.map((p) => {
     const active = p.id === activeId;
     const kinds = pj.kinds.length ? pj.kinds : Object.keys(p.resources || {});
@@ -81,7 +81,8 @@ function pjRender() {
       <div class="pj-actions">
         <button type="button" class="primary" data-act="activate" ${active ? 'disabled' : ''} title="Use this project in the header switcher and the assistant">${active ? 'Active' : 'Set active'}</button>
         <button type="button" data-act="edit" ${pj.readOnly ? 'disabled' : ''} title="Rename, describe or recolour">Edit</button>
-        <button type="button" class="iconbtn danger" data-act="remove" ${pj.readOnly || pj.list.length === 1 ? 'disabled' : ''} title="${pj.list.length === 1 ? 'The last project cannot be deleted' : `Delete project (its ${total} linked ${total === 1 ? 'resource is' : 'resources are'} kept)`}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg></button>
+        <button type="button" data-act="resources" title="View deployments and manage shared resources">Resources</button>
+        <button type="button" class="iconbtn danger" data-act="remove" ${pj.readOnly || pj.list.length === 1 || p.resources?.targets?.length ? 'disabled' : ''} title="${pj.list.length === 1 ? 'The last project cannot be deleted' : p.resources?.targets?.length ? 'Move or delete this project’s deployments first' : `Delete project (its ${total} linked ${total === 1 ? 'resource is' : 'resources are'} kept)`}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg></button>
       </div>
     </article>`;
   }).join('');
@@ -94,12 +95,14 @@ async function pjAction(id, act, btn) {
   try {
     if (act === 'activate') { setProject(id); pjRender(); }
     else if (act === 'edit') pjOpenModal(p);
+    else if (act === 'resources') openProjectResources(id);
     else if (act === 'remove') {
+      if (p.resources?.targets?.length) return toast('Move or delete this project’s deployments before deleting the project. Projects with deployment history must be kept.', 'warning');
       const total = Object.values(p.resources || {}).reduce((n, l) => n + (l?.length || 0), 0);
       const wasActive = typeof currentProjectId !== 'undefined' && currentProjectId === id;
       const ok = await confirmDialog({
         title: `Delete ${p.name}`,
-        message: `Delete the project <b>${esc(p.name)}</b>? ${total ? `Its ${total} linked ${total === 1 ? 'resource keeps' : 'resources keep'} working: only the grouping is removed.` : 'It has no linked resources.'} The assistant conversation for this project is no longer reachable.${wasActive ? ' It is the <b>active</b> project: the header will fall back to General.' : ''}`,
+        message: `Delete the project <b>${esc(p.name)}</b>? ${total ? `Its ${total} linked ${total === 1 ? 'resource keeps' : 'resources keep'} working: only the grouping is removed.` : 'It has no linked resources.'} Projects with deployment history or pending deployment provisioning cannot be deleted. The assistant conversation for this project is no longer reachable.${wasActive ? ' It is the <b>active</b> project: the header will fall back to General.' : ''}`,
         okLabel: 'Delete', okClass: 'reject',
       });
       if (!ok) return;

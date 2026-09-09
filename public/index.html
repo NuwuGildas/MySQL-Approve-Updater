@@ -57,18 +57,18 @@
   <span class="sub sse-link" title="This indicator shows the browser's live link to Server Tools, not the database or a server"><span class="dot" id="sseDot"></span> app link</span>
   <div class="proj-switch" id="projSwitch" title="Active project: the AI assistant keeps one conversation per project">
     <label for="projSelect" class="sr-only">Active project</label>
-    <span class="proj-dot" id="projDot" aria-hidden="true"></span>
-    <button type="button" class="proj-trigger" id="projTrigger" aria-haspopup="listbox" aria-expanded="false" aria-controls="projMenu"><span id="projTriggerName">General</span><span class="proj-trigger-chevron" aria-hidden="true">⌄</span></button>
+    <button type="button" class="proj-trigger" id="projTrigger" aria-haspopup="listbox" aria-expanded="false" aria-controls="projMenu"><span class="proj-dot" id="projDot" aria-hidden="true"></span><span id="projTriggerName">General</span><svg class="proj-trigger-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9.5l6 6 6-6"/></svg></button>
     <div class="proj-menu" id="projMenu" role="listbox" aria-label="Switch project" hidden>
-      <label class="proj-search"><span class="sr-only">Search projects</span><input id="projSearch" type="search" placeholder="Search projects…" autocomplete="off"><span aria-hidden="true">⌕</span></label>
+      <label class="proj-search"><span class="sr-only">Search projects</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg><input id="projSearch" type="search" placeholder="Search projects…" autocomplete="off"></label>
       <div class="proj-options" id="projOptions"></div>
-      <div class="proj-menu-foot"><button type="button" class="proj-menu-action" id="projCreate">+ New project</button><button type="button" class="proj-menu-action" id="projManage">Manage projects <span aria-hidden="true">→</span></button></div>
+      <div class="proj-menu-foot"><button type="button" class="proj-menu-action primary" id="projCreate"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New project</button><button type="button" class="proj-menu-action" id="projManage">Manage<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h13M13 6.5l6 5.5-6 5.5"/></svg></button></div>
     </div>
     <select id="projSelect" class="proj-select-source" aria-describedby="projSwitchHint"><option value="general">General</option></select>
     <span id="projSwitchHint" class="sr-only">Switching projects reloads the assistant conversation for that project.</span>
     <button type="button" class="iconbtn proj-manage" id="btnProjManage" title="Manage projects" aria-label="Manage projects"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="2.6"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg></button>
     <button type="button" id="btnProjResources" class="iconbtn proj-res-btn" title="Assign resources to this project" aria-label="Assign resources to this project" aria-haspopup="dialog" aria-controls="prjResModal"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7L12 19"/></svg></button>
   </div>
+  <button type="button" id="btnSearch" class="hdr-search" title="Search everything (Ctrl K)" aria-label="Search everything" aria-keyshortcuts="Control+K"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg><span>Search</span><kbd>Ctrl</kbd><kbd>K</kbd></button>
   <span class="spacer"></span>
   <div class="ai-agent" title="AI assistant: works across every module">
     <button class="ai-real" id="btnAiAgent" title="AI assistant" aria-label="AI assistant"></button>
@@ -686,7 +686,7 @@
     <button id="btnPjAdd" class="primary">+ New project</button>
     <button id="btnPjRefresh" title="Reload">Refresh</button>
   </div>
-  <p class="hint" style="margin:.2rem 0 .6rem">A project groups the connections, servers, connectors, repositories and deploy targets that belong together. The active project scopes the AI assistant's conversation; pick it here or in the header.</p>
+  <p class="hint" style="margin:.2rem 0 .6rem">Each project owns its deployments and AI conversation. Connections, servers, connectors and repositories can be reused across projects. Pick the active project here or in the header.</p>
   <p class="pj-readonly" id="projectsReadOnly" role="status" hidden></p>
   <input id="projectsFilter" type="search" placeholder="Filter by name or description…" autocomplete="off" aria-label="Filter projects">
   <div id="projectsList" class="pj-list"></div>
@@ -993,6 +993,7 @@
     <section class="tf-sec" aria-labelledby="tfSrcH">
       <h4 id="tfSrcH">Source</h4>
       <div class="tf-grid">
+        <div class="tf-field"><label for="dtProject">Project</label><select id="dtProject" required aria-describedby="dtProjectHelp"></select><p class="tf-help" id="dtProjectHelp">Every deployment belongs to one project.</p></div>
         <div class="tf-field"><label for="dtName">Name</label><input id="dtName" required maxlength="80" placeholder="shop-prod" autocomplete="off"><p class="tf-help">Prefilled from the repository; edit freely.</p></div>
         <div class="tf-field"><label for="dtRepo">Repository</label><select id="dtRepo" required></select></div>
         <div class="tf-field"><label for="dtBranchView">Branch</label><input id="dtBranchView" readonly tabindex="-1" aria-describedby="dtBranchHelp"><p class="tf-help" id="dtBranchHelp">Repository branch; the automation section can follow another one.</p></div>
@@ -1151,6 +1152,8 @@
   </div>
   <form id="wzForm" method="dialog">
     <section class="wz-step on" data-step="1">
+      <label for="wzProject">Project</label><select id="wzProject" required aria-describedby="wzProjectHelp"></select>
+      <p class="hint" id="wzProjectHelp">This project will own the deployment. Repositories and servers remain reusable.</p>
       <div class="wz-choice" id="wzSourceKind">
         <button type="button" class="on" data-v="git"><b>Git repository</b><span>GitHub, GitLab, Bitbucket or any git URL</span></button>
         <button type="button" data-v="local"><b>Local folder</b><span>A checkout on this machine</span></button>
@@ -1259,6 +1262,8 @@
   <form id="dpImportForm" method="dialog">
     <h3>Import configuration</h3>
     <span class="hint">Paste an export (or choose the file). Repos, targets and templates whose names are new are created; secret values are never included: you will be told which ones to add.</span>
+    <label for="dpImportProject">Destination project</label><select id="dpImportProject" required aria-describedby="dpImportProjectHelp"></select>
+    <p class="hint" id="dpImportProjectHelp">All newly imported deployments belong to this project. Repositories and templates remain reusable.</p>
     <input type="file" id="dpImportFile" accept="application/json" style="margin:.6rem 0 .3rem">
     <textarea id="dpImportText" class="dp-code" rows="8" spellcheck="false" placeholder='{ "format": "ascension-config", ... }'></textarea>
     <div id="dpImportReport" class="hint" style="margin-top:.4rem"></div>
@@ -1289,6 +1294,7 @@
     <div class="dp-card" style="margin:.7rem 0 0;padding:.55rem .75rem">
       <label class="chk" style="margin:0"><input type="checkbox" id="dcMakeTarget"> <b>Also create a deploy target</b> on this server</label>
       <div class="row" id="dcTargetRow" hidden>
+        <div style="flex:2"><label for="dcProject">Project</label><select id="dcProject" disabled></select></div>
         <div style="flex:2"><label for="dcRepo">Repository</label><select id="dcRepo"></select></div>
         <div style="flex:2"><label for="dcTargetName">Target name (also the app folder)</label><input id="dcTargetName" placeholder="shop-prod"></div>
         <div style="flex:2"><label for="dcHealth">Health URL (defaults to http://&lt;ip&gt;/)</label><input id="dcHealth" placeholder="https://shop.example.com/up"></div>
@@ -1327,12 +1333,46 @@
   </div>
   <div id="serverFormHost"></div>
 </dialog>
+<dialog id="prjResModal" class="pr-modal" aria-labelledby="prTitle">
+  <header class="pr-head">
+    <div class="pr-title">
+      <h2 id="prTitle">Project resources</h2>
+      <div class="pr-project"><span class="proj-dot" id="prDot" aria-hidden="true"></span><label class="sr-only" for="prProject">Project</label><select id="prProject"></select></div>
+      <p class="hint" id="prDesc" hidden></p>
+    </div>
+    <button type="button" id="prRefresh">Refresh</button><button type="button" id="prClose" aria-label="Close project resources">Close</button>
+  </header>
+  <div class="pr-readonly" id="prReadOnly" hidden></div>
+  <div class="pr-tools"><div class="pr-tabs seg" id="prTabs" role="tablist" aria-label="Resource types"></div><label class="sr-only" for="prSearch">Search resources</label><input type="search" id="prSearch" placeholder="Search resources…"></div>
+  <div class="pr-list" id="prList"></div>
+  <p class="pr-foot hint" id="prSummary" aria-live="polite"></p>
+</dialog>
+
 <dialog id="confirmModal">
   <h2 id="confirmTitle" style="margin:0 0 .6rem;font-size:.85rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)"></h2>
   <div id="confirmMsg"></div>
   <div style="display:flex;gap:.5rem;margin-top:1rem;justify-content:flex-end">
     <button id="btnConfirmCancel">Cancel</button>
     <button id="btnConfirmOk" class="primary">Confirm</button>
+  </div>
+</dialog>
+
+<dialog id="cmdkModal" class="cmdk" aria-label="Search everything">
+  <div class="cmdk-field">
+    <svg class="cmdk-field-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
+    <input id="cmdkInput" type="text" role="combobox" aria-expanded="true" aria-controls="cmdkList" aria-autocomplete="list" autocomplete="off" spellcheck="false" placeholder="Search pages, projects, deployments, servers…" aria-label="Search everything">
+    <span class="cmdk-scope" id="cmdkScope" hidden></span>
+    <kbd>Ctrl</kbd><kbd>K</kbd>
+  </div>
+  <div class="cmdk-panel">
+    <div class="cmdk-results" id="cmdkList" role="listbox" aria-label="Search results"></div>
+    <div class="cmdk-foot">
+      <span><kbd>↑</kbd><kbd>↓</kbd> to navigate</span>
+      <span><kbd>↵</kbd> to select</span>
+      <span><kbd>esc</kbd> to close</span>
+      <span class="spacer"></span>
+      <span id="cmdkStatus" aria-live="polite"></span>
+    </div>
   </div>
 </dialog>
 
@@ -1343,6 +1383,8 @@
 <script src="deploy.js"></script>
 <script src="connectors.js"></script>
 <script src="projects.js"></script>
+<script src="project-resources.js"></script>
 <script src="navigation.js"></script>
+<script src="palette.js"></script>
 </body>
 </html>

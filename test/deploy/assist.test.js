@@ -21,7 +21,7 @@ function setup(connOpts = {}, targetExtra = {}, ctxOver = {}) {
   const conn = fakeConn(connOpts);
   const type = registerFakeVps(conn);
   d.stores.repos.get().repos.push({ id: 'r1', name: 'shop', source: { kind: 'local', path: fx('laravel') }, manifest: null });
-  d.stores.targets.get().targets.push({ id: 't1', name: 'prod', repoId: 'r1', type, buildMode: 'auto', ssh: { profileId: 'p1' }, paths: { root: '/var/www/shop' }, web: { server: 'nginx', reloadCmd: 'sudo -n systemctl reload nginx' }, keepReleases: 3, ...targetExtra });
+  d.stores.targets.get().targets.push({ projectId: 'general', id: 't1', name: 'prod', repoId: 'r1', type, buildMode: 'auto', ssh: { profileId: 'p1' }, paths: { root: '/var/www/shop' }, web: { server: 'nginx', reloadCmd: 'sudo -n systemctl reload nginx' }, keepReleases: 3, ...targetExtra });
   const engine = createEngine(ctx, d);
   return { ctx, d, conn, engine };
 }
@@ -142,6 +142,23 @@ test('deploy actions are proposals: approving runs them through the engine, reje
   const notes = []; ctx.agent.chatNote = (n) => notes.push(n);
   const shared = await api.runToChat(run.id);
   assert.equal(shared.runId, run.id); assert.equal(notes[0].kind, 'run-log'); assert.ok(notes[0].lines.length > 0); assert.match(notes[0].text, /shared a deploy log/);
+  assert.equal(notes[0].projectId, 'general', 'deploy logs return to the project that owned the run');
+  const second = await d.stores.projects.create({ name: 'Second' });
+  d.stores.findTarget('t1').projectId = second.id;
+  await api.runToChat(run.id);
+  assert.equal(notes[1].projectId, 'general', 'moving the target must not redirect historical logs to another project');
+});
+
+test('a deployment action proposal is invalidated when the target moves projects', async () => {
+  const { ctx, d, engine } = setup();
+  agent.register({ ctx, engine, stores: d.stores, vault: d.vault, redact: d.redact });
+  const proposed = await ctx.agent.tools.propose_deploy_action.run({ targetId: 't1', action: 'plan', reason: 'Check deployment' });
+  const proposal = ctx.agent.proposals.find((p) => p.id === proposed.proposalId);
+  const second = await d.stores.projects.create({ name: 'Second' });
+  d.stores.findTarget('t1').projectId = second.id;
+  await assert.rejects(ctx.agent.kinds['deploy-action'].approve(proposal), /project/i);
+  assert.equal(engine.activeIds().length, 0);
+  assert.equal(engine.list().length, 0);
 });
 
 test('plan records a change summary; the next plan diffs against the last ship; before_ship runs before migrations', async () => {

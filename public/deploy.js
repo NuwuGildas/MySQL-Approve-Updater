@@ -4,7 +4,7 @@
 'use strict';
 
 const dp = {
-  status: null, repos: [], targets: [], secrets: [], profiles: [],
+  status: null, repos: [], targets: [], secrets: [], profiles: [], projects: [],
   sel: null, tab: 'overview', runs: new Map(), logRun: null, logCursor: 0,
   det: null, detRepo: null, plan: null, probe: null, releases: null, setup: null, editingRepo: null, editingTarget: null, loaded: false,
   servers: [], cloudJob: null, cloudMeta: null, templates: [],
@@ -14,6 +14,14 @@ const dpFmtAgo = (iso) => { if (!iso) return ''; const s = Math.round((Date.now(
 const dpFmtMs = (ms) => (ms == null ? '' : ms < 1000 ? `${ms} ms` : ms < 60000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`);
 const dpBadge = (status) => `<span class="badge ${esc(status)}">${esc(String(status).replace('_', ' '))}</span>`;
 const dpTarget = () => dp.targets.find((t) => t.id === dp.sel) || null;
+const dpProjects = () => typeof projects !== 'undefined' && projects.length ? projects : dp.projects;
+const dpProjectName = (id) => dpProjects().find((p) => p.id === id)?.name || id || 'Project unavailable';
+function dpFillProjectSelect(id, selected) {
+  const list = dpProjects();
+  const preferred = selected || (typeof currentProjectId === 'string' ? currentProjectId : 'general');
+  dpFillSelect($(id), list.map((p) => ({ value: p.id, label: p.name })), preferred, list.some((p) => p.id === preferred) ? null : 'Choose a project');
+}
+function dpValidProject(id) { return dpProjects().some((p) => p.id === id); }
 const dpRepoOf = (t) => dp.repos.find((r) => r.id === t?.repoId) || null;
 const dpRunsFor = (id) => [...dp.runs.values()].filter((r) => r.targetId === id).sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''));
 const dpIsActive = (r) => r && ['queued', 'running'].includes(r.status);
@@ -46,10 +54,12 @@ const closeDeploy = () => $('deployDrawer').classList.remove('open');
 
 async function loadDeploy() {
   try {
-    const [st, repos, targets, secrets, sessions, runs, servers, templates] = await Promise.all([
-      api('/api/deploy/status'), api('/api/deploy/repos'), api('/api/deploy/targets'), api('/api/deploy/secrets'), api('/api/ssh/sessions').catch(() => ({ sessions: [] })), api('/api/deploy/runs?limit=100'), api('/api/deploy/cloud/servers').catch(() => ({ servers: [] })), api('/api/deploy/templates').catch(() => ({ templates: [] })),
+    const [st, repos, targets, secrets, sessions, runs, servers, templates, projectData] = await Promise.all([
+      api('/api/deploy/status'), api('/api/deploy/repos'), api('/api/deploy/targets'), api('/api/deploy/secrets'), api('/api/ssh/sessions').catch(() => ({ sessions: [] })), api('/api/deploy/runs?limit=100'), api('/api/deploy/cloud/servers').catch(() => ({ servers: [] })), api('/api/deploy/templates').catch(() => ({ templates: [] })), api('/api/projects'),
     ]);
     dp.status = st; dp.repos = repos.repos; dp.targets = targets.targets; dp.secrets = secrets.secrets; dp.profiles = sessions.sessions; dp.servers = servers.servers; dp.templates = templates.templates; dp.loaded = true;
+    dp.projects = projectData.projects || [];
+    if (typeof projects !== 'undefined') { projects = dp.projects; if (typeof renderProjectContext === 'function') renderProjectContext(); }
     for (const r of runs.runs) if (!dp.runs.has(r.id) || !dpIsActive(dp.runs.get(r.id))) dp.runs.set(r.id, r);
   } catch (e) { toast('Deploy load failed: ' + e.message, 'error'); return; }
   if (dp.sel && !dpTarget()) dp.sel = null;
@@ -89,7 +99,7 @@ function dpRenderNav() {
     const env = dpEnvOf(t);
     return `<div class="dp-item ${t.id === dp.sel ? 'on' : ''}" data-target="${t.id}" title="${esc(dpHostOf(t))}">
       <span class="srv-dot ${dot}" style="margin:0"></span>
-      <div class="dp-item-body"><span class="dp-item-name">${esc(t.name)}</span><span class="dp-item-sub">${esc(dpRepoOf(t)?.name || 'no repo')} → ${esc(dpHostOf(t) || t.type)}</span></div>
+      <div class="dp-item-body"><span class="dp-item-name">${esc(t.name)}</span><span class="dp-item-sub" title="Project: ${esc(dpProjectName(t.projectId))}">${esc(dpProjectName(t.projectId))} · ${esc(dpRepoOf(t)?.name || 'no repo')}</span><span class="dp-item-sub">${esc(dpHostOf(t) || t.type)}</span></div>
       ${t.autoShip?.enabled ? '<span class="dp-auto" title="auto-ship on ' + esc(t.autoShip.mode) + '">⚡</span>' : ''}<span class="env ${env}">${esc(env === 'neutral' ? dpTypeLabel(t) : env)}</span></div>`;
   }).join('') : `<div class="dp-empty-sec"><b>No deployment target</b>${dp.repos.length ? 'Choose where the code should land: a VPS over SSH or shared hosting.' : 'Connect a repository first, then add a VPS or shared-hosting target.'}<br><button ${dp.repos.length ? 'class="primary"' : 'disabled'} data-act="add-target">Add target</button></div>`;
   $('dpSecretsN').textContent = dp.secrets.length || '';
@@ -201,6 +211,7 @@ $('dpEmpty').addEventListener('click', (e) => {
 /* ---------- guided setup wizard ---------- */
 const wz = { step: 1, source: 'git', dest: 'vps-ssh', transport: 'ftps', pendingRepoId: null, fw: null, fwGroup: 'all', detected: null, build: 'auto', catalog: null, detCache: new Map() };
 function dpOpenWizard(repoId) {
+  dpFillProjectSelect('wzProject');
   wz.step = 1; wz.source = repoId ? 'existing' : 'git'; wz.dest = dp.profiles.length ? 'vps-ssh' : 'shared-hosting'; wz.transport = 'ftps'; wz.pendingRepoId = repoId || null;
   for (const id of ['wzUrl', 'wzBranch', 'wzToken', 'wzKeyPath', 'wzPath', 'wzRepoName', 'wzTargetName', 'wzHealth', 'wzRoot', 'wzFtpHost', 'wzFtpUser', 'wzHome', 'wzDocroot', 'wzLocalRoot', 'wzLocalReload']) $(id).value = '';
   $('wzLocalProc').value = 'none'; delete $('wzLocalRoot').dataset.touched;
@@ -390,11 +401,13 @@ function wzCollect() {
   else if (wz.dest === 'shared-hosting') { const tr = $('wzTransport').value; const [fh, fp] = $('wzFtpHost').value.trim().split(':'); target = { name, type: 'shared-hosting', transport: tr === 'sftp' ? { kind: 'sftp', profileId: $('wzSftpProfile').value } : { kind: tr, host: fh, port: Number(fp) || undefined, user: $('wzFtpUser').value.trim(), passwordRef: `\${vault:${refs.ftpPass}}`, secure: tr === 'ftps' }, paths: { home: $('wzHome').value.trim() || '/', docroot: $('wzDocroot').value.trim() }, docrootStrategy: 'auto', healthUrl, keepReleases: 2, autoShip: auto }; }
   else if (wz.dest === 'local') { const proc = $('wzLocalProc').value; target = { name, type: 'local', buildMode: 'local', paths: { root: $('wzLocalRoot').value.trim() }, web: { reloadCmd: $('wzLocalReload').value.trim() }, process: { manager: proc, name: proc === 'pm2' ? (name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'app') : '' }, healthUrl, keepReleases: 3, autoShip: auto }; }
   else if (wz.dest === 'paas') { const paas = { provider: $('wzPaas').value, tokenRef: `\${vault:${refs.paasToken}}`, prod: env === 'production' }; $('wzPaasFields').querySelectorAll('[data-wz-paas]').forEach((i) => { paas[i.dataset.wzPaas] = i.value.trim(); }); target = { name, type: 'paas', paas, healthUrl, autoShip: auto }; }
+  if (target) target.projectId = $('wzProject').value;
   return { repo, repoId, target, secrets, env };
 }
 function wzValidate(step) {
   const err = (m) => { toast(m, 'warning'); return false; };
   if (step === 1) {
+    if (!dpValidProject($('wzProject').value)) { $('wzProject').focus(); return err('Choose the project for this deployment'); }
     if (wz.source === 'git' && !/^(https?:\/\/|git@|ssh:\/\/)/.test($('wzUrl').value.trim())) return err('Enter the repository URL (https:// or git@…)');
     if (wz.source === 'local' && !$('wzPath').value.trim()) return err('Enter the folder path');
     if (wz.source === 'existing' && !$('wzRepo').value) return err('Pick a repository');
@@ -419,6 +432,7 @@ function wzRenderReview() {
   const t = c.target || {};
   const dest = wz.dest === 'cloud' ? 'a new cloud server (provisioned next)' : t.type === 'local' ? `this computer · ${t.paths.root}${t.web.reloadCmd ? ' · then ' + t.web.reloadCmd : ''}` : t.type === 'vps-ssh' ? `${dp.profiles.find((p) => p.id === t.ssh.profileId)?.host || 'ssh'}:${t.paths.root} · ${t.web.server}` : t.type === 'shared-hosting' ? `${t.transport.kind} ${t.transport.host || dp.profiles.find((p) => p.id === t.transport.profileId)?.host || ''} → ${t.paths.docroot}` : `${dpHostOf({ type: 'paas', paas: t.paas })} (${t.paas.prod ? 'production' : 'preview'})`;
   $('wzReview').innerHTML = `<div class="wz-review"><dl>
+    <dt>project</dt><dd>${esc(dpProjectName($('wzProject').value))} <button type="button" id="btnWzProjectChange">Change</button></dd>
     <dt>repository</dt><dd>${esc(repoLine)}</dd>
     <dt>target</dt><dd>${esc(t.name || '')} <span class="env ${esc(c.env === 'staging' ? 'staging' : c.env === 'dev' ? 'dev' : 'production')}">${esc(c.env)}</span></dd>
     <dt>destination</dt><dd>${esc(dest)}</dd>
@@ -428,6 +442,7 @@ function wzRenderReview() {
     <dt>secrets</dt><dd>${Object.keys(c.secrets).length ? Object.keys(c.secrets).map((k) => '${vault:' + esc(k) + '}').join(', ') : 'none'}</dd>
     <dt>auto-ship</dt><dd>${t.autoShip?.enabled ? esc(t.autoShip.mode) : 'off'}</dd>
   </dl><p class="hint" style="margin:.6rem 0 0">Nothing is deployed yet. After creation you can Test the connection, Plan (read-only) and Ship.</p></div>`;
+  $('btnWzProjectChange').addEventListener('click', () => { wzShow(1); $('wzProject').focus(); });
 }
 $('wzSourceKind').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) { wz.source = b.dataset.v; wzSync(); } });
 $('wzDestKind').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) { wz.dest = b.dataset.v; wzSync(); } });
@@ -450,7 +465,7 @@ async function wzFinishCloud() {
     let repoId = c.repoId;
     if (!repoId) { const r = await api('/api/deploy/repos', { method: 'POST', body: JSON.stringify(c.repo) }); repoId = r.id; }
     $('dpWizard').close(); await loadDeploy(); await dpOpenCloudModal();
-    $('dcMakeTarget').checked = true; dpCloudSync(false); $('dcRepo').value = repoId; $('dcTargetName').value = $('wzTargetName').value.trim(); $('dcHealth').value = $('wzHealth').value.trim(); $('dcName').value = $('wzTargetName').value.trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').slice(0, 40);
+    $('dcMakeTarget').checked = true; dpCloudSync(false); $('dcProject').value = $('wzProject').value; $('dcRepo').value = repoId; $('dcTargetName').value = $('wzTargetName').value.trim(); $('dcHealth').value = $('wzHealth').value.trim(); $('dcName').value = $('wzTargetName').value.trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').slice(0, 40);
     toast('Repository connected: now provision the server', 'success');
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -478,7 +493,7 @@ async function dpSaveTemplateFromForm() {
   const t = dp.editingTarget;
   try {
     if (t) await api('/api/deploy/templates', { method: 'POST', body: JSON.stringify({ name, fromTargetId: t.id }) });
-    else { const body = dpTargetFormBody(); delete body.name; delete body.repoId; delete body.autoShip; await api('/api/deploy/templates', { method: 'POST', body: JSON.stringify({ name, data: body }) }); }
+    else { const body = dpTargetFormBody(); delete body.name; delete body.repoId; delete body.projectId; delete body.autoShip; await api('/api/deploy/templates', { method: 'POST', body: JSON.stringify({ name, data: body }) }); }
     toast(`Template "${name}" saved`, 'success'); dp.templates = (await api('/api/deploy/templates')).templates; dpFillTemplates(null);
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -496,7 +511,7 @@ function dpFillTemplates(t) {
 async function dpApplyTemplate(id) {
   const tpl = dp.templates.find((x) => x.id === id); if (!tpl) return;
   const keepName = $('dtName').value, keepRepo = $('dtRepo').value;
-  dpOpenTargetModal({ ...tpl.data, name: keepName, repoId: keepRepo, id: undefined });
+  dpOpenTargetModal({ ...tpl.data, name: keepName, repoId: keepRepo, projectId: $('dtProject').value, id: undefined });
   dp.editingTarget = null; $('dpTargetTitle').textContent = `Add a deploy target: from "${tpl.name}"`; dpFillTemplates(null); $('dtTemplate').value = id;
   toast(`Template "${tpl.name}" applied: adjust and save`, 'success');
 }
@@ -521,13 +536,15 @@ async function dpExportConfig() {
     toast(`Exported ${doc.repos.length} repo(s), ${doc.targets.length} target(s), ${doc.templates.length} template(s): copied to the clipboard too`, 'success');
   } catch (e) { toast(e.message, 'error'); }
 }
-function dpOpenImportModal() { $('dpImportText').value = ''; $('dpImportReport').textContent = ''; $('dpImportFile').value = ''; $('dpImportModal').showModal(); }
+function dpOpenImportModal() { dpFillProjectSelect('dpImportProject'); $('dpImportText').value = ''; $('dpImportReport').textContent = ''; $('dpImportFile').value = ''; $('dpImportModal').showModal(); }
 $('dpImportFile').addEventListener('change', async () => { const f = $('dpImportFile').files[0]; if (f) $('dpImportText').value = await f.text(); });
 $('btnDpImportCancel').addEventListener('click', () => $('dpImportModal').close());
 async function dpRunImport(dryRun) {
+  const projectId = $('dpImportProject').value;
+  if (!dpValidProject(projectId)) { $('dpImportProject').focus(); return toast('Choose a project for imported deployments', 'warning'); }
   let doc; try { doc = JSON.parse($('dpImportText').value); } catch (e) { return toast('Invalid JSON: ' + e.message, 'error'); }
   try {
-    const rep = await api('/api/deploy/import', { method: 'POST', body: JSON.stringify({ config: doc, dryRun }) });
+    const rep = await api('/api/deploy/import', { method: 'POST', body: JSON.stringify({ config: doc, dryRun, projectId }) });
     const line = (k, arr) => (arr.length ? `<div><b>${k}</b>: ${arr.map(esc).join(', ')}</div>` : '');
     $('dpImportReport').innerHTML = `${dryRun ? '<div class="dp-chip">preview: nothing written</div>' : '<div class="dp-chip ok">imported</div>'}${line('repos', rep.repos)}${line('targets', rep.targets)}${line('templates', rep.templates)}${line('skipped', rep.skipped)}${rep.missingSecrets.length ? `<div class="dp-warn">Add these secrets to the vault: ${rep.missingSecrets.map(esc).join(', ')}</div>` : ''}${rep.unresolvedProfiles.length ? `<div class="dp-warn">SSH servers not found on this machine (edit the target afterwards): ${rep.unresolvedProfiles.map(esc).join('; ')}</div>` : ''}`;
     if (!dryRun) { toast('Configuration imported', 'success'); await loadDeploy(); }
@@ -561,6 +578,7 @@ function dpShowServer(x) {
     .then((closed) => { if (!closed && x.profileId) { dpOpenTargetModal(null); setTimeout(() => { $('dtType').value = 'vps-ssh'; $('dtProfile').value = x.profileId; tfState.rootTouched = true; $('dtRoot').value = `/var/www/${x.name}`; $('dtHealth').value = x.ip ? `http://${x.ip}/` : ''; }, 50); } });
 }
 async function dpOpenCloudModal() {
+  dpFillProjectSelect('dcProject');
   try { dp.cloudMeta = dp.cloudMeta || await api('/api/deploy/cloud/providers'); } catch (e) { return toast(e.message, 'error'); }
   const m = dp.cloudMeta;
   dpFillSelect($('dcProvider'), m.providers.map((p) => ({ value: p.id, label: p.label })), 'hetzner');
@@ -577,6 +595,8 @@ function dpCloudSync(resetDefaults) {
   if (resetDefaults) { $('dcRegionText').value = p.defaults.region; $('dcSizeText').value = p.defaults.size; $('dcImageText').value = p.defaults.image; for (const k of ['Region', 'Size', 'Image']) { $('dc' + k).hidden = true; $('dc' + k + 'Text').hidden = false; } }
   $('btnDcOptions').hidden = p.auth !== 'token';
   $('dcTargetRow').hidden = !$('dcMakeTarget').checked;
+  $('dcProject').required = $('dcMakeTarget').checked;
+  $('dcProject').disabled = !$('dcMakeTarget').checked;
   if ($('dcMakeTarget').checked && !$('dcTargetName').value) $('dcTargetName').value = $('dcName').value;
 }
 $('dcProvider').addEventListener('change', () => dpCloudSync(true));
@@ -602,8 +622,10 @@ $('dpCloudModal').querySelector('details').addEventListener('toggle', async (e) 
 $('btnDpCloudCancel').addEventListener('click', () => $('dpCloudModal').close());
 $('dpCloudForm').addEventListener('submit', async (e) => {
   e.preventDefault();
+  if ($('dcMakeTarget').checked && !dpValidProject($('dcProject').value)) { $('dcProject').focus(); return toast('Choose a project for this deployment', 'warning'); }
   const val = (k) => ($('dc' + k).hidden ? $('dc' + k + 'Text').value.trim() : $('dc' + k).value);
   const body = { provider: $('dcProvider').value, tokenRef: $('dcToken').value || undefined, name: $('dcName').value.trim(), region: val('Region'), size: val('Size'), image: val('Image'), recipe: $('dcRecipe').value, privateKeyPath: $('dcKeyPath').value.trim() || undefined,
+    projectId: $('dcMakeTarget').checked ? $('dcProject').value : undefined,
     createTarget: $('dcMakeTarget').checked ? { repoId: $('dcRepo').value, targetName: $('dcTargetName').value.trim() || $('dcName').value.trim(), healthUrl: $('dcHealth').value.trim() || undefined } : undefined };
   const p = dp.cloudMeta.providers.find((x) => x.id === body.provider);
   if (!(await confirmDialog({ title: 'Provision a server', message: `Create <b>${esc(body.name)}</b> on <b>${esc(p?.label || body.provider)}</b> (${esc(body.region)} · ${esc(body.size)} · ${esc(body.image)}) with the <b>${esc(body.recipe)}</b> recipe? <span class="hint">This creates billable infrastructure at the provider.</span>`, okLabel: 'Provision', okClass: 'warn' }))) return;
@@ -633,6 +655,7 @@ function dpRenderContext(t) {
       <div style="min-width:0">
         <div class="dp-ctx-name">${esc(repo?.name || 'no repository')} <span style="color:var(--muted);font-weight:400">→</span> ${esc(t.name)}</div>
         <div class="dp-ctx-meta">
+          <span class="badge" title="Owning project">${esc(dpProjectName(t.projectId))}</span>
           <span class="env ${env}">${esc(env === 'neutral' ? (t.type === 'vps-ssh' ? 'vps' : t.type === 'paas' ? 'platform' : t.type === 'local' ? 'this computer' : 'shared hosting') : env)}</span>
           <span class="mono">${esc(branch)}</span>${commit ? `<span class="sep">·</span><span class="mono" title="commit">${esc(commit)}</span>` : ''}
           <span class="sep">·</span><span class="mono">${t.type === 'paas' ? esc(t.paths.root) : esc(dpHostOf(t) || t.type) + (t.paths?.root || t.paths?.docroot ? ':' + esc(t.paths.root || t.paths.docroot) : '')}</span>
@@ -1051,20 +1074,28 @@ function dpApplyLogFilter() {
   if (re) $('dpLogHint').textContent = `${n} matching line(s)`;
 }
 $('dpLogFilter').addEventListener('input', dpApplyLogFilter);
+function dpOpenProjectChat(projectId) {
+  if (projectId && typeof setProject === 'function') {
+    setProject(projectId);
+    if (typeof currentProjectId === 'string' && currentProjectId !== projectId) return;
+  }
+  if (typeof openAgent === 'function') openAgent();
+}
 async function dpRunToChat(runId) {
   if (!runId) return;
   try {
     const r = await api(`/api/deploy/runs/${runId}/to-chat`, { method: 'POST', body: '{}' });
     toast(`${r.lines} log line(s) shared with the AI chat`, 'success');
-    if (typeof openAgent === 'function') openAgent(); // the window floats above The Ascension; the note card appears at the bottom
+    dpOpenProjectChat(r.projectId);
   } catch (e) { toast(e.message, 'error'); }
 }
 $('btnDpToChat').addEventListener('click', () => dpRunToChat(dp.logRun));
 $('btnDpExplain').addEventListener('click', async () => {
   if (!dp.logRun) return;
+  const runId = dp.logRun;
   $('btnDpExplain').disabled = true; $('dpLogHint').textContent = 'asking the AI…';
-  try { const r = await api(`/api/deploy/runs/${dp.logRun}/explain`, { method: 'POST' }); const div = document.createElement('div'); div.className = 'dl-line dl-head'; div.textContent = '── AI analysis ──'; $('dpLog').appendChild(div); const body = document.createElement('div'); body.className = 'dl-line'; body.textContent = r.text; $('dpLog').appendChild(body); $('dpLog').scrollTop = $('dpLog').scrollHeight;
-    if (r.proposal) { const prop = document.createElement('div'); prop.className = 'dl-line dl-head'; prop.textContent = `── proposed next step: ${r.proposal.action} on ${r.proposal.targetName} (approve it in the AI chat) ──`; $('dpLog').appendChild(prop); $('dpLogHint').textContent = 'a fix is proposed in the AI chat'; if (typeof openAgent === 'function') openAgent(); }
+  try { const r = await api(`/api/deploy/runs/${runId}/explain`, { method: 'POST' }); const div = document.createElement('div'); div.className = 'dl-line dl-head'; div.textContent = '── AI analysis ──'; $('dpLog').appendChild(div); const body = document.createElement('div'); body.className = 'dl-line'; body.textContent = r.text; $('dpLog').appendChild(body); $('dpLog').scrollTop = $('dpLog').scrollHeight;
+    if (r.proposal) { const prop = document.createElement('div'); prop.className = 'dl-line dl-head'; prop.textContent = `── proposed next step: ${r.proposal.action} on ${r.proposal.targetName} (approve it in the AI chat) ──`; $('dpLog').appendChild(prop); $('dpLogHint').textContent = 'a fix is proposed in the AI chat'; dpOpenProjectChat(r.projectId || dp.runs.get(runId)?.projectId); }
     else $('dpLogHint').textContent = 'analysis also posted in the AI chat'; }
   catch (e) { toast(e.message, 'error'); $('dpLogHint').textContent = ''; }
   finally { $('btnDpExplain').disabled = false; }
@@ -1269,6 +1300,7 @@ $('dpRepoForm').addEventListener('submit', async (e) => {
    templates, the wizard hand-off and dpTargetFormBody() keep working. Defaults are applied to NEW
    targets only; an existing target is shown exactly as stored (custom ports, paths, strategies). */
 const TF_FIELD_FOR = [ // server-side validation message prefix → field id
+  ['projectId', 'dtProject'],
   ['transport.host', 'dtFtpHost'], ['transport.user', 'dtFtpUser'], ['transport.passwordRef', 'dtFtpPass'], ['transport.profileId', 'dtSftpProfile'], ['transport.port', 'dtFtpPort'],
   ['paths.docroot', 'dtDocroot'], ['paths.home', 'dtHome'], ['paths.root', 'dtRoot'], ['ssh.profileId', 'dtProfile'], ['healthUrl', 'dtHealth'], ['overrides', 'dtOverrides'],
   ['autoShip.branch', 'dtAutoBranch'], ['name', 'dtName'], ['repoId', 'dtRepo'], ['envFile', 'dtEnvTarget'], ['paas.tokenRef', 'dtPaasToken'], ['paas.provider', 'dtPaasProvider'], ['process.', 'dtProcName'], ['domain.email', 'dtSslEmail'], ['domain.', 'dtDomain'], ['keepReleases', 'dtKeep'], ['docrootStrategy', 'dtStrategy'], ['web.', 'dtWeb'], ['buildMode', 'dtBuild'],
@@ -1302,6 +1334,8 @@ function dpOpenTargetModal(t) {
   $('btnDtSubmit').textContent = isNew ? 'Test & create' : 'Test & save';
   $('btnDtSaveAnyway').hidden = true;
   $('dtName').value = t?.name || '';
+  dpFillProjectSelect('dtProject', t?.projectId);
+  $('dtProjectHelp').textContent = isNew ? 'Every deployment belongs to one project. Servers and repositories can be reused.' : 'Changing this project moves the deployment. Earlier runs remain with their original project.';
   dpFillSelect($('dtRepo'), dp.repos.map((r) => ({ value: r.id, label: r.name })), t?.repoId || dp.repos[0]?.id, dp.repos.length ? null : 'connect a repository first');
   $('dtType').value = t?.type || 'shared-hosting'; $('dtBuild').value = t?.buildMode && t.buildMode !== 'provider' ? t.buildMode : 'auto';
   const profs = dp.profiles.map((p) => ({ value: p.id, label: `${p.name} (${p.user}@${p.host})` }));
@@ -1497,6 +1531,7 @@ function tfValidate() {
   const errs = []; const type = $('dtType').value, tr = $('dtTransport').value;
   const need = (id, msg) => { if (!$(id).value.trim()) errs.push({ id, msg }); };
   need('dtName', 'Give this deployment a name.'); need('dtRepo', 'Choose a repository.');
+  if (!dpValidProject($('dtProject').value)) errs.push({ id: 'dtProject', msg: 'Choose the project for this deployment.' });
   if (type === 'shared-hosting') {
     if (tr === 'sftp') need('dtSftpProfile', 'Choose the SSH server profile.');
     else { need('dtFtpHost', 'Enter the FTP host.'); need('dtFtpUser', 'Enter the FTP username.'); need('dtFtpPass', 'Choose the vault secret holding the password.'); if ($('dtFtpPort').value && !(Number($('dtFtpPort').value) >= 1 && Number($('dtFtpPort').value) <= 65535)) errs.push({ id: 'dtFtpPort', msg: 'Port must be between 1 and 65535.' }); }
@@ -1530,7 +1565,7 @@ function tfShowErrors(errs) {
 function dpTargetFormBody(overrides) {
   if (overrides === undefined && $('dtOverrides').value.trim()) { try { overrides = JSON.parse($('dtOverrides').value); } catch { overrides = null; } }
   const type = $('dtType').value;
-  const body = { name: $('dtName').value.trim(), repoId: $('dtRepo').value, type, buildMode: type === 'shared-hosting' || type === 'local' ? 'local' : $('dtBuild').value, healthUrl: $('dtHealthEnabled').checked ? $('dtHealth').value.trim() : '', healthRemote: type === 'vps-ssh' && $('dtHealthEnabled').checked && $('dtHealthRemote').checked, keepReleases: Number($('dtKeep').value) || undefined, overrides: overrides || null,
+  const body = { name: $('dtName').value.trim(), repoId: $('dtRepo').value, projectId: $('dtProject').value, type, buildMode: type === 'shared-hosting' || type === 'local' ? 'local' : $('dtBuild').value, healthUrl: $('dtHealthEnabled').checked ? $('dtHealth').value.trim() : '', healthRemote: type === 'vps-ssh' && $('dtHealthEnabled').checked && $('dtHealthRemote').checked, keepReleases: Number($('dtKeep').value) || undefined, overrides: overrides || null,
     envFile: $('dtEnvVault').value ? { fromVault: $('dtEnvVault').value, mode: $('dtEnvMode').value, target: $('dtEnvTarget').value.trim() || 'shared/.env' } : null,
     autoShip: $('dtAutoEnabled').checked ? { enabled: true, mode: $('dtAutoMode').value, branch: $('dtAutoBranch').value.trim() || null, pollMinutes: Number($('dtAutoPoll').value) || undefined } : { enabled: false } };
   if (type === 'paas') { const paas = { provider: $('dtPaasProvider').value, tokenRef: $('dtPaasToken').value, prod: $('dtPaasProd').checked }; $('dtPaasFields').querySelectorAll('[data-paas-field]').forEach((i) => { paas[i.dataset.paasField] = i.value.trim(); }); Object.assign(body, { paas }); }

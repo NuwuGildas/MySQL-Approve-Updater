@@ -29,7 +29,7 @@ test('route stage writes the vhost, enables it, issues a certificate; certbot fa
   conn.exec = async (cmd, o) => { const full = Array.isArray(cmd) ? cmd.join('; ') : cmd; if (/certbot/.test(full)) { const e = new Error('remote command exited with code 1: Challenge failed for domain'); throw e; } return origExec(cmd, o); };
   const type = registerFakeVps(conn, 'fake-vps-domain');
   d.stores.repos.get().repos.push({ id: 'r1', name: 'shop', source: { kind: 'local', path: fx('plain-html') }, manifest: null });
-  d.stores.targets.get().targets.push({ id: 't1', name: 'prod', repoId: 'r1', type, buildMode: 'local', ssh: { profileId: 'p1' }, paths: { root: '/var/www/shop' }, web: { server: 'nginx', reloadCmd: 'sudo -n systemctl reload nginx' }, domain: { name: 'shop.example.com', ssl: true, email: 'ops@example.com' }, keepReleases: 3 });
+  d.stores.targets.get().targets.push({ projectId: 'general', id: 't1', name: 'prod', repoId: 'r1', type, buildMode: 'local', ssh: { profileId: 'p1' }, paths: { root: '/var/www/shop' }, web: { server: 'nginx', reloadCmd: 'sudo -n systemctl reload nginx' }, domain: { name: 'shop.example.com', ssl: true, email: 'ops@example.com' }, keepReleases: 3 });
   const engine = createEngine(ctx, d);
   const plan = engine.start({ targetId: 't1', mode: 'plan' }); await waitDone(plan);
   assert.equal(plan.status, 'succeeded', plan.error);
@@ -53,7 +53,7 @@ test('route stage without sudo only reports what to run', async () => {
   const conn = fakeConn({ sudo: false });
   const type = registerFakeVps(conn, 'fake-vps-nosudo');
   d.stores.repos.get().repos.push({ id: 'r1', name: 'shop', source: { kind: 'local', path: fx('plain-html') }, manifest: null });
-  d.stores.targets.get().targets.push({ id: 't1', name: 'prod', repoId: 'r1', type, buildMode: 'local', ssh: { profileId: 'p1' }, paths: { root: '/var/www/shop' }, web: { server: 'none' }, domain: { name: 'shop.example.com', ssl: false }, keepReleases: 3 });
+  d.stores.targets.get().targets.push({ projectId: 'general', id: 't1', name: 'prod', repoId: 'r1', type, buildMode: 'local', ssh: { profileId: 'p1' }, paths: { root: '/var/www/shop' }, web: { server: 'none' }, domain: { name: 'shop.example.com', ssl: false }, keepReleases: 3 });
   const engine = createEngine(ctx, d);
   const run = engine.start({ targetId: 't1', mode: 'ship', confirm: true }); await waitDone(run);
   assert.equal(run.status, 'succeeded', run.error);

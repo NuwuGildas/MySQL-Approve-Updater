@@ -2604,8 +2604,8 @@ const deployModule = deploy.mount(deployCtx);
    nothing: the API resolves each ID to a display summary (name + a non-secret detail) at read time,
    so projects.json never holds a password, token or key. The store seeds a "General" project only
    when projects.json does not exist and refuses to write over a file it could not read. */
-const { createProjectStore, RESOURCE_KINDS: PROJECT_RESOURCE_KINDS, RESOURCE_LABELS: PROJECT_RESOURCE_LABELS } = require('./lib/projects');
-const projectStore = createProjectStore(DATA_DIR, { log: (level, msg) => logEvent(level, `projects: ${msg}`) });
+const { RESOURCE_KINDS: PROJECT_RESOURCE_KINDS, RESOURCE_LABELS: PROJECT_RESOURCE_LABELS } = require('./lib/projects');
+const projectStore = deployModule.stores.projects;
 if (projectStore.seeded) logEvent('info', 'projects: created projects.json with the default "General" project');
 
 // ID → { name, detail } for the UI; null when the resource no longer exists. Nothing here is a credential.
@@ -2618,9 +2618,10 @@ const projectResourceSummary = {
 };
 function projectView(p) {
   const resources = {};
-  for (const kind of Object.keys(p.resources || {})) {
+  const refs = projectStore.resourcesFor(p);
+  for (const kind of Object.keys(refs)) {
     const summarize = projectResourceSummary[kind];
-    resources[kind] = (p.resources[kind] || []).map((id) => {
+    resources[kind] = (refs[kind] || []).map((id) => {
       const s = summarize ? summarize(id) : null;
       return s ? { id, ...s } : { id, name: null, detail: null, missing: true };
     });
