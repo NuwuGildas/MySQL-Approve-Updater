@@ -1022,7 +1022,7 @@ function decisionBlockedReason(changeId) {
 /* the approval workspace is "active" only when the Updates page is the visible page and nothing sits above it */
 function approvalWorkspaceActive() {
   if (!document.body.classList.contains('view-mysql')) return false;
-  if (['serversDrawer', 'deployDrawer', 'sshDrawer', 'auditDrawer', 'connectorsDrawer'].some((id) => $(id)?.classList.contains('open'))) return false;
+  if (['serversDrawer', 'deployDrawer', 'sshDrawer', 'auditDrawer', 'connectorsDrawer', 'projectsDrawer'].some((id) => $(id)?.classList.contains('open'))) return false;
   if ($('agentDrawer')?.classList.contains('open') && $('agentDrawer').contains(document.activeElement)) return false;
   const openDialog = document.querySelector('dialog[open]');
   if (openDialog && openDialog.id !== 'cardModal') return false;
@@ -2311,6 +2311,7 @@ function startTour() {
     { element: '#deployMain', route: '#/deployments', title: 'Plan, Ship, Verify', intro: 'Pick a target and follow the pipeline: Test → Fetch → Detect → Plan → Ship → Verify. <b>Plan</b> is a read-only dry run listing every command; <b>Ship</b> executes the reviewed plan (atomic swap where the target supports it) and rolls back when the health check fails; <b>Rollback</b> returns to a previous release. Tabs marked <i>Run</i> describe the selected run, tabs marked <i>Target</i> the target itself.' },
     { element: '#serversDrawer .ssh-head', route: '#/servers', title: 'Servers', intro: '<b>+ Add server</b> asks how to authenticate: the <b>Server Tools key</b> (one command on the server, no key handling), your own key, or a password. It can also install the Claude CLI on the box. <b>Connect</b> shows live VM stats; <b>Terminal</b> opens a full console in its own page.' },
     { element: '#auditDrawer .audit-filters', route: '#/history', title: 'History', intro: 'Every decision, edit, SSH session, deploy run and AI action, grouped by day. Filter by category chips, search text, time range and outcome; the filters are remembered between visits. The raw JSON-lines file downloads from the header.' },
+    { element: '#projectsDrawer .ssh-head', route: '#/projects', title: 'Projects', intro: 'A project groups the connections, servers, connectors, repositories and deploy targets that belong together, and the assistant keeps one conversation per project. Create, rename, colour and delete projects here; <b>Set active</b> (or the header switcher) chooses the one the assistant works in.' },
     { element: '.ai-agent', title: 'AI assistant', intro: 'Works across every module from this button and floats above whatever you are doing. Its database access is read-only; rule changes, deploy manifests and deploy actions arrive as <b>proposals you approve in the chat</b>. Replies stream live and can be stopped. Optional deploy capabilities (repo files, plan diffs, health checks, log search, guardrail templates, pre-ship review) are switched on under Settings → AI assistant.' },
     { element: '#appNav [data-nav="settings"]', title: 'Settings and this tour', intro: 'Appearance and theme, SQL writes, rule limits, assistant capabilities, connections, servers and deploy options live in Settings. Run this tour again anytime from <b>Guided tour</b> just above it.' },
   ];
@@ -3456,6 +3457,7 @@ document.addEventListener('keydown', (e) => {
    tool is just another entry here. "Workspace" tools reveal <main> (the MySQL
    tool); "panel" tools slide their drawer over the hub. */
 const CC_ICON = {
+  projects: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M3 11h18"/></svg>',
   connectors: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M9 7H6a3 3 0 0 0 0 6h3M15 7h3a3 3 0 0 1 0 6h-3"/><path d="M8 10h8"/><path d="M12 13v4M9 21h6M12 17l-2 4M12 17l2 4"/></svg>',
   db: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>',
   console: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>',
@@ -3484,6 +3486,9 @@ const TOOLS = [
   { id: 'deploy', name: 'Deployments', route: '#/deployments', tag: 'The Ascension', accent: '--green', icon: CC_ICON.rocket,
     desc: 'Build → deploy → ship: connect a repo, detect its stack, review the plan and the deploy map, then ship to a VPS or shared host with one click: or one CLI command.',
     launch: () => openDeploy() },
+  { id: 'projects', name: 'Projects', route: '#/projects', tag: 'Workspace', accent: '--accent', icon: CC_ICON.projects,
+    desc: 'Group connections, servers, connectors, repositories and targets into projects; the active project scopes the assistant.',
+    launch: () => openProjects() },
   { id: 'history', name: 'History', route: '#/history', tag: 'Audit', accent: '--red', icon: CC_ICON.history,
     desc: 'Timeline of every decision, edit, SSH session and AI action.',
     launch: () => openAudit() },
@@ -3547,7 +3552,7 @@ function currentModuleLabel() {
 }
 function closeAllDrawers() {
   // the AI agent window is deliberately not in this list: it floats above every view and survives navigation
-  ['serversDrawer', 'deployDrawer', 'sshDrawer', 'auditDrawer', 'connectorsDrawer'].forEach((id) => $(id)?.classList.remove('open'));
+  ['serversDrawer', 'deployDrawer', 'sshDrawer', 'auditDrawer', 'connectorsDrawer', 'projectsDrawer'].forEach((id) => $(id)?.classList.remove('open'));
   ['schemaModal', 'ddlModal'].forEach((id) => { const d = $(id); if (d && d.open) d.close(); });
 }
 function setView(v) { // 'compass' | 'mysql' | 'settings'
@@ -3721,7 +3726,7 @@ requestAnimationFrame(() => requestAnimationFrame(() => document.body.classList.
    The inert attribute follows the .open class, and the element that opened a drawer gets focus back. */
 (function drawerA11y() {
   const openers = new Map();
-  for (const id of ['serversDrawer', 'sshDrawer', 'auditDrawer', 'deployDrawer', 'connectorsDrawer']) {
+  for (const id of ['serversDrawer', 'sshDrawer', 'auditDrawer', 'deployDrawer', 'connectorsDrawer', 'projectsDrawer']) {
     const el = $(id); if (!el) continue;
     let wasOpen = el.classList.contains('open');
     el.toggleAttribute('inert', !wasOpen);

@@ -26,6 +26,7 @@ const NAV = [
     { id: 'connectors', label: 'Connectors', route: '#/connectors', icon: CC_ICON.connectors, title: 'Connectors', desc: 'GitHub and GitLab accounts: verify a token once, browse repositories and connect them.' },
   ] },
   { group: 'Workspace', items: [
+    { id: 'projects', label: 'Projects', route: '#/projects', icon: CC_ICON.projects, title: 'Projects', desc: 'Group connections, servers, connectors, repositories and targets into projects; the active project scopes the assistant.' },
     { id: 'connections', label: 'Connections', route: '#/connections', icon: NAV_ICON.connections, title: 'Connections', desc: 'Database and SSH connection profiles; choose the active database.' },
     { id: 'history', label: 'History', route: '#/history', icon: CC_ICON.history, title: 'History', desc: 'Searchable timeline of every decision, edit, SSH session, deploy and AI action.' },
   ] },
@@ -55,6 +56,7 @@ function parseRoute(hash) {
   if (parts[0] === 'servers') return { id: 'servers', parts: parts.slice(1) };
   if (parts[0] === 'history') return { id: 'history', parts: parts.slice(1) };
   if (parts[0] === 'connectors') return { id: 'connectors', parts: parts.slice(1) };
+  if (parts[0] === 'projects') return { id: 'projects', parts: parts.slice(1) };
   if (parts[0] === 'settings') return { id: 'settings', parts: parts.slice(1) };
   if (parts[0] === 'connections') return { id: 'connections', parts: [] };
   return null;
@@ -88,6 +90,7 @@ function applyRoute(resolved, path, options = {}) {
   if (leaving('servers') && $('sshDrawer').classList.contains('open') && $('sshDrawer').classList.contains('as-page')) hideSshDrawer();
   if (leaving('history') && $('auditDrawer').classList.contains('open')) closeAudit();
   if (leaving('connectors') && $('connectorsDrawer').classList.contains('open')) closeConnectors();
+  if (leaving('projects') && $('projectsDrawer').classList.contains('open')) closeProjects();
   if (leaving('deploy') && $('deployDrawer').classList.contains('open')) closeDeploy();
   for (const [id, dlg] of Object.entries(PAGE_DIALOGS)) if (leaving(id) && $(dlg).open && !$(dlg).dataset.stModal) $(dlg).close();
   switch (resolved.id) {
@@ -103,6 +106,7 @@ function applyRoute(resolved, path, options = {}) {
     case 'servers': openServers(); if (resolved.parts[1] === 'terminal' && resolved.parts[0]) openServerTerminal(resolved.parts[0]); break;
     case 'history': openAudit(); break;
     case 'connectors': openConnectors(resolved.parts[1] === 'repos' ? resolved.parts[0] : undefined); break;
+    case 'projects': openProjects(); break;
     case 'settings': { const sec = resolved.parts[0] || lastSettingsSection; lastSettingsSection = sec; renderSettings(); const d = $('settingsModal'); if (!d.open) d.show(); showSettingsSection(sec); break; }
     case 'connections': { $('connForm').hidden = true; loadConns().catch((e) => toast(e.message, 'error')); const d = $('connModal'); if (!d.open) d.show(); break; }
   }
@@ -121,6 +125,7 @@ function focusPageHeading(id) {
     : id === 'servers' ? $('serversDrawer').querySelector('h2')
     : id === 'history' ? $('auditDrawer').querySelector('h2')
     : id === 'connectors' ? ($('cnReposView').hidden ? $('cnMain') : $('cnReposView')).querySelector('h2')
+    : id === 'projects' ? $('projectsDrawer').querySelector('h2')
     : id === 'home' ? $('compass').querySelector('h2')
     : id === 'schema' ? $('schemaModal').querySelector('h2')
     : id === 'settings' ? $('settingsModal').querySelector('.settings-titlebar b')
@@ -140,7 +145,7 @@ window.addEventListener('hashchange', () => {
 });
 
 /* when a page-like drawer or page dialog is closed by its own ✕ / Escape, the address follows */
-for (const [id, routeId] of [['serversDrawer', 'servers'], ['auditDrawer', 'history'], ['deployDrawer', 'deploy'], ['connectorsDrawer', 'connectors']]) {
+for (const [id, routeId] of [['serversDrawer', 'servers'], ['auditDrawer', 'history'], ['deployDrawer', 'deploy'], ['connectorsDrawer', 'connectors'], ['projectsDrawer', 'projects']]) {
   new MutationObserver(() => {
     if ($(id).classList.contains('open')) return;
     const r = parseRoute(location.hash);
