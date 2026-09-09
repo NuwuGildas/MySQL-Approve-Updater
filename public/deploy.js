@@ -22,8 +22,8 @@ const dpEnvOf = (t) => { const n = (t.name || '').toLowerCase(); return /prod|li
 const dpAssist = (k) => !!dp.status?.aiAssist?.[k];
 // a pre-ship review is fresh when it saw the current plan (or, without a plan, the current commit)
 const dpReviewFresh = (t) => { const r = t?.preShip; if (!r) return false; if (dp.plan?.hash) return r.planHash === dp.plan.hash; const c = dpRepoOf(t)?.lastFetch?.commit; return c ? r.commit === c : Date.now() - Date.parse(r.at) < 6 * 3600e3; };
-const dpHostOf = (t) => (t.type === 'paas' ? (dp.status?.paasProviders?.find((p) => p.id === t.paas?.provider)?.label || t.paas?.provider || 'platform') : (t.transport?.host || dp.profiles.find((p) => p.id === (t.ssh?.profileId || t.transport?.profileId))?.host || ''));
-const dpTypeLabel = (t) => (t.type === 'vps-ssh' ? 'vps' : t.type === 'paas' ? 'platform' : 'shared');
+const dpHostOf = (t) => (t.type === 'local' ? 'this computer' : t.type === 'paas' ? (dp.status?.paasProviders?.find((p) => p.id === t.paas?.provider)?.label || t.paas?.provider || 'platform') : (t.transport?.host || dp.profiles.find((p) => p.id === (t.ssh?.profileId || t.transport?.profileId))?.host || ''));
+const dpTypeLabel = (t) => (t.type === 'vps-ssh' ? 'vps' : t.type === 'paas' ? 'platform' : t.type === 'local' ? 'local' : 'shared');
 const dpInitials = (s) => (s || '?').replace(/[^A-Za-z0-9 _-]/g, '').split(/[\s_-]+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('') || '?';
 const ICO = {
   test: '<svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 16 0 8 8 0 1 0-16 0z"/><path d="M9 12l2 2 4-4"/></svg>',
@@ -199,12 +199,13 @@ $('dpEmpty').addEventListener('click', (e) => {
 });
 
 /* ---------- guided setup wizard ---------- */
-const wz = { step: 1, source: 'git', dest: 'vps-ssh', transport: 'ftps', pendingRepoId: null, fw: null, fwGroup: 'all', detected: null, build: 'auto', catalog: null };
+const wz = { step: 1, source: 'git', dest: 'vps-ssh', transport: 'ftps', pendingRepoId: null, fw: null, fwGroup: 'all', detected: null, build: 'auto', catalog: null, detCache: new Map() };
 function dpOpenWizard(repoId) {
   wz.step = 1; wz.source = repoId ? 'existing' : 'git'; wz.dest = dp.profiles.length ? 'vps-ssh' : 'shared-hosting'; wz.transport = 'ftps'; wz.pendingRepoId = repoId || null;
-  for (const id of ['wzUrl', 'wzBranch', 'wzToken', 'wzKeyPath', 'wzPath', 'wzRepoName', 'wzTargetName', 'wzHealth', 'wzRoot', 'wzFtpHost', 'wzFtpUser', 'wzHome', 'wzDocroot']) $(id).value = '';
+  for (const id of ['wzUrl', 'wzBranch', 'wzToken', 'wzKeyPath', 'wzPath', 'wzRepoName', 'wzTargetName', 'wzHealth', 'wzRoot', 'wzFtpHost', 'wzFtpUser', 'wzHome', 'wzDocroot', 'wzLocalRoot', 'wzLocalReload']) $(id).value = '';
+  $('wzLocalProc').value = 'none'; delete $('wzLocalRoot').dataset.touched;
   $('wzAuth').value = 'none'; $('wzEnv').value = 'production'; $('wzWeb').value = 'nginx'; $('wzTransport').value = 'ftps'; $('wzAuto').checked = false; $('wzPlanNow').checked = true;
-  wz.fw = null; wz.detected = null; wz.build = 'auto'; wz.fwGroup = 'all'; for (const id of ['fwInstall', 'fwBuild', 'fwStart', 'fwPort', 'fwOut', 'fwDocroot', 'fwHealth', 'wzDomain', 'wzSslEmail']) $(id).value = ''; $('wzSsl').checked = true; $('btnFwDetected').hidden = true; $('fwDetectHint').textContent = '';
+  wz.fw = null; wz.detected = null; wz.build = 'auto'; wz.fwGroup = 'all'; wzAiButtonState(); for (const id of ['fwInstall', 'fwBuild', 'fwStart', 'fwPort', 'fwOut', 'fwDocroot', 'fwHealth', 'wzDomain', 'wzSslEmail']) $(id).value = ''; $('wzSsl').checked = true; $('btnFwDetected').hidden = true; $('fwDetectHint').textContent = '';
   $('wzBuildSeg').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === 'auto'));
   delete $('wzTargetName').dataset.touched; delete $('wzRoot').dataset.touched;
   dpFillSelect($('wzRepo'), dp.repos.map((r) => ({ value: r.id, label: r.name })), repoId || dp.repos[0]?.id, dp.repos.length ? null : 'no repositories yet');
@@ -229,9 +230,18 @@ function wzSync() {
   const repoName = wzRepoName();
   if (repoName && !$('wzTargetName').dataset.touched) $('wzTargetName').value = `${repoName}-${$('wzEnv').value === 'staging' ? 'staging' : $('wzEnv').value === 'dev' ? 'dev' : 'prod'}`;
   if (!$('wzRoot').dataset.touched) $('wzRoot').value = `/var/www/${($('wzTargetName').value || repoName || 'app').toLowerCase().replace(/[^a-z0-9_.-]+/g, '-')}`;
+  if (!$('wzLocalRoot').dataset.touched) $('wzLocalRoot').value = dpLocalDefaultRoot($('wzTargetName').value || repoName || 'app');
+  $('wzHealth').placeholder = wz.dest === 'local' ? 'http://localhost:8080/' : 'https://shop.example.com/';
   if (!$('wzHome').value && $('wzTransport').value !== 'sftp') $('wzHome').value = '/';
   if (!$('wzDocroot').value) $('wzDocroot').value = $('wzTransport').value === 'sftp' ? '' : '/public_html';
 }
+/** Default folder for a "This computer" target: <home>/www/<slug> with the platform's separator. */
+function dpLocalDefaultRoot(name) {
+  const home = dp.status?.home || ''; const sep = dp.status?.sep || '/';
+  const slug = String(name || 'app').toLowerCase().replace(/[^a-z0-9_.-]+/g, '-').replace(/^-|-$/g, '') || 'app';
+  return home ? [home, 'www', slug].join(sep) : '';
+}
+const isAbsLocal = (p) => /^([A-Za-z]:[\\/]|\/|~[\\/]|\\\\)/.test(p);
 function wzRepoName() {
   if (wz.source === 'existing') return dp.repos.find((r) => r.id === $('wzRepo').value)?.name || '';
   if ($('wzRepoName').value.trim()) return $('wzRepoName').value.trim();
@@ -268,9 +278,57 @@ async function wzEnterFramework() {
       if (det.catalogId) { $('btnFwDetected').hidden = false; $('fwDetectHint').textContent = det.ambiguous ? `${det.reason}: pick a framework` : `${det.best?.label || ''} detected from ${(det.best?.evidence || []).join(', ')}`; if (!wz.fw) wzPickFramework(det.catalogId, det.form); }
       else $('fwDetectHint').textContent = det.reason || 'no framework detected: pick one';
     } catch (e) { $('fwDetectHint').textContent = e.message; }
-  } else if (!dir && !wz.detected) $('fwDetectHint').textContent = wz.source === 'git' ? 'detection runs on the first Plan: pick the framework now or leave it to detection' : '';
+  } else if (!dir && !wz.detected) $('fwDetectHint').textContent = wz.source === 'git' ? (dp.status?.ai ? 'pick the framework, or let AI detect it from the repository' : 'detection runs on the first Plan: pick the framework now or leave it to detection') : '';
+  wzAiButtonState();
   wzRenderFw();
 }
+function wzAiButtonState(busy) {
+  const btn = $('btnFwAi'); const on = !!dp.status?.ai;
+  btn.disabled = busy || !on; btn.classList.toggle('busy', !!busy); if (busy) btn.setAttribute('aria-busy', 'true'); else btn.removeAttribute('aria-busy');
+  btn.title = on ? 'Read the repository, detect the framework and fill in the deploy configuration' : 'Connect the AI assistant (Settings → AI assistant) to detect from the repository';
+}
+/** "AI detect": the server clones/reads the source, runs heuristics, asks the AI to confirm and refine, and the form is filled from the answer. */
+/** Cache key of the wizard's current source (what "AI detect" would inspect). */
+function wzSourceKey() {
+  if (wz.source === 'existing') return $('wzRepo').value ? 'repo:' + $('wzRepo').value : null;
+  if (wz.source === 'local') return $('wzPath').value.trim() ? 'local:' + $('wzPath').value.trim() : null;
+  return $('wzUrl').value.trim() ? 'git:' + $('wzUrl').value.trim() + '#' + ($('wzBranch').value.trim() || '') : null;
+}
+function wzApplyDetection(det, note) {
+  wz.detected = det;
+  if (!det.catalogId) { $('fwDetectHint').textContent = det.reason || 'nothing recognised: pick a framework'; return; }
+  wzPickFramework(det.catalogId, det.form); $('btnFwDetected').hidden = false;
+  const lbl = wz.catalog?.frameworks.find((c) => c.id === det.catalogId)?.label || det.catalogId;
+  $('fwDetectHint').textContent = (det.by === 'ai'
+    ? `AI: ${lbl}${det.confidence != null ? ` (${Math.round(det.confidence * 100)}% confident)` : ''}${det.reasoning ? ' · ' + det.reasoning : ''} · deploy configuration filled in`
+    : `${lbl} detected from ${(det.best?.evidence || []).join(', ')}${det.aiFailed ? ' · the AI gave no usable answer, heuristics applied' : ''}`) + (note ? ' · ' + note : '');
+  $('fwDetectHint').title = det.reasoning || '';
+  return lbl;
+}
+async function wzAiDetect(ev) {
+  const body = { ai: true, force: !!(ev && ev.shiftKey) };
+  const key = wzSourceKey();
+  const reuse = key && !body.force && (wz.detected?.key === key && wz.detected.by ? wz.detected : wz.detCache.get(key));
+  if (reuse) { const lbl = wzApplyDetection(reuse, 'reused from the earlier detection (shift-click to run it again)'); toast(lbl ? `${lbl}: earlier detection reused` : 'Earlier detection reused', 'success'); return; }
+  if (wz.source === 'existing') { body.repoId = $('wzRepo').value; if (!body.repoId) return toast('Pick a repository first', 'warning'); }
+  else if (wz.source === 'local') { const p = $('wzPath').value.trim(); if (!p) { wzShow(1); $('wzPath').focus(); return toast('Enter the folder path first', 'warning'); } body.source = { kind: 'local', path: p }; }
+  else {
+    const url = $('wzUrl').value.trim(); if (!url) { wzShow(1); $('wzUrl').focus(); return toast('Enter the repository URL first', 'warning'); }
+    const a = $('wzAuth').value;
+    body.source = { kind: 'git', url, branch: $('wzBranch').value.trim() || null, auth: a === 'token' ? { kind: 'https-token', token: $('wzToken').value } : a === 'ssh' ? { kind: 'ssh', keyPath: $('wzKeyPath').value.trim() || null } : null };
+  }
+  wzAiButtonState(true);
+  $('fwDetectHint').title = ''; $('fwDetectHint').innerHTML = `<span class="spinner"></span> ${body.source?.kind === 'git' ? 'cloning the repository and asking the AI…' : 'reading the project and asking the AI…'}`;
+  try {
+    const det = await api('/api/deploy/detect-source', { method: 'POST', body: JSON.stringify(body) });
+    const rec = { key, dir: 'ai:' + key, ...det };
+    if (det.catalogId || det.by) wz.detCache.set(key, rec);
+    const lbl = wzApplyDetection(rec, det.cached ? 'from the server cache' : '');
+    if (lbl) toast(`${lbl} detected: deploy configuration applied`, 'success'); else toast('No framework recognised in this source', 'warning');
+  } catch (e) { $('fwDetectHint').textContent = e.message; toast(e.message, 'error'); }
+  finally { wzAiButtonState(false); }
+}
+$('btnFwAi').addEventListener('click', wzAiDetect);
 function wzRenderFw() {
   const list = (wz.catalog?.frameworks || []).filter((c) => wz.fwGroup === 'all' || c.group === wz.fwGroup);
   $('fwTabs').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.g === wz.fwGroup));
@@ -298,6 +356,7 @@ $('wzBuildSeg').addEventListener('click', (e) => { const b = e.target.closest('b
 async function wzManifest() {
   if (!wz.fw) return null;
   const over = { install: $('fwInstall').value.trim(), build: $('fwBuild').value.trim(), start: $('fwStart').value.trim() || null, port: $('fwPort').value.trim(), outputDir: $('fwOut').value.trim(), docroot: $('fwDocroot').value.trim() || '.', healthPath: $('fwHealth').value.trim() || '/' };
+  if (wz.detected?.fragment && wz.detected.catalogId === wz.fw) over.base = wz.detected.fragment; // keep shared paths, hooks, env and root from the detection
   const r = await api(`/api/deploy/frameworks/${encodeURIComponent(wz.fw)}/fragment`, { method: 'POST', body: JSON.stringify(over) });
   return r.manifest;
 }
@@ -329,6 +388,7 @@ function wzCollect() {
   let target = null;
   if (wz.dest === 'vps-ssh') { const web = $('wzWeb').value; const dom = $('wzDomain').value.trim(); target = { name, type: 'vps-ssh', buildMode: wz.build, domain: dom ? { name: dom, ssl: $('wzSsl').checked, email: $('wzSslEmail').value.trim() } : null, ssh: { profileId: $('wzProfile').value }, paths: { root: $('wzRoot').value.trim() }, web: { server: web, reloadCmd: web === 'nginx' ? 'sudo -n systemctl reload nginx' : web === 'apache' ? 'sudo -n systemctl reload apache2' : '', phpFpmReload: wzStackType() === 'php' ? 'sudo -n systemctl reload php8.3-fpm' : '' }, process: { manager: wzStackType() === 'node' || wzStackType() === 'python' ? 'systemd' : 'none', unit: wzStackType() === 'node' || wzStackType() === 'python' ? `${name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}.service` : '' }, healthUrl, keepReleases: env === 'production' ? 5 : 3, autoShip: auto }; }
   else if (wz.dest === 'shared-hosting') { const tr = $('wzTransport').value; const [fh, fp] = $('wzFtpHost').value.trim().split(':'); target = { name, type: 'shared-hosting', transport: tr === 'sftp' ? { kind: 'sftp', profileId: $('wzSftpProfile').value } : { kind: tr, host: fh, port: Number(fp) || undefined, user: $('wzFtpUser').value.trim(), passwordRef: `\${vault:${refs.ftpPass}}`, secure: tr === 'ftps' }, paths: { home: $('wzHome').value.trim() || '/', docroot: $('wzDocroot').value.trim() }, docrootStrategy: 'auto', healthUrl, keepReleases: 2, autoShip: auto }; }
+  else if (wz.dest === 'local') { const proc = $('wzLocalProc').value; target = { name, type: 'local', buildMode: 'local', paths: { root: $('wzLocalRoot').value.trim() }, web: { reloadCmd: $('wzLocalReload').value.trim() }, process: { manager: proc, name: proc === 'pm2' ? (name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'app') : '' }, healthUrl, keepReleases: 3, autoShip: auto }; }
   else if (wz.dest === 'paas') { const paas = { provider: $('wzPaas').value, tokenRef: `\${vault:${refs.paasToken}}`, prod: env === 'production' }; $('wzPaasFields').querySelectorAll('[data-wz-paas]').forEach((i) => { paas[i.dataset.wzPaas] = i.value.trim(); }); target = { name, type: 'paas', paas, healthUrl, autoShip: auto }; }
   return { repo, repoId, target, secrets, env };
 }
@@ -346,6 +406,7 @@ function wzValidate(step) {
     if (wz.dest === 'vps-ssh' && $('wzDomain').value.trim() && $('wzSsl').checked && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test($('wzSslEmail').value.trim())) return err("Let's Encrypt needs an e-mail address (or untick the certificate)");
     if (wz.dest === 'vps-ssh' && !$('wzProfile').value) return err('Choose an SSH server (or add one under SSH servers first)');
     if (wz.dest === 'vps-ssh' && !/^\//.test($('wzRoot').value.trim())) return err('The app folder must be an absolute path');
+    if (wz.dest === 'local' && !isAbsLocal($('wzLocalRoot').value.trim())) return err('The app folder must be an absolute path on this computer (e.g. C:\\www\\shop or /srv/www/shop)');
     if (wz.dest === 'shared-hosting') { if ($('wzTransport').value === 'sftp' && !$('wzSftpProfile').value) return err('Choose the SSH server'); if ($('wzTransport').value !== 'sftp' && (!$('wzFtpHost').value.trim() || !$('wzFtpUser').value.trim())) return err('Enter the FTP host and user'); if (!$('wzDocroot').value.trim()) return err('Enter the document root'); }
     if (wz.dest === 'paas') { const p = (dp.status?.paasProviders || []).find((x) => x.id === $('wzPaas').value); for (const fld of p?.fields || []) if (fld.required && !$('wzPaasFields').querySelector(`[data-wz-paas="${fld.key}"]`)?.value.trim()) return err(`${fld.label} is required`); }
   }
@@ -356,12 +417,12 @@ function wzRenderReview() {
   const c = wzCollect();
   const repoLine = c.repoId ? dp.repos.find((r) => r.id === c.repoId)?.name : `${c.repo.name} ← ${c.repo.source.kind === 'git' ? c.repo.source.url : c.repo.source.path}`;
   const t = c.target || {};
-  const dest = wz.dest === 'cloud' ? 'a new cloud server (provisioned next)' : t.type === 'vps-ssh' ? `${dp.profiles.find((p) => p.id === t.ssh.profileId)?.host || 'ssh'}:${t.paths.root} · ${t.web.server}` : t.type === 'shared-hosting' ? `${t.transport.kind} ${t.transport.host || dp.profiles.find((p) => p.id === t.transport.profileId)?.host || ''} → ${t.paths.docroot}` : `${dpHostOf({ type: 'paas', paas: t.paas })} (${t.paas.prod ? 'production' : 'preview'})`;
+  const dest = wz.dest === 'cloud' ? 'a new cloud server (provisioned next)' : t.type === 'local' ? `this computer · ${t.paths.root}${t.web.reloadCmd ? ' · then ' + t.web.reloadCmd : ''}` : t.type === 'vps-ssh' ? `${dp.profiles.find((p) => p.id === t.ssh.profileId)?.host || 'ssh'}:${t.paths.root} · ${t.web.server}` : t.type === 'shared-hosting' ? `${t.transport.kind} ${t.transport.host || dp.profiles.find((p) => p.id === t.transport.profileId)?.host || ''} → ${t.paths.docroot}` : `${dpHostOf({ type: 'paas', paas: t.paas })} (${t.paas.prod ? 'production' : 'preview'})`;
   $('wzReview').innerHTML = `<div class="wz-review"><dl>
     <dt>repository</dt><dd>${esc(repoLine)}</dd>
     <dt>target</dt><dd>${esc(t.name || '')} <span class="env ${esc(c.env === 'staging' ? 'staging' : c.env === 'dev' ? 'dev' : 'production')}">${esc(c.env)}</span></dd>
     <dt>destination</dt><dd>${esc(dest)}</dd>
-    <dt>framework</dt><dd>${esc(wz.fw ? (wz.catalog?.frameworks.find((c) => c.id === wz.fw)?.label || wz.fw) : 'auto-detected on the first Plan')}${wz.fw && $('fwBuild').value.trim() ? ` <span class="hint">· ${esc($('fwBuild').value.trim())}</span>` : ''}</dd>
+    <dt>framework</dt><dd>${esc(wz.fw ? (wz.catalog?.frameworks.find((c) => c.id === wz.fw)?.label || wz.fw) : 'auto-detected on the first Plan')}${wz.fw && wz.detected?.catalogId === wz.fw && wz.detected.by ? ` <span class="badge plan">${wz.detected.by === 'ai' ? 'AI detected' : 'detected'}</span>` : ''}${wz.fw && $('fwBuild').value.trim() ? ` <span class="hint">· ${esc($('fwBuild').value.trim())}</span>` : ''}</dd>
     ${wz.dest === 'vps-ssh' ? `<dt>build location</dt><dd>${esc(wz.build === 'remote' ? 'server' : wz.build === 'local' ? 'this machine' : 'auto')}</dd><dt>domain</dt><dd>${$('wzDomain').value.trim() ? esc($('wzDomain').value.trim()) + ($('wzSsl').checked ? " · Let's Encrypt" : '') : 'none (reachable by IP / existing vhost)'}</dd>` : ''}
     <dt>health check</dt><dd>${esc(t.healthUrl || 'none: add one later to enable automatic rollback')}</dd>
     <dt>secrets</dt><dd>${Object.keys(c.secrets).length ? Object.keys(c.secrets).map((k) => '${vault:' + esc(k) + '}').join(', ') : 'none'}</dd>
@@ -374,6 +435,8 @@ for (const id of ['wzAuth', 'wzTransport', 'wzPaas', 'wzEnv', 'wzRepo']) $(id).a
 for (const id of ['wzUrl', 'wzPath', 'wzRepoName']) $(id).addEventListener('input', wzSync);
 $('wzTargetName').addEventListener('input', () => { $('wzTargetName').dataset.touched = '1'; wzSync(); });
 $('wzRoot').addEventListener('input', () => { $('wzRoot').dataset.touched = '1'; });
+$('wzLocalRoot').addEventListener('input', () => { $('wzLocalRoot').dataset.touched = '1'; });
+$('dtLocalRoot').addEventListener('input', () => { tfState.localRootTouched = true; });
 $('btnWzCancel').addEventListener('click', () => $('dpWizard').close());
 $('btnWzBack').addEventListener('click', () => wzShow(Math.max(1, wz.step - 1)));
 $('btnWzNext').addEventListener('click', () => {
@@ -570,7 +633,7 @@ function dpRenderContext(t) {
       <div style="min-width:0">
         <div class="dp-ctx-name">${esc(repo?.name || 'no repository')} <span style="color:var(--muted);font-weight:400">→</span> ${esc(t.name)}</div>
         <div class="dp-ctx-meta">
-          <span class="env ${env}">${esc(env === 'neutral' ? (t.type === 'vps-ssh' ? 'vps' : t.type === 'paas' ? 'platform' : 'shared hosting') : env)}</span>
+          <span class="env ${env}">${esc(env === 'neutral' ? (t.type === 'vps-ssh' ? 'vps' : t.type === 'paas' ? 'platform' : t.type === 'local' ? 'this computer' : 'shared hosting') : env)}</span>
           <span class="mono">${esc(branch)}</span>${commit ? `<span class="sep">·</span><span class="mono" title="commit">${esc(commit)}</span>` : ''}
           <span class="sep">·</span><span class="mono">${t.type === 'paas' ? esc(t.paths.root) : esc(dpHostOf(t) || t.type) + (t.paths?.root || t.paths?.docroot ? ':' + esc(t.paths.root || t.paths.docroot) : '')}</span>
           <span class="sep">·</span>${dpRunPill(last)}
@@ -624,7 +687,7 @@ function dpPipelineModel(t) {
 function dpRenderPipeline(t) {
   const { steps, current, last } = dpPipelineModel(t);
   const next = !last ? { text: 'Nothing has run yet. Start with a read-only <b>Plan</b>.', btn: '<button class="primary" data-act="plan">Plan</button>' }
-    : dpIsActive(last) ? { text: `<b>${esc(last.mode)}</b> in progress: stage <b>${esc(last.stage || '…')}</b>. Watch the Log tab or cancel.`, btn: '<button class="warn" data-act="cancel">Cancel</button>' }
+    : dpIsActive(last) ? { text: dpLiveHtml(last), btn: '<button class="warn" data-act="cancel">Cancel</button>', live: true }
     : last.mode === 'plan' && last.status === 'succeeded' ? { text: `Plan reviewed (${esc(String(last.plan?.steps?.length ?? dp.plan?.steps?.length ?? '?'))} steps, ${esc(last.buildMode || '')} build). Ready to <b>Ship</b> the same commands.`, btn: `<button class="btn-ship" data-act="ship">${ICO.ship} Ship</button>` }
     : last.status === 'succeeded' ? { text: `Release <b>${esc(last.release || '')}</b> is live${t.healthUrl ? ' and healthy' : ''}. Plan again to preview the next change.`, btn: '<button class="primary" data-act="plan">Plan next</button>' }
     : last.status === 'rolled_back' ? { text: `Last ship failed at <b>${esc((last.error || '').split(':')[0])}</b> and was rolled back to <b>${esc(last.previousRelease || 'previous')}</b>. Fix, then plan again.`, btn: '<button data-act="log-last">Open log</button>' }
@@ -636,9 +699,38 @@ function dpRenderPipeline(t) {
       <div class="pl-name">${s.label}</div>
       <div class="pl-meta">${esc(s.meta)}</div>
     </div>`).join('')}</div>
-    <div class="pl-foot"><span>${next.text}</span><span class="next">${next.btn}</span></div>
+    <div class="pl-foot ${next.live ? 'live' : ''}"><span class="pl-foot-text">${next.text}</span><span class="next">${next.btn}</span></div>
     ${last?.actionRequired?.length ? `<div class="dp-action"><b>Action required</b><ul>${last.actionRequired.map((m) => `<li>${esc(m)}</li>`).join('')}</ul></div>` : ''}`;
 }
+
+/* ---- live activity: what the run is doing right now, how far, and when it last gave a sign of life ---- */
+const dpFmtNum = (n) => (n == null ? '' : Number(n).toLocaleString());
+const dpFmtQty = (n, unit) => (unit === 'bytes' ? dpFmtBytes(n) : dpFmtNum(n));
+const dpFmtBytes = (n) => (n >= 1 << 30 ? (n / (1 << 30)).toFixed(2) + ' GB' : n >= 1 << 20 ? (n / (1 << 20)).toFixed(1) + ' MB' : n >= 1024 ? (n / 1024).toFixed(0) + ' KB' : (n || 0) + ' B');
+const dpFmtDur = (ms) => (ms < 1000 ? '0 s' : ms < 60000 ? `${Math.round(ms / 1000)} s` : `${Math.floor(ms / 60000)}m ${String(Math.round((ms % 60000) / 1000)).padStart(2, '0')}s`);
+function dpLiveHtml(run) {
+  const now = Date.now();
+  const stage = (run.stages || []).find((s) => s.status === 'running');
+  const stageMs = stage?._t ? now - stage._t : (stage ? now - Date.parse(run.lastStageAt || run.startedAt) : 0);
+  const idle = run.lastActivityAt ? now - Date.parse(run.lastActivityAt) : 0;
+  const idleCls = idle > 120000 ? 'bad' : idle > 25000 ? 'warn' : '';
+  const p = run.progress;
+  const total = p && p.total != null;
+  const bar = p ? `<div class="pl-bar ${total ? '' : 'indeterminate'}"><div class="pl-bar-fill" style="width:${total ? p.pct : 40}%"></div></div>
+    <div class="pl-prog-txt">${esc(p.label)}${total ? ` · <b>${esc(dpFmtQty(p.done, p.unit))}</b> / ${esc(dpFmtQty(p.total, p.unit))} ${p.unit === 'bytes' ? '' : esc(p.unit)} (${p.pct}%)` : (p.done ? ` · ${esc(dpFmtQty(p.done, p.unit))} ${esc(p.unit)} so far` : '')}</div>` : '';
+  const total7 = (run.stages || []).filter((s) => s.status !== 'running').length;
+  return `<div class="pl-live" data-run="${esc(run.id)}">
+    <div class="pl-live-head"><span class="pl-pulse" aria-hidden="true"></span><b>${esc(run.mode)}</b> in progress · stage <b>${esc(run.stage || 'queued')}</b> <span class="hint">${esc(dpFmtDur(stageMs))} in this stage · ${esc(dpFmtDur(now - Date.parse(run.startedAt)))} total · ${total7} stage${total7 === 1 ? '' : 's'} done</span></div>
+    ${bar}
+    <div class="pl-live-foot ${idleCls}">${idle > 120000 ? `⚠ no output for ${esc(dpFmtDur(idle))}: the step may be stuck. Check the Log tab, or cancel the run.` : idle > 25000 ? `quiet for ${esc(dpFmtDur(idle))}: a long build step or a large transfer is normal here` : `last activity ${idle < 2000 ? 'just now' : esc(dpFmtDur(idle)) + ' ago'}`}${run.lastLine ? ` · <span class="pl-lastline">${esc(run.lastLine)}</span>` : ''}</div>
+  </div>`;
+}
+/* a 1 s ticker keeps the elapsed/idle counters moving between server events */
+setInterval(() => {
+  const el = $('dpPipeline')?.querySelector('.pl-live'); if (!el) return;
+  const run = dp.runs.get(el.dataset.run); if (!run || !dpIsActive(run)) return;
+  el.outerHTML = dpLiveHtml(run);
+}, 1000);
 
 /* ---------- status cards ---------- */
 function dpRenderReview(t) {
@@ -679,7 +771,7 @@ function dpRenderCards(t) {
     card(buildCls, 'Build', stack || 'not detected', `${buildWhere} build · ${manifest ? (manifest.build?.steps || []).length : '?'} step(s)`, dotOf(buildCls)),
     card(depCls, 'Deployment', !lastShip ? 'none yet' : dpIsActive(lastShip) ? `${lastShip.stage || 'running'}…` : lastShip.status.replace('_', ' '), lastShip ? `release ${lastShip.release || 'n/a'} · ${lastShip.trigger || ''}` : 'no ship has run', dotOf(depCls)),
     card(healthCls, 'Health', !t.healthUrl ? 'not configured' : !verify ? 'not checked' : verify.status === 'ok' ? 'healthy' : verify.status === 'running' ? 'checking…' : 'failed', t.healthUrl ? t.healthUrl.replace(/^https?:\/\//, '') : 'add a health URL to the target', dotOf(healthCls)),
-    card('', 'Environment', dpHostOf(t) || t.type, t.type === 'paas' ? `${t.paths.root} · ${t.paas?.prod === false ? 'preview' : 'production'}` : `${t.type === 'vps-ssh' ? t.paths.root : t.paths.docroot} · ${t.type === 'vps-ssh' ? (t.web?.server || 'no web reload') : (t.docrootStrategy || 'auto')}`),
+    card('', 'Environment', dpHostOf(t) || t.type, t.type === 'paas' ? `${t.paths.root} · ${t.paas?.prod === false ? 'preview' : 'production'}` : `${t.type === 'vps-ssh' || t.type === 'local' ? t.paths.root : t.paths.docroot} · ${t.type === 'local' ? 'link swap' : t.type === 'vps-ssh' ? (t.web?.server || 'no web reload') : (t.docrootStrategy || 'auto')}`),
     card(lastOk ? 'ok' : '', 'Last deployment', lastOk ? dpFmtAgo(lastOk.endedAt || lastOk.startedAt) : 'never', lastOk ? `${lastOk.shortCommit ? lastOk.shortCommit + ' · ' : ''}${lastOk.release}` : 'ship once to populate'),
     card('', 'Duration', lastOk?.ms ? dpFmtMs(lastOk.ms) : last?.ms ? dpFmtMs(last.ms) : 'n/a', lastOk ? 'last successful ship' : last ? `last ${last.mode}` : `keep ${t.keepReleases} release(s)`),
   ].join('');
@@ -729,6 +821,8 @@ function dpRenderOverview(t) {
   }
   const targetKv = t.type === 'paas'
     ? { platform: esc(dpHostOf(t)), ...Object.fromEntries(Object.entries(t.paas || {}).filter(([k, v]) => v && !['provider', 'tokenRef', 'prod'].includes(k)).map(([k, v]) => [k, esc(String(v))])), token: esc(t.paas?.tokenRef || ''), mode: t.paas?.prod === false ? 'preview' : 'production', 'last deployment': (() => { const d = dpRunsFor(t.id).find((r) => r.deployment)?.deployment; return d ? `${d.url ? `<a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.url)}</a>` : ''}${d.id ? ` <span class="hint">id ${esc(d.id)}</span>` : ''}` : ''; })() }
+    : t.type === 'local'
+    ? { folder: esc(t.paths.root), 'after activation': esc(t.web?.reloadCmd || 'nothing'), process: esc(t.process?.manager === 'pm2' ? 'pm2 ' + t.process.name : 'none') }
     : t.type === 'vps-ssh'
     ? { server: esc(prof ? `${prof.user}@${prof.host}:${prof.port}` : t.ssh?.profileId), 'app root': esc(t.paths.root), domain: t.domain?.name ? `<a href="${t.domain.ssl ? 'https' : 'http'}://${esc(t.domain.name)}/" target="_blank" rel="noopener">${esc(t.domain.name)}</a>${t.domain.ssl ? " · Let's Encrypt" : ''}${t.domain.www ? ' · www' : ''}` : '', 'web server': esc(t.web?.server || 'none') + (t.web?.reloadCmd ? ` <span class="hint">${esc(t.web.reloadCmd)}</span>` : ''), 'php-fpm reload': esc(t.web?.phpFpmReload || ''), process: t.process?.manager && t.process.manager !== 'none' ? esc(`${t.process.manager} ${t.process.unit || t.process.name}`) : '' }
     : { transport: esc(t.transport.kind === 'sftp' ? `sftp ${prof ? prof.user + '@' + prof.host : ''}` : `${t.transport.kind} ${t.transport.user}@${t.transport.host}:${t.transport.port}`), home: esc(t.paths.home), docroot: esc(t.paths.docroot), strategy: esc(t.docrootStrategy) };
@@ -816,7 +910,7 @@ function dpRenderMap(t) {
   const host = dpHostOf(t) || 'server';
   const buildWhere = plan?.buildWhere || last?.buildMode || (t.buildMode === 'auto' ? 'auto' : t.buildMode);
   const remote = buildWhere === 'remote';
-  const transport = t.type === 'vps-ssh' ? 'ssh + sftp' : t.transport.kind;
+  const transport = t.type === 'vps-ssh' ? 'ssh + sftp' : t.type === 'local' ? 'local folder' : t.transport?.kind;
   const rels = dp.releases?.releases || [];
   const relRows = rels.length ? [...rels].reverse().slice(0, 5) : [last?.release && { ts: last.release, current: last.status === 'succeeded' && last.mode !== 'plan' }, last?.previousRelease && { ts: last.previousRelease, current: false }].filter(Boolean);
   const verifyStatus = t.healthUrl ? agg('verify') : 'pending';
@@ -860,11 +954,11 @@ function dpRenderMap(t) {
     ${edge(repoX + nw, buildX, y + nh / 2, agg('fetch'), 'fetch')}
     ${node(buildX, y, nw, nh, agg('build', 'package'), `build · ${buildWhere}`, steps.length ? `${steps.length} step${steps.length === 1 ? '' : 's'}` : 'no build step', steps.length ? [...steps.slice(0, 4).map((s) => `$ ${s}`), ...(steps.length > 4 ? [{ t: `+ ${steps.length - 4} more`, dim: true }] : [])] : [{ t: 'files are shipped as they are', dim: true }], ICON.build)}
     ${edge(buildX + nw, shipX, y + nh / 2, agg('build', 'package'), remote ? 'build' : 'package')}
-    ${node(shipX, y, nw, nh, agg('ship', 'activate'), `ship · ${transport}`, last?.release ? `release ${last.release}` : 'release <timestamp>', [t.type === 'vps-ssh' ? `${t.paths.root}/releases/<ts>` : `${t.paths.docroot}${plan?.strategy || t.docrootStrategy ? ' · ' + (plan?.strategy || t.docrootStrategy) : ''}`, t.type === 'vps-ssh' ? 'current → releases/<ts> (atomic swap)' : (plan?.strategy === 'in-place' || t.transport.kind !== 'sftp' ? 'rename swap, previous copy kept' : 'current symlink + docroot binding'), { t: (manifest?.shared?.dirs?.length || manifest?.shared?.files?.length) ? `shared: ${[...(manifest.shared.files || []), ...(manifest.shared.dirs || [])].slice(0, 3).join(', ')}` : 'no shared paths', dim: true }, rolledBack ? { t: `⟲ rolled back to ${last.previousRelease || 'previous'}`, dim: false } : { t: last?.previousRelease ? `previous ${last.previousRelease}` : ' ', dim: true }], ICON.ship)}
+    ${node(shipX, y, nw, nh, agg('ship', 'activate'), `ship · ${transport}`, last?.release ? `release ${last.release}` : 'release <timestamp>', [t.type === 'vps-ssh' || t.type === 'local' ? `${t.paths.root}/releases/<ts>` : `${t.paths.docroot}${plan?.strategy || t.docrootStrategy ? ' · ' + (plan?.strategy || t.docrootStrategy) : ''}`, t.type === 'vps-ssh' ? 'current → releases/<ts> (atomic swap)' : (plan?.strategy === 'in-place' || t.transport.kind !== 'sftp' ? 'rename swap, previous copy kept' : 'current symlink + docroot binding'), { t: (manifest?.shared?.dirs?.length || manifest?.shared?.files?.length) ? `shared: ${[...(manifest.shared.files || []), ...(manifest.shared.dirs || [])].slice(0, 3).join(', ')}` : 'no shared paths', dim: true }, rolledBack ? { t: `⟲ rolled back to ${last.previousRelease || 'previous'}`, dim: false } : { t: last?.previousRelease ? `previous ${last.previousRelease}` : ' ', dim: true }], ICON.ship)}
     ${edge(shipX + nw, srvX, y + nh / 2, rolledBack ? 'failed' : agg('ship', 'activate'), rolledBack ? 'rolled back' : 'activate')}
     <rect class="node-box ${verifyStatus === 'pending' && agg('cleanup') === 'ok' ? 'ok' : verifyStatus}" x="${srvX}" y="${y}" width="${nw}" height="${nh}"/>
     <g transform="translate(${srvX + 16} ${y + 16})" class="icon ${verifyStatus}">${ICON.server}</g>
-    <text class="node-kicker" x="${srvX + 48}" y="${y + 24}">target · ${esc(t.type === 'vps-ssh' ? 'vps' : 'shared hosting')}</text>
+    <text class="node-kicker" x="${srvX + 48}" y="${y + 24}">target · ${esc(t.type === 'vps-ssh' ? 'vps' : t.type === 'local' ? 'this computer' : 'shared hosting')}</text>
     <text class="node-title" x="${srvX + 48}" y="${y + 44}">${esc(cut(host, 22))}</text>
     <text class="node-line" x="${srvX + 16}" y="${y + 72}">${esc(cut(t.paths.root || t.paths.docroot, 30))}</text>
     <text class="node-kicker" x="${srvX + 16}" y="${y + 96}">releases</text>
@@ -925,6 +1019,8 @@ async function dpLoadLog(runId) {
   try {
     const d = await api(`/api/deploy/runs/${runId}/log?since=0`);
     dpAppendLog(runId, d.lines);
+    const run = dp.runs.get(runId); const lastL = d.lines[d.lines.length - 1];
+    if (run && lastL) { run.lastActivityAt = run.lastActivityAt && run.lastActivityAt > lastL.t ? run.lastActivityAt : lastL.t; if (!run.lastLine) run.lastLine = lastL.line.slice(0, 140); }
     $('dpLogHint').textContent = d.live ? 'live' : `${d.lines.length} lines`;
   } catch (e) { el.textContent = e.message; }
 }
@@ -1067,7 +1163,7 @@ async function dpShip(t, planHash) {
     catch (e) { if (!(await confirmDialog({ title: 'Pre-ship review unavailable', message: `The AI review could not run: <b>${esc(e.message)}</b>. Continue without it?`, okLabel: 'Continue', okClass: 'warn' }))) return; }
   }
   const reviewHtml = review ? `<div class="dp-review-inline ${review.verdict === 'ready' ? 'ok' : review.verdict === 'block' ? 'bad' : 'warn'}"><b>AI review: ${esc(review.verdict)}</b>: ${esc(review.summary || '')}${(review.findings || []).length ? `<ul>${review.findings.map((f) => `<li class="${esc(f.level)}">${esc(f.text)}</li>`).join('')}</ul>` : ''}</div>` : '';
-  const msg = `<p>Build and deploy <b>${esc(repo?.name || '?')}</b> to <b>${esc(t.name)}</b> <span class="env ${env}">${esc(env === 'neutral' ? t.type : env)}</span>${esc(t.type === 'vps-ssh' ? t.paths.root : t.paths.docroot)} on ${esc(dpHostOf(t))}?</p>
+  const msg = `<p>Build and deploy <b>${esc(repo?.name || '?')}</b> to <b>${esc(t.name)}</b> <span class="env ${env}">${esc(env === 'neutral' ? t.type : env)}</span>${esc(t.type === 'vps-ssh' || t.type === 'local' ? t.paths.root : t.paths.docroot)} on ${esc(dpHostOf(t))}?</p>
     <ul style="margin:.3rem 0 .3rem 1rem;padding:0;font-size:.82rem;line-height:1.5">
       <li>build: <b>${esc(planHash ? dp.plan.buildWhere : t.buildMode)}</b>${planHash ? ` · plan hash <code>${esc(planHash)}</code> is re-checked` : ' · <span style="color:var(--amber)">no reviewed plan: it is computed and executed in one go</span>'}</li>
       <li>the current release stays live until the new one is fully prepared; the swap is atomic</li>
@@ -1091,14 +1187,19 @@ async function dpRollback(t, release) {
 function onDeployEvent(ev) {
   if (ev.type === 'run') {
     const run = ev; const prev = dp.runs.get(run.id);
-    dp.runs.set(run.id, { ...prev, ...run, type: undefined });
+    dp.runs.set(run.id, { ...prev, ...run, type: undefined, lastLine: prev?.lastLine, lastStageAt: prev && prev.stage === run.stage ? prev.lastStageAt : new Date().toISOString() });
     if (dpOpen() && run.targetId === dp.sel) {
       if (prev && dpIsActive(prev) && !dpIsActive(run)) { dp.releases = null; if (run.mode !== 'plan') toast(`${run.targetName}: ${run.mode} ${run.status.replace('_', ' ')}${run.error ? ': ' + run.error : ''}`, run.status === 'succeeded' ? 'success' : 'error'); loadDeploy(); }
       dpRenderMain();
     } else if (!dpOpen() && prev && dpIsActive(prev) && !dpIsActive(run) && run.mode !== 'plan') toast(`Deploy ${run.status.replace('_', ' ')}: ${run.targetName}`, run.status === 'succeeded' ? 'success' : 'error');
     if (dpOpen()) { dpRenderNav(); dpRenderHeader(); }
   } else if (ev.type === 'cloud') { const j = ev.job; if (!dp.cloudJob || dp.cloudJob.id === j.id || dp.cloudJob.status !== 'running') { const wasRunning = dp.cloudJob?.status === 'running'; dp.cloudJob = j; if (dpOpen()) { dpRenderCloudPanel(); if (wasRunning && j.status !== 'running') { toast(`Server ${j.spec?.name}: ${j.status}${j.error ? ': ' + j.error : ''}`, j.status === 'succeeded' ? 'success' : 'error'); loadDeploy(); } } } }
-  else if (ev.type === 'log') dpAppendLog(ev.runId, ev.lines);
+  else if (ev.type === 'log') {
+    const run = dp.runs.get(ev.runId); const lastL = ev.lines[ev.lines.length - 1];
+    if (run && lastL) { run.lastActivityAt = lastL.t; if (lastL.stream !== 'sys' || !lastL.line.startsWith('── ')) run.lastLine = lastL.line.slice(0, 140); }
+    dpAppendLog(ev.runId, ev.lines);
+    if (run && dpIsActive(run) && run.targetId === dp.sel) { const el = $('dpPipeline')?.querySelector('.pl-live'); if (el) el.outerHTML = dpLiveHtml(run); }
+  }
   else if (ev.type === 'plan') { const r = dp.runs.get(ev.runId); if (r) r.plan = ev.plan; if (r && r.targetId === dp.sel) { dp.plan = ev.plan; if (dp.tab === 'plan') dpRenderTab(); } }
 }
 
@@ -1208,6 +1309,8 @@ function dpOpenTargetModal(t) {
   dpFillSelect($('dtSftpProfile'), profs, t?.transport?.profileId, profs.length ? 'Choose a server' : 'no SSH servers yet: add one');
   $('dtRoot').value = t?.paths?.root || ''; $('dtWeb').value = t?.web?.server || 'nginx'; $('dtReload').value = t?.web?.reloadCmd || ''; $('dtFpm').value = t?.web?.phpFpmReload || '';
   $('dtProc').value = t?.process?.manager || 'none'; $('dtProcName').value = t?.process?.unit || t?.process?.name || '';
+  $('dtLocalRoot').value = t?.type === 'local' ? t.paths?.root || '' : ''; $('dtLocalProc').value = t?.type === 'local' ? t.process?.manager || 'none' : 'none'; $('dtLocalProcName').value = t?.type === 'local' ? t.process?.name || '' : ''; $('dtLocalReload').value = t?.type === 'local' ? t.web?.reloadCmd || '' : '';
+  tfState.localRootTouched = t?.type === 'local' && !!t.paths?.root;
   $('dtDomain').value = t?.domain?.name || ''; $('dtSsl').checked = !!t?.domain?.ssl; $('dtSslEmail').value = t?.domain?.email || ''; $('dtWww').checked = !!t?.domain?.www;
   $('dtTransport').value = t?.transport?.kind || 'sftp'; $('dtFtpHost').value = t?.transport?.host || ''; $('dtFtpPort').value = t?.transport?.port || ''; $('dtFtpUser').value = t?.transport?.user || ''; $('dtConnUrl').value = '';
   dpRefreshSecretSelects(null, null, t);
@@ -1259,7 +1362,9 @@ function dpTargetSync() {
   M.querySelectorAll('[data-type-only]').forEach((d) => { d.hidden = d.dataset.typeOnly !== type; });
   M.querySelectorAll('[data-transport]').forEach((d) => { const k = d.dataset.transport; d.hidden = k === 'sftp' ? isFtp : k === 'ftps' ? tr !== 'ftps' : !isFtp; });
   // build strategy is implied: shared hosting always builds locally, platforms decide themselves
-  if (type === 'shared-hosting') $('dtBuild').value = 'local'; else if (type === 'paas') $('dtBuild').value = 'auto';
+  if (type === 'shared-hosting' || type === 'local') $('dtBuild').value = 'local'; else if (type === 'paas') $('dtBuild').value = 'auto';
+  if (tfState.isNew && !tfState.localRootTouched && type === 'local') $('dtLocalRoot').value = dpLocalDefaultRoot($('dtName').value);
+  $('dtLocalProcNameWrap').hidden = $('dtLocalProc').value === 'none';
   // protocol defaults (placeholders, never overwriting an explicit port)
   const defPort = tr === 'ftps' && $('dtFtpSecure').value === 'implicit' ? 990 : 21;
   $('dtFtpPort').placeholder = String(defPort);
@@ -1292,8 +1397,8 @@ function dpTargetSync() {
   // summaries in collapsed headers
   $('dtEnvSum').textContent = envOn ? `${$('dtEnvVault').value} · ${$('dtEnvMode').selectedOptions[0]?.textContent.toLowerCase() || ''} · ${$('dtEnvTarget').value.trim() || 'shared/.env'}` : 'None';
   $('dtHealthSum').textContent = healthOn ? ($('dtHealth').value.trim().replace(/^https?:\/\//, '') || 'URL missing') + ($('dtHealthRemote').checked && type === 'vps-ssh' ? ' · from the server' : '') : 'Off';
-  const keep = $('dtKeep').value || (type === 'shared-hosting' ? 2 : 5);
-  const method = type === 'shared-hosting' ? ($('dtStrategy').selectedOptions[0]?.textContent.split(' (')[0].split(':')[0] || 'Auto') : type === 'vps-ssh' ? 'Atomic symlink swap' : 'Platform release';
+  const keep = $('dtKeep').value || (type === 'shared-hosting' ? 2 : type === 'local' ? 3 : 5);
+  const method = type === 'shared-hosting' ? ($('dtStrategy').selectedOptions[0]?.textContent.split(' (')[0].split(':')[0] || 'Auto') : type === 'vps-ssh' ? 'Atomic symlink swap' : type === 'local' ? 'Link swap on this computer' : 'Platform release';
   $('dtReleaseSum').textContent = `${method} · keep ${keep}`;
   $('dtAutoSum').textContent = autoOn ? `${mode === 'poll' ? `poll every ${$('dtAutoPoll').value || 5} min` : 'webhook'} · ${$('dtAutoBranch').value.trim() || branch || 'default branch'}` : '';
   $('dtOverridesSum').textContent = $('dtOverrides').value.trim() ? 'Configured' : 'None';
@@ -1303,6 +1408,7 @@ function dpTargetSync() {
   const repo = tfRepo(); let dest = '';
   if (type === 'shared-hosting') { const prof = tfProfileOf($('dtSftpProfile').value); dest = isFtp ? `${$('dtFtpUser').value.trim() || '…'}@${$('dtFtpHost').value.trim() || '…'}:${$('dtDocroot').value.trim() || '…'}` : `${prof ? `${prof.user}@${prof.host}` : 'SFTP server'}:${$('dtDocroot').value.trim() || '…'}`; }
   else if (type === 'vps-ssh') { const prof = tfProfileOf($('dtProfile').value); dest = `${prof ? `${prof.user}@${prof.host}` : 'SSH server'}:${$('dtRoot').value.trim() || '…'}`; }
+  else if (type === 'local') dest = `this computer:${$('dtLocalRoot').value.trim() || '…'}`;
   else dest = (dp.status?.paasProviders || []).find((p) => p.id === $('dtPaasProvider').value)?.label || 'platform';
   $('dtSubtitle').textContent = `${repo?.name || 'repository'} · ${branch || 'default branch'} → ${dest}`;
 }
@@ -1401,6 +1507,10 @@ function tfValidate() {
     const root = $('dtRoot').value.trim(); if (!root) errs.push({ id: 'dtRoot', msg: 'Enter the deployment directory (for example /var/www/shop).' }); else if (!root.startsWith('/') || root.split('/').filter(Boolean).length < 2) errs.push({ id: 'dtRoot', msg: 'Use an absolute path at least two levels deep, such as /var/www/shop.' });
     if ($('dtProc').value !== 'none') need('dtProcName', $('dtProc').value === 'systemd' ? 'Enter the systemd unit name.' : 'Enter the pm2 app name.');
     if ($('dtSsl').checked && $('dtDomain').value.trim() && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test($('dtSslEmail').value.trim())) errs.push({ id: 'dtSslEmail', msg: "Let's Encrypt needs a contact e-mail." });
+  } else if (type === 'local') {
+    const root = $('dtLocalRoot').value.trim();
+    if (!root) errs.push({ id: 'dtLocalRoot', msg: 'Enter the folder on this computer (for example C:\\www\\shop).' }); else if (!isAbsLocal(root)) errs.push({ id: 'dtLocalRoot', msg: 'Use an absolute path on this computer.' });
+    if ($('dtLocalProc').value === 'pm2') need('dtLocalProcName', 'Enter the pm2 app name.');
   } else need('dtPaasToken', 'Choose the vault secret holding the platform token.');
   if ($('dtHealthEnabled').checked) { const u = $('dtHealth').value.trim(); if (!/^https?:\/\/\S+/.test(u)) errs.push({ id: 'dtHealth', msg: 'Enter the full URL to check, starting with http:// or https://.' }); }
   if ($('dtEnvVault').value && $('dtEnvTarget').value.includes('..')) errs.push({ id: 'dtEnvTarget', msg: 'Use a path relative to the deployment directory.' });
@@ -1420,11 +1530,12 @@ function tfShowErrors(errs) {
 function dpTargetFormBody(overrides) {
   if (overrides === undefined && $('dtOverrides').value.trim()) { try { overrides = JSON.parse($('dtOverrides').value); } catch { overrides = null; } }
   const type = $('dtType').value;
-  const body = { name: $('dtName').value.trim(), repoId: $('dtRepo').value, type, buildMode: type === 'shared-hosting' ? 'local' : $('dtBuild').value, healthUrl: $('dtHealthEnabled').checked ? $('dtHealth').value.trim() : '', healthRemote: type === 'vps-ssh' && $('dtHealthEnabled').checked && $('dtHealthRemote').checked, keepReleases: Number($('dtKeep').value) || undefined, overrides: overrides || null,
+  const body = { name: $('dtName').value.trim(), repoId: $('dtRepo').value, type, buildMode: type === 'shared-hosting' || type === 'local' ? 'local' : $('dtBuild').value, healthUrl: $('dtHealthEnabled').checked ? $('dtHealth').value.trim() : '', healthRemote: type === 'vps-ssh' && $('dtHealthEnabled').checked && $('dtHealthRemote').checked, keepReleases: Number($('dtKeep').value) || undefined, overrides: overrides || null,
     envFile: $('dtEnvVault').value ? { fromVault: $('dtEnvVault').value, mode: $('dtEnvMode').value, target: $('dtEnvTarget').value.trim() || 'shared/.env' } : null,
     autoShip: $('dtAutoEnabled').checked ? { enabled: true, mode: $('dtAutoMode').value, branch: $('dtAutoBranch').value.trim() || null, pollMinutes: Number($('dtAutoPoll').value) || undefined } : { enabled: false } };
   if (type === 'paas') { const paas = { provider: $('dtPaasProvider').value, tokenRef: $('dtPaasToken').value, prod: $('dtPaasProd').checked }; $('dtPaasFields').querySelectorAll('[data-paas-field]').forEach((i) => { paas[i.dataset.paasField] = i.value.trim(); }); Object.assign(body, { paas }); }
   else if (type === 'vps-ssh') Object.assign(body, { domain: $('dtDomain').value.trim() ? { name: $('dtDomain').value.trim(), ssl: $('dtSsl').checked, email: $('dtSslEmail').value.trim(), www: $('dtWww').checked } : null, ssh: { profileId: $('dtProfile').value }, paths: { root: $('dtRoot').value.trim() }, web: { server: $('dtWeb').value, reloadCmd: $('dtReload').value.trim(), phpFpmReload: $('dtFpm').value.trim() }, process: { manager: $('dtProc').value, unit: $('dtProc').value === 'systemd' ? $('dtProcName').value.trim() : '', name: $('dtProc').value === 'pm2' ? $('dtProcName').value.trim() : '' } });
+  else if (type === 'local') Object.assign(body, { paths: { root: $('dtLocalRoot').value.trim() }, web: { reloadCmd: $('dtLocalReload').value.trim() }, process: { manager: $('dtLocalProc').value, name: $('dtLocalProcName').value.trim() } });
   else {
     const tr = $('dtTransport').value, docroot = $('dtDocroot').value.trim();
     Object.assign(body, { transport: tr === 'sftp' ? { kind: 'sftp', profileId: $('dtSftpProfile').value } : { kind: tr, host: $('dtFtpHost').value.trim(), port: Number($('dtFtpPort').value) || undefined, user: $('dtFtpUser').value.trim(), passwordRef: $('dtFtpPass').value, secure: $('dtFtpSecure').value === 'implicit' ? 'implicit' : true }, paths: { home: $('dtHome').value.trim() || tfDeriveHome(docroot, tr), docroot }, docrootStrategy: $('dtStrategy').value });

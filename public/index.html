@@ -954,7 +954,7 @@
     <section class="tf-sec" aria-labelledby="tfSrvH">
       <h4 id="tfSrvH">Server</h4>
       <div class="tf-grid">
-        <div class="tf-field"><label for="dtType">Destination</label><select id="dtType"><option value="shared-hosting">Shared hosting (SFTP / FTP)</option><option value="vps-ssh">Your own server over SSH</option><option value="paas">Platform (Vercel, Netlify, Cloudflare, Fly.io, Render)</option></select></div>
+        <div class="tf-field"><label for="dtType">Destination</label><select id="dtType"><option value="shared-hosting">Shared hosting (SFTP / FTP)</option><option value="local">This computer (a folder on this machine)</option><option value="vps-ssh">Your own server over SSH</option><option value="paas">Platform (Vercel, Netlify, Cloudflare, Fly.io, Render)</option></select></div>
       </div>
 
       <div data-type="shared-hosting" hidden>
@@ -997,6 +997,14 @@
         </details>
       </div>
 
+      <div data-type="local" hidden>
+        <div class="tf-grid">
+          <div class="tf-field"><label for="dtLocalRoot">Deployment directory</label><input id="dtLocalRoot" placeholder="C:\www\shop" autocomplete="off"><p class="tf-help">A folder on this machine. Releases, shared files and <code>current</code> live inside it.</p></div>
+          <div class="tf-field"><label for="dtLocalProc">Process manager <span class="hint">(Node / Python)</span></label><select id="dtLocalProc"><option value="none">none</option><option value="pm2">pm2</option></select></div>
+          <div class="tf-field" id="dtLocalProcNameWrap" hidden><label for="dtLocalProcName">pm2 app name</label><input id="dtLocalProcName" placeholder="shop" autocomplete="off"></div>
+          <div class="tf-field tf-span"><label for="dtLocalReload">After activation, run <span class="hint">(optional)</span></label><input id="dtLocalReload" placeholder="net stop nginx &amp;&amp; net start nginx" autocomplete="off"><p class="tf-help">Runs in this machine's shell after <code>current</code> is swapped, for example to restart a local web server.</p></div>
+        </div>
+      </div>
       <div data-type="paas" hidden>
         <div class="tf-grid">
           <div class="tf-field"><label for="dtPaasProvider">Platform</label><select id="dtPaasProvider"></select></div>
@@ -1112,9 +1120,10 @@
       <div class="fw-head">
         <div class="fw-tabs" id="fwTabs"><button type="button" data-g="all" class="on">All</button><button type="button" data-g="frontend">Frontend</button><button type="button" data-g="backend">Backend</button><button type="button" data-g="fullstack">Fullstack</button><button type="button" data-g="static">Static</button></div>
         <span class="spacer"></span>
+        <button type="button" id="btnFwAi" class="aireview glossy fw-ai" title="Read the repository, detect the framework and fill in the deploy configuration"><img class="ai-mini" src="/assets/robot-logo-animated_1.svg" alt="" aria-hidden="true"><span>AI detect</span></button>
         <button type="button" id="btnFwDetected" class="fw-detected" hidden>✦ Use detected</button>
-        <span class="hint" id="fwDetectHint"></span>
       </div>
+      <p class="fw-hint" id="fwDetectHint"></p>
       <div class="fw-grid" id="fwGrid"></div>
       <div class="dp-card" style="margin-top:.7rem;padding:.6rem .8rem">
         <div class="fw-cfg-head"><b>Deploy configuration</b><span class="hint" id="fwCfgHint">pick a framework to apply its defaults; everything stays editable</span></div>
@@ -1136,6 +1145,7 @@
     <section class="wz-step" data-step="3">
       <div class="wz-choice" id="wzDestKind">
         <button type="button" class="on" data-v="vps-ssh"><b>My server (SSH)</b><span>VPS or dedicated: atomic releases, rollback</span></button>
+        <button type="button" data-v="local"><b>This computer</b><span>A folder on this machine: releases, rollback, local URL</span></button>
         <button type="button" data-v="shared-hosting"><b>Shared hosting</b><span>cPanel / Plesk over SFTP or FTP</span></button>
         <button type="button" data-v="paas"><b>Platform</b><span>Vercel, Netlify, Cloudflare, Fly.io, Render</span></button>
         <button type="button" data-v="cloud"><b>New cloud server</b><span>Provision on DigitalOcean, Hetzner, AWS, GCP, Azure</span></button>
@@ -1160,6 +1170,11 @@
           <p class="hint" style="margin:.3rem 0 0">Point the domain's DNS A record at the server first. If DNS or the certificate is not ready, the deploy still succeeds and the item shows as <b>action required</b>.</p>
         </div>
         <p class="hint">No SSH server yet? Add one under <b>SSH servers</b>, or choose <b>New cloud server</b> above.</p>
+      </div>
+      <div data-wzd="local" hidden>
+        <div class="row"><div style="flex:2"><label for="wzLocalRoot">App folder <span class="hint">(releases/, shared/ and current are created inside)</span></label><input id="wzLocalRoot" placeholder="C:\www\shop"></div><div><label for="wzLocalProc">Process</label><select id="wzLocalProc"><option value="none">none (files only)</option><option value="pm2">pm2 (Node / Python servers)</option></select></div></div>
+        <div class="row"><div style="flex:3"><label for="wzLocalReload">After each activation, run <span class="hint">(optional)</span></label><input id="wzLocalReload" placeholder="e.g. net stop nginx &amp;&amp; net start nginx · brew services restart nginx"></div></div>
+        <p class="hint">Builds run on this machine. Point your local web server (XAMPP, Laragon, nginx, IIS, <code>php -S</code>) at <code>&lt;folder&gt;/current/&lt;web root&gt;</code>: each deploy swaps <code>current</code> to the new release and rollback swaps it back.</p>
       </div>
       <div data-wzd="shared-hosting" hidden>
         <div class="row"><div><label for="wzTransport">Connection</label><select id="wzTransport"><option value="ftps">FTPS</option><option value="ftp">FTP</option><option value="sftp">SFTP (SSH server)</option></select></div><div style="flex:2" data-wzt="ftp"><label for="wzFtpHost">Host <span class="hint">(host or host:port)</span></label><input id="wzFtpHost" placeholder="ftp.example.com"></div><div data-wzt="ftp"><label for="wzFtpUser">User</label><input id="wzFtpUser" placeholder="acme"></div><div style="flex:2" data-wzt="sftp" hidden><label for="wzSftpProfile">SSH server</label><select id="wzSftpProfile"></select></div></div>

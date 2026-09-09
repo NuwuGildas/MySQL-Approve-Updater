@@ -23,3 +23,4 @@ deploy-servers.json*
 deploy-templates.json*
 connectors.json
 connectors.json.tmp
+crash.log

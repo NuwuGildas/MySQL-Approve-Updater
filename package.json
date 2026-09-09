@@ -10,7 +10,8 @@
   "bin": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js",
+    "dev": "node scripts/dev.js",
+    "dev:node-watch": "node --watch server.js",
     "vendor:toast": "esbuild node_modules/gooey-toast/dist/index.js --bundle --format=iife --global-name=gooeyToast --minify --outfile=public/vendor/gooey-toast/gooey-toast.iife.js && node -e \"require('fs').copyFileSync('node_modules/gooey-toast/dist/styles.css','public/vendor/gooey-toast/styles.css')\"",
     "build": "pkg . --output dist/server-tools.exe",
     "test": "node --test \"test/**/*.test.js\""

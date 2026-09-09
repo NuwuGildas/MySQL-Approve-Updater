@@ -513,6 +513,15 @@ function logEvent(level, msg) {
   console.log(`[${entry.time}] ${level.toUpperCase()} ${msg}`);
 }
 
+/* A crash restarts the process under `node --watch` (or takes the tool down): keep a trace of why in crash.log. */
+function recordCrash(kind, err) {
+  const line = `[${new Date().toISOString()}] ${kind}: ${err && err.stack ? err.stack : String(err)}\n`;
+  try { fs.appendFileSync(path.join(DATA_DIR, 'crash.log'), line); } catch {}
+  try { logEvent('error', `${kind}: ${err && err.message ? err.message : String(err)} (see crash.log)`); } catch {}
+}
+process.on('uncaughtException', (err) => { recordCrash('uncaughtException', err); process.exitCode = 1; setTimeout(() => process.exit(1), 200).unref(); });
+process.on('unhandledRejection', (err) => { recordCrash('unhandledRejection', err); }); // logged; the server keeps running
+
 function broadcastSession() { sseBroadcast('session', sessionSnapshot()); }
 function broadcastChange(change) {
   sseBroadcast('change', { change, counts: session ? sessionCounts(session) : null, sessionStatus: session?.status });

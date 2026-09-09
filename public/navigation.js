@@ -263,14 +263,14 @@ $('btnAgentDock')?.addEventListener('click', () => setAgentDock(!prefAgentDock()
 new MutationObserver(() => document.body.classList.toggle('agent-open', $('agentDrawer').classList.contains('open'))).observe($('agentDrawer'), { attributes: true, attributeFilter: ['class'] });
 
 /* ---------- Deployments: resource switcher (Targets by default) and the New deployment action ---------- */
-const DP_RES = [['targets', 'Targets'], ['repos', 'Repositories'], ['secrets', 'Secrets'], ['cloud', 'Cloud servers']];
+const DP_RES = [['targets', 'Targets'], ['repos', 'Repos', 'Repositories'], ['secrets', 'Secrets'], ['cloud', 'Cloud', 'Cloud servers']];
 function initDeployNavSwitcher() {
   const nav = $('deployNav'); if (!nav || nav.querySelector('.dp-switch')) return;
   const secs = [...nav.querySelectorAll(':scope > .dp-sec')];
   const order = ['repos', 'targets', 'secrets', 'cloud'];
   secs.forEach((s, i) => { s.dataset.res = order[i] || `x${i}`; });
   const sw = document.createElement('div'); sw.className = 'dp-switch'; sw.setAttribute('role', 'tablist'); sw.setAttribute('aria-label', 'Deployment resources');
-  sw.innerHTML = DP_RES.map(([k, l]) => `<button type="button" role="tab" data-res="${k}">${l}</button>`).join('');
+  sw.innerHTML = DP_RES.map(([k, l, full]) => `<button type="button" role="tab" data-res="${k}" title="${full || l}">${l}</button>`).join('');
   nav.prepend(sw);
   let cur = 'targets'; try { cur = localStorage.getItem('st-dp-res') || 'targets'; } catch {}
   const apply = (k) => { cur = k; try { localStorage.setItem('st-dp-res', k); } catch {} sw.querySelectorAll('[data-res]').forEach((b) => { const on = b.dataset.res === k; b.classList.toggle('on', on); b.setAttribute('aria-selected', String(on)); }); secs.forEach((s) => s.classList.toggle('res-on', s.dataset.res === k)); nav.classList.add('switched'); };
