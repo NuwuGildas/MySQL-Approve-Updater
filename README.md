@@ -416,6 +416,9 @@ redeploying the previous commit). Cloudflare Pages has no rollback command.
   `vault.js`, `routes.js`, `cli.js`. Runtime data: `deploy-repos.json`,
   `deploy-targets.json`, `deploy-runs.json` + `deploy-runs/`, `deploy-secrets.enc`,
   `deploy-work/` (clones and build artifacts).
+- `lib/projects/` — project store (`/api/projects`): named groups of existing connections, SSH
+  servers, connectors, deploy repositories and targets, stored by ID only in `projects.json`
+  (versioned; a "General" project is seeded when the file does not exist).
 - `rules.json` — your rules (created on first save).
 - `connections.json` — saved connection profiles (seeded from `.env` on first run).
 - `audit.log` — JSON-lines audit trail (created on first preview/decision).

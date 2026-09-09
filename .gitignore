@@ -24,3 +24,6 @@ deploy-templates.json*
 connectors.json
 connectors.json.tmp
 crash.log
+
+# projects (lib/projects) runtime data
+projects.json*

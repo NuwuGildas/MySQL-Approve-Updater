@@ -2596,6 +2596,90 @@ const deployCtx = {
 };
 const deployModule = deploy.mount(deployCtx);
 
+/* ================= Projects (lib/projects) =================
+   A project groups existing resources by ID: DB connections and SSH servers (connections.json),
+   git connectors (connectors.json), deploy repositories and targets (deploy-*.json). Linking copies
+   nothing: the API resolves each ID to a display summary (name + a non-secret detail) at read time,
+   so projects.json never holds a password, token or key. The store seeds a "General" project only
+   when projects.json does not exist and refuses to write over a file it could not read. */
+const { createProjectStore, RESOURCE_KINDS: PROJECT_RESOURCE_KINDS, RESOURCE_LABELS: PROJECT_RESOURCE_LABELS } = require('./lib/projects');
+const projectStore = createProjectStore(DATA_DIR, { log: (level, msg) => logEvent(level, `projects: ${msg}`) });
+if (projectStore.seeded) logEvent('info', 'projects: created projects.json with the default "General" project');
+
+// ID → { name, detail } for the UI; null when the resource no longer exists. Nothing here is a credential.
+const projectResourceSummary = {
+  connections: (id) => { const p = profileById(id); return p && !p.sshOnly ? { name: p.name, detail: `${p.db?.database || ''} @ ${p.db?.host || ''}`.trim() } : null; },
+  servers: (id) => { const p = profileById(id); return p && p.sshOnly ? { name: p.name, detail: `${p.ssh?.user ? p.ssh.user + '@' : ''}${p.ssh?.host || ''}` } : null; },
+  connectors: (id) => { const c = deployModule.connectors.list().find((x) => x.id === id); return c ? { name: c.name, detail: c.kind } : null; },
+  repos: (id) => { const r = deployModule.stores.findRepo(id); return r ? { name: r.name, detail: r.source?.kind || '' } : null; },
+  targets: (id) => { const t = deployModule.stores.targets.get().targets.find((x) => x.id === id); return t ? { name: t.name, detail: t.type || '' } : null; },
+};
+function projectView(p) {
+  const resources = {};
+  for (const kind of Object.keys(p.resources || {})) {
+    const summarize = projectResourceSummary[kind];
+    resources[kind] = (p.resources[kind] || []).map((id) => {
+      const s = summarize ? summarize(id) : null;
+      return s ? { id, ...s } : { id, name: null, detail: null, missing: true };
+    });
+  }
+  return { id: p.id, name: p.name, description: p.description || '', color: p.color || null, createdAt: p.createdAt, updatedAt: p.updatedAt, resources };
+}
+function projectLinkInput(body) {
+  const kind = String(body?.kind || '').trim();
+  const resourceId = String(body?.resourceId || body?.id || '').trim();
+  if (!PROJECT_RESOURCE_KINDS.includes(kind)) throw httpError(400, `kind must be one of ${PROJECT_RESOURCE_KINDS.join(', ')}`);
+  if (!resourceId) throw httpError(400, 'resourceId is required');
+  return { kind, resourceId };
+}
+
+app.get('/api/projects', (req, res) => {
+  res.json({ version: projectStore.version, readOnly: projectStore.readOnly || null, kinds: PROJECT_RESOURCE_KINDS, projects: projectStore.list().map(projectView) });
+});
+app.post('/api/projects', wrap(async (req, res) => {
+  const p = await projectStore.create(req.body || {});
+  audit({ action: 'project-create', project: p.name });
+  logEvent('info', `Project created: "${p.name}"`);
+  res.status(201).json(projectView(p));
+}));
+app.get('/api/projects/:id', wrap(async (req, res) => {
+  const p = projectStore.get(req.params.id);
+  if (!p) throw httpError(404, 'Project not found');
+  res.json(projectView(p));
+}));
+app.put('/api/projects/:id', wrap(async (req, res) => {
+  const p = await projectStore.update(req.params.id, req.body || {});
+  audit({ action: 'project-update', project: p.name });
+  res.json(projectView(p));
+}));
+app.delete('/api/projects/:id', wrap(async (req, res) => {
+  const removed = await projectStore.remove(req.params.id);
+  audit({ action: 'project-delete', project: removed.name });
+  logEvent('info', `Project deleted: "${removed.name}" (its resources were kept)`);
+  res.json({ ok: true });
+}));
+// link / unlink: the resource must exist right now; only its ID is stored
+app.post('/api/projects/:id/links', wrap(async (req, res) => {
+  const { kind, resourceId } = projectLinkInput(req.body);
+  if (!projectStore.get(req.params.id)) throw httpError(404, 'Project not found');
+  const summary = projectResourceSummary[kind](resourceId);
+  if (!summary) throw httpError(404, `No ${PROJECT_RESOURCE_LABELS[kind]} with id ${resourceId}`);
+  const p = await projectStore.link(req.params.id, kind, resourceId);
+  audit({ action: 'project-link', project: p.name, kind, resource: summary.name });
+  res.json(projectView(p));
+}));
+app.delete('/api/projects/:id/links/:kind/:resourceId', wrap(async (req, res) => {
+  const { kind, resourceId } = projectLinkInput({ kind: req.params.kind, resourceId: req.params.resourceId });
+  const p = await projectStore.unlink(req.params.id, kind, resourceId);
+  audit({ action: 'project-unlink', project: p.name, kind, resource: resourceId });
+  res.json(projectView(p));
+}));
+// which projects reference a resource (for "this connection belongs to…" hints later)
+app.get('/api/projects/for/:kind/:resourceId', wrap(async (req, res) => {
+  const { kind, resourceId } = projectLinkInput({ kind: req.params.kind, resourceId: req.params.resourceId });
+  res.json({ kind, resourceId, projects: projectStore.projectsFor(kind, resourceId).map((p) => ({ id: p.id, name: p.name, color: p.color || null })) });
+}));
+
 /* ---- errors ---- */
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
