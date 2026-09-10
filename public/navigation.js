@@ -23,6 +23,8 @@ const NAV = [
   { group: 'Infrastructure', items: [
     { id: 'deploy', label: 'Deployments', route: '#/deployments', icon: CC_ICON.rocket, title: 'Deployments · The Ascension', desc: 'Build → deploy → ship: connect a repo, detect its stack, review the plan and ship to a VPS, shared host or platform.' },
     { id: 'servers', label: 'Servers', route: '#/servers', icon: CC_ICON.server, title: 'Servers', desc: 'SSH server profiles, live VM stats and terminals.' },
+    // hidden until a session is actually running: renderTerminalsNavEntry() reveals it and counts
+    { id: 'terminals', label: 'Terminals', route: '#/terminals', icon: CC_ICON.console, title: 'Terminals', desc: 'Shared SSH shells you have open, side by side with the assistant that works in them.', liveOnly: true },
     { id: 'connectors', label: 'Connectors', route: '#/connectors', icon: CC_ICON.connectors, title: 'Connectors', desc: 'GitHub and GitLab accounts: verify a token once, browse repositories and connect them.' },
   ] },
   { group: 'Workspace', items: [
@@ -54,6 +56,7 @@ function parseRoute(hash) {
   if (parts[0] === 'database') return { id: parts[1] === 'sql' ? 'sql' : parts[1] === 'schema' ? 'schema' : 'mysql', parts: parts.slice(2) };
   if (parts[0] === 'deployments') return { id: 'deploy', parts: parts.slice(1) };
   if (parts[0] === 'servers') return { id: 'servers', parts: parts.slice(1) };
+  if (parts[0] === 'terminals') return { id: 'terminals', parts: parts.slice(1) };
   if (parts[0] === 'history') return { id: 'history', parts: parts.slice(1) };
   if (parts[0] === 'connectors') return { id: 'connectors', parts: parts.slice(1) };
   if (parts[0] === 'projects') return { id: 'projects', parts: parts.slice(1) };
@@ -87,7 +90,7 @@ function applyRoute(resolved, path, options = {}) {
   // leave whatever page was active (drawers acting as pages, the deploy page, the page dialogs)
   const leaving = (id) => resolved.id !== id;
   if (leaving('servers') && $('serversDrawer').classList.contains('open')) closeServers();
-  if (leaving('servers') && $('sshDrawer').classList.contains('open') && $('sshDrawer').classList.contains('as-page')) hideSshDrawer();
+  if (leaving('terminals') && $('sshDrawer').classList.contains('open')) hideSshDrawer();
   if (leaving('history') && $('auditDrawer').classList.contains('open')) closeAudit();
   if (leaving('connectors') && $('connectorsDrawer').classList.contains('open')) closeConnectors();
   if (leaving('projects') && $('projectsDrawer').classList.contains('open')) closeProjects();
@@ -104,6 +107,7 @@ function applyRoute(resolved, path, options = {}) {
       break; }
     case 'deploy': { const targetId = resolved.parts[0] === 'targets' ? resolved.parts[1] : undefined; openDeploy(targetId).then(() => { if (targetId && !dp.targets.some((t) => t.id === targetId)) { toast('That deploy target no longer exists', 'warning'); navigate('#/deployments', { replace: true }); } }); break; }
     case 'servers': openServers(); if (resolved.parts[1] === 'terminal' && resolved.parts[0]) openServerTerminal(resolved.parts[0]); break;
+    case 'terminals': openTerminals(resolved.parts[0]); break;
     case 'history': openAudit(); break;
     case 'connectors': openConnectors(resolved.parts[1] === 'repos' ? resolved.parts[0] : undefined); break;
     case 'projects': openProjects(); break;
@@ -111,7 +115,6 @@ function applyRoute(resolved, path, options = {}) {
     case 'connections': { $('connForm').hidden = true; loadConns().catch((e) => toast(e.message, 'error')); const d = $('connModal'); if (!d.open) d.show(); break; }
   }
   for (const id of ['serversDrawer', 'auditDrawer']) $(id).classList.toggle('as-page', resolved.id === (id === 'serversDrawer' ? 'servers' : 'history'));
-  $('sshDrawer').classList.toggle('as-page', resolved.id === 'servers' && resolved.parts[1] === 'terminal');
   renderNavActive(resolved.id);
   renderPageHead(resolved.id, item);
   updateAgentContext(item);
@@ -152,10 +155,10 @@ for (const [id, routeId] of [['serversDrawer', 'servers'], ['auditDrawer', 'hist
     if (r && r.id === routeId) navigate(ROUTE_HOME, { replace: true, focus: false }); // the drawer's own close restores focus to its opener
   }).observe($(id), { attributes: true, attributeFilter: ['class'] });
 }
-new MutationObserver(() => { // closing the terminal panel returns to the server list
+new MutationObserver(() => { // closing the Terminals view leaves the page; the sessions keep running
   if ($('sshDrawer').classList.contains('open')) return;
   const r = parseRoute(location.hash);
-  if (r && r.id === 'servers' && r.parts[1] === 'terminal') navigate('#/servers', { replace: true, focus: false });
+  if (r && r.id === 'terminals') navigate(ROUTE_HOME, { replace: true, focus: false });
 }).observe($('sshDrawer'), { attributes: true, attributeFilter: ['class'] });
 $('schemaModal').addEventListener('close', () => { const r = parseRoute(location.hash); if (r && r.id === 'schema') navigate('#/database/updates', { replace: true, focus: false }); });
 $('settingsModal').addEventListener('close', () => { const r = parseRoute(location.hash); if (r && r.id === 'settings') navigate(previousPageRoute || ROUTE_HOME, { replace: true, focus: false }); });
@@ -166,21 +169,28 @@ if (typeof dpSelect === 'function') {
   const _dpSelect = dpSelect;
   dpSelect = function (id) { _dpSelect(id); if (parseRoute(location.hash)?.id === 'deploy' && id) { const r = `#/deployments/targets/${id}`; if (location.hash !== r) { resolving = true; history.replaceState(null, '', r); resolving = false; currentRoute = r.slice(1); try { localStorage.setItem('st-last-route', r); } catch {} } } };
 }
-/* servers: a terminal opened from a server card gets its own address */
+/* Opening a terminal anywhere lands on the Terminals view, addressed by its session. */
 if (typeof openSsh === 'function') {
   const _openSsh = openSsh;
   openSsh = async function (profileId, opts = {}) {
-    await _openSsh(profileId, opts);
-    if (typeof profileId === 'string' && parseRoute(location.hash)?.id === 'servers') {
-      $('sshDrawer').classList.add('as-page');
-      const r = `#/servers/${profileId}/terminal`;
+    const attached = await _openSsh(profileId, opts);
+    const sid = attached && attached.sessionId;
+    if (sid && $('sshDrawer').classList.contains('open')) {
+      const r = '#/terminals/' + sid;
       if (location.hash !== r) { resolving = true; history.replaceState(null, '', r); resolving = false; currentRoute = r.slice(1); }
+      document.body.classList.remove(...[...document.body.classList].filter((c) => c.startsWith('page-')));
+      document.body.classList.add('page-terminals');
+      renderNavActive('terminals');
+      renderPageHead('terminals', navItem('terminals'));
+      document.title = 'Terminals · Server Tools';
     }
+    return attached;
   };
 }
+/* legacy address #/servers/<id>/terminal: open that server's session and move to Terminals */
 async function openServerTerminal(profileId) {
   const existing = [...consoles.values()].find((c) => c.profileId === profileId);
-  if (existing) { showSshDrawer(); activateConsole(existing.id); $('sshDrawer').classList.add('as-page'); return; }
+  if (existing) { showSshDrawer(); activateConsole(existing.id); return; }
   let label = 'server';
   try { const d = await api('/api/ssh/sessions'); const s = d.sessions.find((x) => x.id === profileId); if (!s) { toast('That server profile no longer exists', 'warning'); return navigate('#/servers', { replace: true }); } label = s.name || label; } catch {}
   await openSsh(profileId, { label });
@@ -200,6 +210,8 @@ function renderNav() {
   nav.querySelectorAll('a[data-nav]').forEach((a) => a.addEventListener('click', (e) => { e.preventDefault(); navigate(a.getAttribute('href')); }));
   nav.querySelectorAll('button[data-action]').forEach((b) => b.addEventListener('click', () => { runNavAction(b.dataset.action); closeMobileNav(); }));
   $('btnNavCollapse').addEventListener('click', () => setNavCollapsed(!document.body.classList.contains('nav-collapsed')));
+  NAV_ITEMS.filter((i) => i.liveOnly).forEach((i) => { const el = nav.querySelector(`[data-nav="${i.id}"]`); if (el) el.hidden = true; });
+  if (typeof renderTerminalsNavEntry === 'function') renderTerminalsNavEntry();
 }
 function runNavAction(action) { if (action === 'tour') startTour(); }
 function renderNavActive(id) {

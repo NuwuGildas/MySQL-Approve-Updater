@@ -204,6 +204,22 @@
           <label class="chk"><input type="checkbox" id="setAiPreShip" data-assist="preShipReview"> Pre-ship checklist</label>
           <p class="sg-hint">Ship first asks the assistant to review the manifest, the latest plan and the last run. Its verdict and findings are shown in the confirmation; you decide.</p>
         </div>
+        <div class="settings-group">
+          <div class="sg-head">Server access (SSH) <span class="hint" style="margin:0">only for the server you attach from <b>Servers → Connect with AI chat</b></span></div>
+          <p class="sg-hint">The assistant works on one attached server at a time. Every command is classified before it runs: read, write or destructive. Anything interactive (editors, <code>top</code>, nested <code>ssh</code>) is always refused, and every command is written to History.</p>
+          <label class="chk"><input type="checkbox" id="setAiSshRead" data-assist="sshRead"> Read-only commands</label>
+          <p class="sg-hint">Lets it look around by itself: <code>ls</code>, <code>cat</code>, <code>df</code>, <code>systemctl status</code>, <code>journalctl</code>, <code>docker ps</code>, <code>git log</code>… These run immediately and change nothing.</p>
+          <label class="chk"><input type="checkbox" id="setAiSshWrite" data-assist="sshWrite"> Write commands <span class="hint">(approval required)</span></label>
+          <p class="sg-hint">Editing files, restarting services, installing packages, <code>git pull</code>. Each command appears in the chat as a card showing exactly what would run; nothing happens until you press <b>Run it</b>.</p>
+          <label class="chk"><input type="checkbox" id="setAiSshDestructive" data-assist="sshDestructive"> Destructive commands <span class="hint">(approval always required)</span></label>
+          <p class="sg-hint">Deleting, formatting, rebooting, dropping databases, <code>git reset --hard</code>. These are never run automatically, even in auto mode.</p>
+          <label class="chk"><input type="checkbox" id="setAiSshSudo" data-assist="sshSudo"> Allow <code>sudo</code></label>
+          <p class="sg-hint">Without this, any command using sudo is refused whatever its class.</p>
+          <label class="chk"><input type="checkbox" id="setAiSshAuto" data-assist="sshAuto"> Auto mode</label>
+          <p class="sg-hint">Write commands you allowed above run without asking each time, so the assistant can finish a task in one go. Destructive commands still stop for approval. Read-only commands never needed it.</p>
+          <label class="chk"><input type="checkbox" id="setAiSshMemory" data-assist="sshMemory"> Remember each server's conversation</label>
+          <p class="sg-hint">What you discussed and which commands ran are kept per server in <code>ssh-agent-memory.json</code>, and given back as context the next time you connect. The assistant can search it (<code>ssh_recall</code>) and add notes (<code>ssh_remember</code>).</p>
+        </div>
       </div>
 
       <div class="settings-section" data-sec="db">
@@ -307,7 +323,7 @@
     <span class="ag-ico"><img class="ai-mini rest" src="/assets/robot-logo-animated_1.svg" alt="" aria-hidden="true"><img class="ai-mini focus" src="/assets/robot-logo-focused.svg" alt="" aria-hidden="true"></span>
     <div class="ag-title">
       <h2>AI Agent</h2>
-      <div class="ag-sub"><span id="agentStatus"></span><span class="ag-ctx" id="agentCtx"></span><span class="ag-ctx ag-proj" id="agentProj"></span></div>
+      <div class="ag-sub"><span id="agentStatus"></span><span class="ag-ctx" id="agentCtx"></span><span class="ag-ctx ag-proj" id="agentProj"></span><span class="ag-ctx ag-ssh" id="agentSsh" hidden></span></div>
     </div>
     <div class="ag-tools">
       <div class="ag-menu-wrap">
@@ -993,7 +1009,7 @@
     <section class="tf-sec" aria-labelledby="tfSrcH">
       <h4 id="tfSrcH">Source</h4>
       <div class="tf-grid">
-        <div class="tf-field"><label for="dtProject">Project</label><select id="dtProject" required aria-describedby="dtProjectHelp"></select><p class="tf-help" id="dtProjectHelp">Every deployment belongs to one project.</p></div>
+        <div class="tf-field"><label for="dtProject">Project</label><select id="dtProject" required aria-describedby="dtProjectHelp"><option value="general">General</option></select><p class="tf-help" id="dtProjectHelp">Every deployment belongs to one project.</p></div>
         <div class="tf-field"><label for="dtName">Name</label><input id="dtName" required maxlength="80" placeholder="shop-prod" autocomplete="off"><p class="tf-help">Prefilled from the repository; edit freely.</p></div>
         <div class="tf-field"><label for="dtRepo">Repository</label><select id="dtRepo" required></select></div>
         <div class="tf-field"><label for="dtBranchView">Branch</label><input id="dtBranchView" readonly tabindex="-1" aria-describedby="dtBranchHelp"><p class="tf-help" id="dtBranchHelp">Repository branch; the automation section can follow another one.</p></div>
@@ -1152,7 +1168,7 @@
   </div>
   <form id="wzForm" method="dialog">
     <section class="wz-step on" data-step="1">
-      <label for="wzProject">Project</label><select id="wzProject" required aria-describedby="wzProjectHelp"></select>
+      <label for="wzProject">Project</label><select id="wzProject" required aria-describedby="wzProjectHelp"><option value="general">General</option></select>
       <p class="hint" id="wzProjectHelp">This project will own the deployment. Repositories and servers remain reusable.</p>
       <div class="wz-choice" id="wzSourceKind">
         <button type="button" class="on" data-v="git"><b>Git repository</b><span>GitHub, GitLab, Bitbucket or any git URL</span></button>
@@ -1262,7 +1278,7 @@
   <form id="dpImportForm" method="dialog">
     <h3>Import configuration</h3>
     <span class="hint">Paste an export (or choose the file). Repos, targets and templates whose names are new are created; secret values are never included: you will be told which ones to add.</span>
-    <label for="dpImportProject">Destination project</label><select id="dpImportProject" required aria-describedby="dpImportProjectHelp"></select>
+    <label for="dpImportProject">Destination project</label><select id="dpImportProject" required aria-describedby="dpImportProjectHelp"><option value="general">General</option></select>
     <p class="hint" id="dpImportProjectHelp">All newly imported deployments belong to this project. Repositories and templates remain reusable.</p>
     <input type="file" id="dpImportFile" accept="application/json" style="margin:.6rem 0 .3rem">
     <textarea id="dpImportText" class="dp-code" rows="8" spellcheck="false" placeholder='{ "format": "ascension-config", ... }'></textarea>
@@ -1294,7 +1310,7 @@
     <div class="dp-card" style="margin:.7rem 0 0;padding:.55rem .75rem">
       <label class="chk" style="margin:0"><input type="checkbox" id="dcMakeTarget"> <b>Also create a deploy target</b> on this server</label>
       <div class="row" id="dcTargetRow" hidden>
-        <div style="flex:2"><label for="dcProject">Project</label><select id="dcProject" disabled></select></div>
+        <div style="flex:2"><label for="dcProject">Project</label><select id="dcProject" disabled><option value="general">General</option></select></div>
         <div style="flex:2"><label for="dcRepo">Repository</label><select id="dcRepo"></select></div>
         <div style="flex:2"><label for="dcTargetName">Target name (also the app folder)</label><input id="dcTargetName" placeholder="shop-prod"></div>
         <div style="flex:2"><label for="dcHealth">Health URL (defaults to http://&lt;ip&gt;/)</label><input id="dcHealth" placeholder="https://shop.example.com/up"></div>
@@ -1305,16 +1321,57 @@
   </form>
 </dialog>
 
-<aside id="sshDrawer" aria-label="SSH console" inert>
-  <div id="sshResize" title="Drag to resize"></div>
+<!-- Terminals: a first-class view in the shell flow (layout-guide.md §12a), not a drawer.
+     No slide-in, no dock orientation, no resize handle, no pop-out: the shell places it. -->
+<aside id="sshDrawer" aria-label="Terminals" inert>
   <div class="ssh-head">
-    <h2 style="margin:0;font-size:.85rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)">SSH consoles <span class="sec-hint" id="sshHostInfo"></span></h2>
+    <h2 style="margin:0;font-size:.85rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)">Terminals <span class="sec-hint" id="sshHostInfo"></span></h2>
     <span class="spacer"></span>
-    <button class="btn-dock" title="Drawer orientation: vertical (right) or horizontal (bottom); applies to all drawers">Vertical</button>
-    <button id="btnSshClose" title="Close docked consoles (Esc)">✕</button>
   </div>
   <div id="sshTabs" hidden></div>
-  <div id="sshConsoleHost"></div>
+  <!-- the ONE announcer for terminal ownership: both panes mirror the badge, only this speaks -->
+  <p id="wsOwnerLive" class="sr-only" role="status" aria-live="polite"></p>
+  <!-- below 1100px the two panes become Terminal/Chat tabs; at or above it they sit side by side -->
+  <div class="ws-tabs" id="wsTabs" role="tablist" aria-label="Terminal workspace" hidden>
+    <button type="button" class="ws-tab" id="wsTabTerminal" role="tab" aria-controls="wsPaneTerminal" aria-selected="true">Terminal</button>
+    <button type="button" class="ws-tab" id="wsTabChat" role="tab" aria-controls="wsPaneChat" aria-selected="false" tabindex="-1">Chat</button>
+  </div>
+  <div class="ws-split" id="wsSplit">
+    <div class="ws-pane ws-pane-term" id="wsPaneTerminal">
+      <!-- the ONE session bar: which server and session, the picker over every live session,
+           new/end, who is driving and the control action -->
+      <div class="ws-ident" id="wsIdent" hidden>
+        <span class="ws-server" id="wsServer"></span>
+        <span class="ws-sep" aria-hidden="true">·</span>
+        <label class="sr-only" for="wsSessionPick">Terminal session</label>
+        <select id="wsSessionPick" class="ws-session-pick"></select>
+        <button type="button" id="btnWsClear">Clear</button>
+        <button type="button" id="btnWsNewSession">New session</button>
+        <button type="button" id="btnWsEndSession" class="danger">End session</button>
+        <span class="ws-owner" id="wsOwner" data-owner="user"><span class="ws-owner-dot" aria-hidden="true"></span><span class="ws-owner-text"></span></span>
+        <span class="spacer"></span>
+        <button type="button" id="btnWsControl" class="ws-control"></button>
+      </div>
+      <div id="sshConsoleHost"></div>
+      <!-- no console open: the view still explains itself and points at the servers page -->
+      <div class="ws-empty" id="wsEmpty" hidden>
+        <h3>No terminal is open</h3>
+        <p class="hint">A terminal session keeps running on its server even when this view is closed. Open one from a server, or resume a live session below.</p>
+        <div class="ws-empty-list" id="wsEmptyList"></div>
+        <button type="button" class="primary" id="btnWsGoServers">Go to Servers</button>
+      </div>
+    </div>
+    <div class="ws-pane ws-pane-chat" id="wsPaneChat" hidden>
+      <div class="ws-chat-bar">
+        <span class="ws-chat-ident" id="wsChatIdent"></span>
+        <!-- the ownership state is mirrored here (aria-hidden: #wsOwnerLive is the single announcer)
+             and the control action is repeated because approval cards are read on this side -->
+        <span class="ws-owner" id="wsChatOwner" data-owner="user" aria-hidden="true"><span class="ws-owner-dot"></span><span class="ws-owner-text"></span></span>
+        <button type="button" id="btnWsControlChat" class="ws-control"></button>
+      </div>
+      <div class="ws-chat-host" id="wsChatHost"></div>
+    </div>
+  </div>
 </aside>
 
 <dialog id="connFormModal" aria-label="Connection profile">

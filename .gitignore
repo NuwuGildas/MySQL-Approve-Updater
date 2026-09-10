@@ -31,3 +31,7 @@ projects.json*
 # per-project AI chat history (lib/projects/chat.js) + legacy single chat backup
 project-chats.json*
 agent-chat.json.*
+# managed CLI provider homes (lib/agent-isolation) and one assistant conversation per terminal session
+/agent-home/
+ssh-session-chats.json
+ssh-agent-memory.json

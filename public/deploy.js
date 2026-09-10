@@ -17,9 +17,13 @@ const dpTarget = () => dp.targets.find((t) => t.id === dp.sel) || null;
 const dpProjects = () => typeof projects !== 'undefined' && projects.length ? projects : dp.projects;
 const dpProjectName = (id) => dpProjects().find((p) => p.id === id)?.name || id || 'Project unavailable';
 function dpFillProjectSelect(id, selected) {
+  const fill = (list) => {
+    const preferred = selected || (typeof currentProjectId === 'string' ? currentProjectId : 'general');
+    dpFillSelect($(id), list.map((p) => ({ value: p.id, label: p.name })), preferred, list.some((p) => p.id === preferred) ? null : 'Choose a project');
+  };
   const list = dpProjects();
-  const preferred = selected || (typeof currentProjectId === 'string' ? currentProjectId : 'general');
-  dpFillSelect($(id), list.map((p) => ({ value: p.id, label: p.name })), preferred, list.some((p) => p.id === preferred) ? null : 'Choose a project');
+  if (list.length) return fill(list);
+  api(`/api/projects?picker=1&ts=${Date.now()}`).then((d) => { dp.projects = Array.isArray(d.projects) ? d.projects : []; fill(dp.projects); }).catch(() => {});
 }
 function dpValidProject(id) { return dpProjects().some((p) => p.id === id); }
 const dpRepoOf = (t) => dp.repos.find((r) => r.id === t?.repoId) || null;

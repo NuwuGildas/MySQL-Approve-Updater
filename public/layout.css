@@ -21,6 +21,11 @@ body.shell .sse-link { font-size: .74rem; }
 .nav-link .nav-ico { width: 20px; height: 20px; flex: none; display: grid; place-items: center; color: var(--muted); }
 .nav-link.on .nav-ico { color: #cfe4ff; }
 .nav-link .nav-ico svg { width: 18px; height: 18px; }
+.nav-link[hidden] { display: none; }
+/* how many shells are live: the entry is only there while at least one is */
+.nav-count { display: inline-grid; place-items: center; min-width: 1.15rem; height: 1.15rem; padding: 0 .3rem; margin-left: .35rem; border-radius: 99px; background: var(--green); color: #06210f; font-size: .68rem; font-weight: 700; }
+body.nav-collapsed .nav-link[data-nav="terminals"] .nav-ico { position: relative; }
+body.nav-collapsed .nav-link[data-nav="terminals"] .nav-ico::after { content: ""; position: absolute; top: -2px; right: -2px; width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
 .nav-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .nav-foot { border-top: 1px solid var(--border); padding: .5rem .55rem; display: flex; flex-direction: column; gap: .1rem; }
 body.nav-collapsed .nav-label, body.nav-collapsed .nav-group-label { display: none; }
@@ -35,16 +40,17 @@ body.shell #compass { max-width: none; }
 body.shell #sqlConsole { left: var(--nav-w); }
 body.shell #deployDrawer::before { display: none; }
 body.shell #btnDpClose { display: none; } /* the sidebar is the way out; Escape still returns Home */
-/* The Ascension, Servers and History are views in the page flow (no fixed drawer, no slide-in) */
-body.shell #deployDrawer, body.shell #serversDrawer, body.shell #auditDrawer, body.shell #connectorsDrawer, body.shell #projectsDrawer,
-body.shell.drawers-h #deployDrawer, body.shell.drawers-h #serversDrawer, body.shell.drawers-h #auditDrawer {
+/* The Ascension, Servers, Terminals, Connectors, Projects and History are views in the page flow
+   (no fixed drawer, no slide-in), so the header and sidebar geometry hold by construction */
+body.shell #deployDrawer, body.shell #serversDrawer, body.shell #sshDrawer, body.shell #auditDrawer, body.shell #connectorsDrawer, body.shell #projectsDrawer,
+body.shell.drawers-h #deployDrawer, body.shell.drawers-h #serversDrawer, body.shell.drawers-h #sshDrawer, body.shell.drawers-h #auditDrawer {
   position: relative; inset: auto; top: auto; left: auto; right: auto; bottom: auto; z-index: auto;
   margin-left: var(--nav-w); width: auto; min-width: 0; max-width: none;
   height: calc(100dvh - var(--hdr-h)); max-height: none;
   transform: none !important; transition: none !important; visibility: visible;
   border: 0; box-shadow: none; display: none; flex-direction: column;
 }
-body.shell #deployDrawer.open, body.shell #serversDrawer.open, body.shell #auditDrawer.open, body.shell #connectorsDrawer.open, body.shell #projectsDrawer.open { display: flex; }
+body.shell #deployDrawer.open, body.shell #serversDrawer.open, body.shell #sshDrawer.open, body.shell #auditDrawer.open, body.shell #connectorsDrawer.open, body.shell #projectsDrawer.open { display: flex; }
 body.shell #serversDrawer, body.shell #auditDrawer, body.shell #connectorsDrawer, body.shell #projectsDrawer { padding: .9rem clamp(1rem, 2.5vw, 1.6rem); }
 /* one active view: the workspace, the hub and the SQL bar hide while another view is shown */
 body.shell:not(.page-mysql) main { display: none !important; }
@@ -210,12 +216,51 @@ body.shell #settingsModal[open]:not([data-st-modal]) .settings-titlebar .app-log
 body.shell #connModal[open]:not([data-st-modal]) { padding: 1rem clamp(1rem, 3vw, 2rem); }
 body.shell #connModal[open]:not([data-st-modal]) > * { max-width: 920px; }
 @media (max-width: 767px) { body.shell #settingsModal[open]:not([data-st-modal]), body.shell #connModal[open]:not([data-st-modal]) { left: 0; } }
-/* ---- Servers: the terminal panel is the server's detail page (§12) ---- */
-body.shell #sshDrawer.as-page { top: var(--hdr-h); left: var(--nav-w); right: 0; width: auto; max-width: none; height: auto; border-left: 0; box-shadow: none; z-index: 21; }
-body.shell #sshDrawer.as-page.open { transform: none; }
-body.shell.drawers-h #sshDrawer.as-page { top: var(--hdr-h); height: auto; max-height: none; border-top: 0; transform: none; }
-body.shell #sshDrawer.as-page #sshResize { display: none; }
-@media (max-width: 767px) { body.shell #sshDrawer.as-page { left: 0; } }
+/* Terminals needs no geometry of its own: it is in the rule above with the other views, so the
+   header (--hdr-h) and the sidebar (--nav-w) bound it by construction at every width, in every
+   dock orientation and with the sidebar expanded, collapsed or off-canvas. */
+
+/* ---- Terminal workspace (§12a): terminal + its session's chat as one page ----
+   body.ws-page = the workspace is up (Servers → terminal); body.ws-wide = wide enough (>=1100px)
+   to show both panes at once. Below that they are Terminal/Chat tabs and only the selected pane
+   is in the flow. The body classes deliberately do NOT reuse the .ws-split component class: a body
+   class colliding with a component class silently applies that component's rules to <body>. */
+body.ws-wide .ws-pane-chat { flex: 0 0 clamp(320px, 34%, 460px); border-left: 1px solid var(--border); padding-left: .65rem; }
+/* Side by side, two identity lines read as a duplicate: the terminal pane's session bar is already
+   on screen, so the chat pane shows its own only when it stands alone as a tab. The same argument
+   applies to the ownership badge. The control ACTION stays in both panes at every width, because
+   it is read and used beside an approval card. */
+/* Side by side, the chat pane's copies of the identity, the badge AND the control read as duplicates:
+   the user rejected seeing "Give AI control" twice a few hundred pixels apart. The whole bar goes while
+   both panes are on screen; as a standalone tab the chat keeps all three, so the action stays reachable
+   wherever it is the only pane. Do not restore the control here without asking. */
+body.ws-wide .ws-chat-bar { display: none; }
+/* The console's own bar only appears when this VIEW has lost its socket: everything else it used
+   to carry (identity, ownership, clear, session actions) now lives once in the session bar. */
+body.ws-page .ssh-console .ssh-console-bar { display: none; }
+body.ws-page .ssh-console.view-detached .ssh-console-bar { display: flex; }
+body.ws-page #sshDrawer .ssh-head h2 { flex: none; }
+body.ws-page #sshTabs { margin-top: .1rem; }
+@media (max-width: 767px) {
+  body.ws-page .ws-ident { row-gap: .3rem; }
+  body.ws-page .ws-server { max-width: 100%; }
+  .ws-tab { flex: 1; }
+}
+
+/* The assistant window parked in the chat pane: the SAME #agentDrawer element, moved out of the
+   top layer so it can sit beside the terminal instead of over it. These rules must beat
+   #agentDrawer:not(:popover-open){display:none} in style.css, hence layout.css (it loads last). */
+#agentDrawer.ag-docked { position: static; inset: auto; z-index: auto; margin: 0; width: auto; height: auto; min-width: 0; min-height: 0; max-width: none; max-height: none; flex: 1; display: flex; border-radius: 10px; box-shadow: none; resize: none; }
+#agentDrawer.ag-docked > div:first-child { cursor: default; user-select: auto; touch-action: auto; }
+/* no close and no "dock beside the workspace": the pane is the window now */
+#agentDrawer.ag-docked #btnAgentClose, #agentDrawer.ag-docked #btnAgentDock { display: none; }
+/* the §16 "dock beside the workspace" preference must not fight the split: while the assistant is
+   parked in a pane the pane sizes it, and the terminal page keeps the full width */
+@media (min-width: 1440px) {
+  body.shell.agent-dock-pref.agent-open #agentDrawer.ag-docked { top: auto !important; right: auto !important; bottom: auto !important; left: auto !important; width: auto !important; height: auto !important; }
+  /* Terminals is an in-flow view: the assistant pane sizes itself inside it, so the view keeps
+     its full width and needs no right offset of its own. */
+}
 /* ---- Assistant docked beside the workspace on wide screens (§16) ---- */
 :root { --agent-w: 400px; }
 @media (min-width: 1440px) {
@@ -223,7 +268,6 @@ body.shell #sshDrawer.as-page #sshResize { display: none; }
   body.shell.agent-dock-pref.agent-open #agentDrawer .ag-head { cursor: default; }
   body.shell.agent-dock-pref.agent-open #compass, body.shell.agent-dock-pref.agent-open main, body.shell.agent-dock-pref.agent-open #pageHead { margin-right: var(--agent-w); }
   body.shell.agent-dock-pref.agent-open #deployDrawer, body.shell.agent-dock-pref.agent-open #serversDrawer, body.shell.agent-dock-pref.agent-open #auditDrawer, body.shell.agent-dock-pref.agent-open #connectorsDrawer, body.shell.agent-dock-pref.agent-open #projectsDrawer { margin-right: var(--agent-w); }
-  body.shell.agent-dock-pref.agent-open #sshDrawer.as-page,
   body.shell.agent-dock-pref.agent-open #sqlConsole, body.shell.agent-dock-pref.agent-open #schemaModal[open]:not([data-st-modal]), body.shell.agent-dock-pref.agent-open #settingsModal[open]:not([data-st-modal]), body.shell.agent-dock-pref.agent-open #connModal[open]:not([data-st-modal]) { right: var(--agent-w); }
 }
 

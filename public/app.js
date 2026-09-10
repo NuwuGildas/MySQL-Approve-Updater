@@ -3,6 +3,28 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 let state = { session: null, transformTypes: {}, rules: [], schema: null, maxPreviewRows: 500 };
+let sshAgent = { attached: false, profileId: null, name: null, guard: {}, memory: null }; // the AI assistant's SSH attachment (lib/ssh-agent)
+let agentSessionEpoch = 0;
+let agentLoadSeq = 0;
+const agentPendingSessions = new Set();
+/* The assistant addresses ONE of two conversations: a terminal session's, while the user has a
+   server session selected, or the ACTIVE PROJECT's, when they have not. "No session" is a valid
+   scope, not a disabled state, so everything below - the guards included - settles which. */
+const agentSessionId = () => sshAgent.sessionId || null;
+// A shell that has gone: its conversation is still readable, but nothing can be typed or run into it.
+const DEAD_TERMINAL = ['closed', 'ended', 'error', 'disconnected'];
+const sessionIsDead = (s) => DEAD_TERMINAL.includes(String(s?.terminal?.status || s?.status || '').toLowerCase());
+// only a BOUND session can be ended; with none bound the conversation is the project's, always open
+const agentSessionEnded = () => !!agentSessionId() && sessionIsDead(sshAgent);
+/* What the SERVER calls this conversation on the live stream: the terminal session id, or
+   "project:<id>" when there is no session. It is echoed from GET /api/agent, never constructed
+   here, and it is what every 'agent' event is matched against. */
+let agentConversationId = null;
+const agentConversation = () => agentConversationId || agentSessionId();
+const agentSessionBody = (fields = {}, sessionId = agentSessionId()) =>
+  JSON.stringify(sessionId ? { ...fields, sessionId } : { ...fields, projectId: currentProjectId });
+const agentSessionUrl = (path, extra = {}) =>
+  `${path}?${new URLSearchParams({ ...extra, ...(agentSessionId() ? { sessionId: agentSessionId() } : { projectId: currentProjectId }) })}`;
 
 /* ---------- API helper ---------- */
 async function api(url, opts) {
@@ -1718,10 +1740,45 @@ $('btnAbort').addEventListener('click', async () => {
   if (ok) api('/api/session/abort', { method: 'POST' }).catch((e) => toast(e.message));
 });
 
-/* ---------- SSE ---------- */
+/* ---------- SSE ----------
+   The 'agent' stream is conversation-scoped on the server (lib/agent-workflow agentEventForViewer):
+   an UNSCOPED subscriber only ever receives operational summaries, never a word of what was said.
+   So the stream is NAMED at subscribe time and re-pointed at the conversation on screen through
+   POST /api/events/scope, because EventSource cannot send anything after it is opened. The scope
+   value is the conversationId the server reports (a terminal session, or "project:<id>"). */
+const sseStreamId = 'st-' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+let sseScopedTo;            // the conversation the live stream is currently pointed at ('' = none)
+let sseSource = null;
+const sseUrl = () => '/api/events?' + new URLSearchParams({ stream: sseStreamId, ...(agentConversation() ? { sessionId: agentConversation() } : {}) });
+function scopeSse(conversationId = agentConversation()) {
+  const want = conversationId || '';
+  if (!sseSource || sseScopedTo === want) return;
+  sseScopedTo = want;
+  api('/api/events/scope', { method: 'POST', body: JSON.stringify({ stream: sseStreamId, sessionId: want || null }) })
+    .catch(() => { sseScopedTo = undefined; }); // an ended/unknown conversation: retry on the next switch
+}
+
+/* Every 'agent' event names its session AND its turn. An event for another conversation, for a turn
+   the user stopped, or for a turn that was superseded, is dropped rather than painted somewhere wrong. */
+let agentTurn = null; // { sessionId, turnId, cancelled } for the turn this tab is waiting on
+function agentEventForTurn(ev) {
+  const turn = agentTurn;
+  if (!turn || turn.cancelled) return false;      // nothing running, or the user pressed Stop
+  if (turn.sessionId !== agentSessionId()) return false;
+  if (!ev.turnId) return true;                    // unnamed: an older server, still ours
+  // the first turn id we see IS this turn: the HTTP reply that carries it has not landed yet.
+  // Once pinned it never moves, so any other id belongs to a turn we stopped showing.
+  if (!turn.turnId) turn.turnId = ev.turnId;
+  return turn.turnId === ev.turnId;
+}
 function connectSSE() {
-  const es = new EventSource('/api/events');
-  es.onopen = () => $('sseDot').classList.add('ok');
+  const es = sseSource = new EventSource(sseUrl());
+  es.onopen = () => {
+    $('sseDot').classList.add('ok');
+    // a reconnect reuses the original URL, so record what it asked for and re-scope if we moved on
+    sseScopedTo = new URLSearchParams(es.url.split('?')[1] || '').get('sessionId') || '';
+    scopeSse();
+  };
   es.onerror = () => $('sseDot').classList.remove('ok');
   es.addEventListener('session', (e) => {
     state.session = JSON.parse(e.data);
@@ -1741,7 +1798,17 @@ function connectSSE() {
     renderQueue(); renderDashboard();
     if (modalChangeId) renderCardModal();
   });
-  es.addEventListener('log', (e) => appendLog(JSON.parse(e.data)));
+  es.addEventListener('log', (e) => {
+    const entry = JSON.parse(e.data);
+    appendLog(entry);
+    // a shell opened or ended anywhere (another tab, an approved command) changes what is live
+    if (/terminal/i.test(entry.msg || '')) refreshLiveTerminals();
+  });
+  es.addEventListener('ssh-agent', (e) => { try {
+    const update = JSON.parse(e.data);
+    if (update.sessionId && update.sessionId === agentSessionId()) { sshAgent = { ...sshAgent, ...update }; renderSshAgentChip(); }
+    if ($('serversDrawer').classList.contains('open')) loadServers();
+  } catch {} });
   es.addEventListener('deploy', (e) => { try { onDeployEvent(JSON.parse(e.data)); } catch (err) { console.error('deploy event', err); } });
   es.addEventListener('preview', (e) => {
     const p = JSON.parse(e.data);
@@ -1753,8 +1820,21 @@ function connectSSE() {
     queueStep(p.text);
   });
   es.addEventListener('agent', (e) => {
-    if (!agentFeedEl || !agentFeedEl.isConnected) return;
     const ev = JSON.parse(e.data);
+    // an event names its conversation in sessionId (a terminal session, or "project:<id>");
+    // anything that is not the one on screen is not ours to paint
+    if ((ev.sessionId || null) !== agentConversation()) return;
+    if (ev.type === 'done') {
+      // exactly one completion per turn, on every path: final | awaiting-approval | cancelled | failed
+      agentPendingSessions.delete(ev.sessionId);
+      const mine = agentTurn && !agentTurn.cancelled && (!ev.turnId || !agentTurn.turnId || agentTurn.turnId === ev.turnId);
+      // a turn this tab is awaiting paints from its own HTTP reply; anything else (a decision's
+      // continuation, another viewer of the same session) repaints the saved conversation
+      if (!mine && $('agentDrawer').classList.contains('open')) openAgent();
+      return;
+    }
+    if (!agentEventForTurn(ev)) return; // cancelled or superseded turn: drop it
+    if (!agentFeedEl || !agentFeedEl.isConnected) return;
     // activity list (same step component as the preview loader): previous step ticks off, the new one is active
     const feed = agentFeedEl;
     const active = feed.querySelector('.ql-step.active');
@@ -2353,7 +2433,7 @@ function projectUrl(path, extra = {}) {
   return `${path}?${q}`;
 }
 /** Body for POST assistant calls: the given fields plus the active project. */
-const projectBody = (fields = {}) => JSON.stringify({ ...fields, projectId: currentProjectId });
+const projectBody = (fields = {}) => JSON.stringify({ ...fields, projectId: currentProjectId, sessionId: agentSessionId() });
 function renderProjectContext() {
   const p = currentProject();
   const name = currentProjectName();
@@ -2372,7 +2452,7 @@ function renderProjectContext() {
   const chip = $('pageProject');
   if (chip) { $('pageProjectName').textContent = name; chip.style.setProperty('--proj-color', color || 'var(--accent)'); }
   const ag = $('agentProj');
-  if (ag) ag.textContent = `· ${name}`;
+  if (ag) { ag.textContent = ''; ag.hidden = true; }
 }
 async function loadProjects() {
   try {
@@ -2391,16 +2471,17 @@ async function loadProjects() {
   renderProjectContext();
   return projects;
 }
-/** Switch the active project: persist, refresh the context chips and reload the assistant conversation. */
+/** Project navigation is independent of the selected server session and its chat. */
 function setProject(id) {
   if (!id || id === currentProjectId) return;
-  if (agentBusy) { toast('Wait for the assistant to finish (or stop it) before switching projects', 'warning'); renderProjectContext(); return; }
   currentProjectId = id;
   try { localStorage.setItem(PROJECT_KEY, id); } catch {}
   renderProjectContext();
   document.dispatchEvent(new CustomEvent('st:project', { detail: { id, project: currentProject() } }));
   toast(`Project: ${currentProjectName()}`);
-  if ($('agentDrawer').classList.contains('open')) openAgent(); // re-fetches the conversation for this project
+  // a session-bound conversation belongs to its terminal, not to the project: leave it alone.
+  // An unbound one IS the project's, so it has to follow the switch.
+  if (!agentSessionId() && (agentIsDocked() || $('agentDrawer').classList.contains('open'))) openAgent();
 }
 $('projSelect').addEventListener('change', (e) => setProject(e.target.value));
 function renderProjectMenu(filter = '') {
@@ -2421,11 +2502,16 @@ function closeProjectMenu() { const m = $('projMenu'); if (!m) return; m.hidden 
   $('projManage')?.addEventListener('click', () => { closeProjectMenu(); if (typeof navigate === 'function') navigate('#/projects'); });
 })();
 loadProjects();
+// loadSshAgent() runs once the terminal workspace is wired (end of this file): it paints the
+// session chip AND the workspace identity row, which do not exist as bindings before then.
 
 let agentBusy = false;
 let agentFeedEl = null; // live-feed container of the in-flight "Working…" bubble
+const agentCards = new Map(); // proposal id -> its card element, so a late status finds its card
 
 $('btnAiAgent').addEventListener('click', () => {
+  // in the terminal workspace the chat is a pane, not a window: reveal and focus it instead
+  if (agentIsDocked()) { setWorkspaceTab('chat'); $('agentInput')?.focus(); return; }
   if ($('agentDrawer').classList.contains('open')) closeAgentDrawer();
   else openAgent();
 });
@@ -2438,7 +2524,9 @@ function raiseAgentWindow() { // (re)show the popover so it sits on top of the t
   raiseQuickFab();
 }
 const closeAgentDrawer = () => {
+  if (agentIsDocked()) return; // parked in the terminal workspace: the pane owns it, nothing to close
   $('agentDrawer').classList.remove('open');
+  document.body.classList.remove('ssh-shared-workspace');
   const el = agentPopover(); try { if (el && el.matches(':popover-open')) el.hidePopover(); } catch {}
 };
 /* Modal dialogs without the browser's inert lock.
@@ -2539,19 +2627,28 @@ document.addEventListener('keydown', (e) => {
 });
 
 async function openAgent() { // never closes whatever view/module is open: the window floats above it
+  // With no terminal session bound this loads the ACTIVE PROJECT's conversation, exactly as the
+  // assistant behaved before terminal sessions existed. It is a scope, not a missing prerequisite.
+  const sessionId = agentSessionId(), epoch = agentSessionEpoch, request = ++agentLoadSeq;
   $('agentDrawer').classList.add('open');
+  document.body.classList.toggle('ssh-shared-workspace', $('sshDrawer').classList.contains('open'));
   raiseAgentWindow();
   restoreAgentGeom(); // place/size the floating window from the last saved geometry
   $('agentConnect').hidden = true;
   $('agentChatWrap').hidden = true;
   $('btnAgentReset').hidden = $('btnAgentDisconnect').hidden = true;
-  setAgentStatus('Checking for local agents…', 'busy');
+  setAgentStatus('Loading this session…', 'busy');
   try {
-    const st = await api(projectUrl('/api/agent', { probe: '1' }));
+    const st = await api(agentSessionUrl('/api/agent', { probe: '1' }));
+    if (sessionId !== agentSessionId() || epoch !== agentSessionEpoch || request !== agentLoadSeq) return;
+    // the server names this conversation; point the live stream at it rather than guessing
+    agentConversationId = st.conversationId || st.sessionId || null;
+    scopeSse();
     document.body.classList.toggle('agent-on', st.connected);
     if (st.connected) showAgentChat(st);
     else showAgentConnect(st);
   } catch (e) {
+    if (sessionId !== agentSessionId() || epoch !== agentSessionEpoch || request !== agentLoadSeq) return;
     setAgentStatus(e.message, 'bad');
   }
 }
@@ -2562,7 +2659,7 @@ function setAgentStatus(text, state) {
 }
 
 // gate agent-dependent UI (e.g. "add to chat" on rule cards) from startup
-api(projectUrl('/api/agent')).then((st) => document.body.classList.toggle('agent-on', st.connected)).catch(() => {});
+api('/api/agent').then((st) => document.body.classList.toggle('agent-on', st.connected)).catch(() => {});
 
 function showAgentConnect(st) {
   setAgentStatus('Not connected', 'off');
@@ -2656,24 +2753,28 @@ function showAgentConnect(st) {
 
 function showAgentChat(st) {
   const providerLabel = st.providers[st.provider]?.label || st.provider;
-  setAgentStatus(`${providerLabel} · Read-only`, 'ok');
+  setAgentStatus(providerLabel, 'ok');
   $('agentConnect').hidden = true;
   $('agentChatWrap').hidden = false;
   $('btnAgentReset').hidden = $('btnAgentDisconnect').hidden = false;
-  // access chip + details popover (environment, database, access, agent, model)
-  const info = $('dbInfo').textContent;
-  const pick = (re) => ((re.exec(info) || [])[1] || '').trim();
-  const envName = pick(/profile:\s*([^·]+)/), dbName = pick(/db:\s*([^·]+)/), via = pick(/via\s+([^·]+)/);
-  $('agentScopeText').textContent = 'Read-only' + (envName ? ` · ${envName}` : '');
-  $('agentScopePop').innerHTML = `<dl>
-      ${envName ? `<dt>Environment</dt><dd>${esc(envName)}</dd>` : ''}
-      ${dbName ? `<dt>Database</dt><dd>${esc(dbName)}</dd>` : ''}
-      ${via ? `<dt>Connection</dt><dd>${esc(via)}</dd>` : ''}
-      <dt>Access</dt><dd>read-only</dd>
+  const bound = !!agentSessionId();
+  $('agentScopeText').textContent = bound ? 'Every command needs approval' : 'Read-only';
+  $('agentScopePop').innerHTML = bound
+    ? `<dl>
+      <dt>Server</dt><dd>${esc(sshAgent.name || sshAgent.host || '')}</dd>
+      <dt>Session</dt><dd>${esc(agentSessionId())}</dd>
+      <dt>Terminal control</dt><dd>${sshAgent.terminal?.control === 'assistant' ? 'AI assistant' : 'You'}</dd>
       <dt>Agent</dt><dd>${esc(providerLabel)}</dd>
       <dt>Model</dt><dd>${esc(st.model || 'provider default')}</dd>
     </dl>
-    <div class="hint">The agent can propose rule creations and edits, but each proposal needs your approval here. Every action is listed under its reply and in the activity log.</div>`;
+    <div class="hint">The assistant reads the same terminal output you see. Give it terminal control before running a proposed command. Each command needs your acceptance; reject it or reply with an alternative. This conversation belongs only to this server session.</div>`
+    : `<dl>
+      <dt>Scope</dt><dd>Project “${esc(currentProjectName())}”</dd>
+      <dt>Server access</dt><dd>None: connect a server to work on one</dd>
+      <dt>Agent</dt><dd>${esc(providerLabel)}</dd>
+      <dt>Model</dt><dd>${esc(st.model || 'provider default')}</dd>
+    </dl>
+    <div class="hint">Database and deployment access is read-only. Rule changes, deploy manifests and deploy actions come back as proposals you approve here. Open a server terminal to give this assistant a shell to work in.</div>`;
   // model switcher: provider-appropriate suggestions, current value prefilled
   const claudeModels = ['claude-fable-5', 'claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5-20251001', 'claude-sonnet-4-5', 'claude-opus-4-1', 'claude-3-5-haiku-latest'];
   const codexModels = ['gpt-5-codex', 'gpt-5', 'o4-mini', 'gpt-4.1'];
@@ -2683,28 +2784,47 @@ function showAgentChat(st) {
   agentModelSaved = st.model || '';
   renderProjectContext(); // the sub-line names the project this conversation belongs to
   $('agentMessages').innerHTML = '';
+  agentCards.clear();
   for (const m of st.chat || []) appendAgentMsg(m.role, m.text, null, m);
   for (const p of st.proposals || []) appendAgentProposal(p);
   if (!$('agentMessages').children.length) renderAgentEmpty();
-  $('agentInput').focus();
+  agentBusy = !!st.busy || agentPendingSessions.has(agentSessionId());
+  setAgentBusyUi(agentBusy);
+  if (agentBusy) addAgentWorking();
+  renderSshAgentChip();
+  applyAgentComposerState(); // an ended session comes back read-only, cards and all
+  if (!$('agentInput').disabled) $('agentInput').focus();
 }
 
 // empty conversation: identity + a few starter prompts (chips send the prompt as a normal message)
-const AGENT_STARTERS = [
-  ['Explore the database', 'Give me an overview of the connected database: main tables, row counts and how they relate.'],
+const SESSION_STARTERS = [
+  ['Read terminal output', 'Read the output from our shared terminal and explain what is happening.'],
+  ['Check server health', 'Propose commands to check this server’s health, disk space and services. Explain each before I accept it.'],
+  ['Resume our work', 'Summarize where we left off in this server session and suggest the next step.'],
+];
+const PROJECT_STARTERS = [
   ['Check the schema', 'Which tables and columns does the current rule set touch? Point out anything that looks risky.'],
   ['Explain a rule', 'Pick the most complex rule and explain what it changes, step by step.'],
+  ['Review a deployment', 'Summarise this project’s deploy targets and the state of their most recent runs.'],
 ];
 function renderAgentEmpty() {
   const el = document.createElement('div');
   el.className = 'ag-empty';
+  const bound = !!agentSessionId(), ended = agentSessionEnded();
+  const starters = bound ? SESSION_STARTERS : PROJECT_STARTERS;
   el.innerHTML = `<span class="ag-ico"><img class="ai-mini" src="/assets/robot-logo-animated_1.svg" alt="" aria-hidden="true"></span>
-    <h3>What would you like to explore?</h3>
-    <p>Ask about rules, schema or data. Access is read-only; changes come back as proposals for you to approve.</p>
-    <p class="hint" style="margin:0">Conversation for project <b>${esc(currentProjectName())}</b>. Switch projects in the header to change context.</p>
-    <div class="ag-sugg">${AGENT_STARTERS.map(([label], i) => `<button type="button" class="chip-btn" data-starter="${i}">${esc(label)}</button>`).join('')}</div>`;
+    <h3>${ended ? 'Nothing was said in this session' : bound ? `Work together on ${esc(sshAgent.name || 'this server')}` : 'What would you like to explore?'}</h3>
+    ${ended ? '' : `<p>${bound
+      ? 'You and the assistant share the terminal beside this chat. Ask it to explain output or propose the next command.'
+      : 'Ask about rules, schema, data or deployments. Access is read-only; changes come back as proposals for you to approve.'}</p>`}
+    <p class="hint" style="margin:0">${ended
+      ? `This session on <b>${esc(sshAgent.name || 'the server')}</b> has ended and is read-only. Start a terminal on it for a new session with its own history.`
+      : bound
+        ? 'Only this session’s conversation appears here. Every AI command needs your approval. No agent needs to be installed on the server.'
+        : `Conversation for project <b>${esc(currentProjectName())}</b>. Open a server terminal to give the assistant a shell to work in.`}</p>
+    <div class="ag-sugg">${ended ? '' : starters.map(([label], i) => `<button type="button" class="chip-btn" data-starter="${i}">${esc(label)}</button>`).join('')}</div>`;
   el.querySelectorAll('[data-starter]').forEach((b) => b.addEventListener('click', () => {
-    $('agentInput').value = AGENT_STARTERS[+b.dataset.starter][1];
+    $('agentInput').value = starters[+b.dataset.starter][1];
     agentSend();
   }));
   $('agentMessages').appendChild(el);
@@ -2768,10 +2888,79 @@ function appendAgentMsg(role, text, actions, meta) {
   return el;
 }
 
+/* An approval card carries its state for its whole life, not only while it is clickable:
+   pending → running → done (with the exit code) / failed / rejected / superseded / stale. */
+const AP_STATE = {
+  pending: ['pending', ''],
+  running: ['running…', 'draftbadge'],
+  approved: ['approved', 'approved'],
+  done: ['done', 'approved'],
+  rejected: ['rejected', 'rejected'],
+  failed: ['failed', 'rejected'],
+  superseded: ['superseded', 'draftbadge'],
+  stale: ['stale', 'draftbadge'],
+};
+/* The one place that paints a card's state, so click handlers and late updates agree on the look. */
+function setProposalState(el, state, detail) {
+  if (!el) return;
+  const [label, cls] = AP_STATE[state] || [state, ''];
+  el.dataset.state = state;
+  // only a pending card is clickable: this is what stops a double click executing twice
+  el.querySelectorAll('button').forEach((b) => { b.disabled = state !== 'pending'; });
+  if (state !== 'pending') { const alt = el.querySelector('.agent-alternative'); if (alt) alt.hidden = true; }
+  let st = el.querySelector('.ap-state');
+  if (!st) { st = document.createElement('span'); st.className = 'ap-state'; (el.querySelector('.actions') || el).appendChild(st); }
+  st.innerHTML = `<span class="badge ${cls}">${esc(label)}</span>${detail ? ` <span class="hint" style="margin:0">${esc(detail)}</span>` : ''}`;
+}
+/* Turn what the decision route returned into one of those states. The exit code lives on
+   result.exitCode for a shared-terminal command; other proposal kinds have no result at all. */
+function applyProposalResult(el, r, decision) {
+  const res = r?.result || null;
+  const out = el.querySelector('.ap-out');
+  if (out && res) {
+    const text = [res.stdout, res.stderr].filter(Boolean).join('\n').trim();
+    if (text) { out.hidden = false; out.querySelector('pre').textContent = text.slice(-4000); }
+  }
+  if (decision === 'alternative') return setProposalState(el, 'superseded', 'replaced by your instruction');
+  if ((r?.status || r?.decision) === 'rejected') return setProposalState(el, 'rejected');
+  if (res?.timedOut) return setProposalState(el, 'failed', 'timed out');
+  if (res?.cancelled) return setProposalState(el, 'failed', 'interrupted');
+  const code = res && res.exitCode != null ? Number(res.exitCode) : null;
+  if (code != null) return setProposalState(el, code === 0 ? 'done' : 'failed', `exit code ${code}`);
+  setProposalState(el, 'approved');
+}
+/* The terminal moved on, so an approval sealed to an older revision can no longer be replayed
+   (lib/ssh-agent refuses it). Say so on the card instead of letting the user click into a 409. */
+function markStaleProposals(sessionId, revision) {
+  if (!sessionId || sessionId !== agentSessionId() || !Number.isFinite(revision)) return;
+  for (const el of agentCards.values()) {
+    if (el.dataset.state !== 'pending' || el.dataset.revision === undefined) continue;
+    if (Number(el.dataset.revision) < revision) setProposalState(el, 'stale', 'the terminal moved on since this was proposed');
+  }
+}
+/* The decision and the turn that interprets it are ONE server operation, so render what came back
+   instead of reloading: a reload would drop the card the user just acted on. */
+function renderDecisionContinuation(cont, decision, alternative) {
+  if (decision === 'alternative' && alternative) appendAgentMsg('user', alternative);
+  if (!cont) return;
+  if (cont.state === 'skipped') return void appendAgentMsg('note', 'No AI provider is connected: your instruction is kept for when one is.');
+  if (cont.state === 'cancelled') return void appendAgentMsg('note', 'Reply stopped by the user.');
+  if (cont.state === 'failed') return void appendAgentMsg('ai', 'Error: ' + (cont.reason || 'the assistant could not continue'));
+  if (cont.reply) appendAgentMsg('ai', cont.reply, cont.actions);
+  (cont.proposals || []).forEach(appendAgentProposal);
+}
+
 /* rule proposal card: the user gate for agent rule changes */
 function appendAgentProposal(p) {
+  // a card named for another session is not ours; one with no session belongs to whatever
+  // conversation is on screen (rule and deploy proposals are not session-bound)
+  if (p.sessionId && p.sessionId !== agentSessionId()) return;
   const el = document.createElement('div');
   el.className = 'agent-proposal';
+  el.dataset.proposal = p.id;
+  el.dataset.state = 'pending';
+  if (p.revision != null) el.dataset.revision = String(p.revision); // the terminal revision it is sealed to
+  agentCards.set(p.id, el);
   if (p.kind === 'deploy-manifest') {
     const m = p.manifest || {};
     el.innerHTML = `
@@ -2782,13 +2971,26 @@ function appendAgentProposal(p) {
         <button class="approve" data-dec="approve">Approve and save</button>
         <button class="reject" data-dec="reject">Reject</button>
       </div>`;
-    el.querySelectorAll('[data-dec]').forEach((b) => b.addEventListener('click', async () => {
-      try {
-        const r = await api('/api/agent/proposal/' + p.id, { method: 'POST', body: JSON.stringify({ decision: b.dataset.dec }) });
-        el.querySelector('.actions').innerHTML = `<span class="badge ${r.status === 'approved' ? 'approved' : 'rejected'}">${r.status}</span>`;
-        if (r.status === 'approved' && typeof loadDeploy === 'function' && $('deployDrawer').classList.contains('open')) loadDeploy();
-      } catch (e) { toast(e.message); }
-    }));
+    wireAgentProposalDecision(el, p, (r) => {
+      if (r.status === 'approved' && typeof loadDeploy === 'function' && $('deployDrawer').classList.contains('open')) loadDeploy().catch(() => {});
+    });
+    $('agentMessages').appendChild(el);
+    $('agentMessages').scrollTop = $('agentMessages').scrollHeight;
+    return;
+  }
+  if (p.kind === 'ssh-command' || p.kind === 'ssh-terminal-input') {
+    const danger = p.cls === 'destructive';
+    el.innerHTML = `
+      <div class="ap-head">Approve command on <b>${esc(p.serverName || sshAgent.name || '')}</b> <span class="badge ${danger ? 'failed' : 'plan'}">${danger ? 'destructive' : esc(p.cls || 'terminal input')}</span></div>
+      <div class="ap-meta">${esc(p.host || '')}${p.why ? ' · ' + esc(p.why) : ''}${p.reason ? ' · ' + esc(p.reason) : ''}</div>
+      <pre class="ap-cmd">$ ${esc(p.cmd || p.input || p.data || '')}</pre>
+      <div class="hint">Runs in the shared terminal after you give the AI control and accept. Taking control cancels pending approvals.</div>
+      <div class="actions">
+        <button class="approve" data-dec="approve">Accept and run</button>
+        <button class="reject" data-dec="reject">Reject</button>
+      </div>
+      <div class="ap-out" hidden><pre></pre></div>`;
+    wireAgentProposalDecision(el, p);
     $('agentMessages').appendChild(el);
     $('agentMessages').scrollTop = $('agentMessages').scrollHeight;
     return;
@@ -2803,19 +3005,22 @@ function appendAgentProposal(p) {
         <button class="${p.action === 'ship' || p.action === 'rollback' ? 'warn' : 'approve'}" data-dec="approve">Approve and ${esc((labels[p.action] || p.action).split(' ')[0].toLowerCase())}</button>
         <button class="reject" data-dec="reject">Reject</button>
       </div>`;
-    el.querySelectorAll('[data-dec]').forEach((b) => b.addEventListener('click', async () => {
-      try {
-        el.querySelectorAll('[data-dec]').forEach((x) => { x.disabled = true; });
-        const r = await api('/api/agent/proposal/' + p.id, { method: 'POST', body: JSON.stringify({ decision: b.dataset.dec }) });
-        el.querySelector('.actions').innerHTML = `<span class="badge ${r.status === 'approved' ? 'approved' : 'rejected'}">${r.status}</span>${r.status === 'approved' ? ' <span class="hint" style="margin:0">running: follow it in The Ascension log</span>' : ''}`;
-        if (r.status === 'approved') { toast(`${labels[p.action] || p.action}: started`, 'success'); if (typeof loadDeploy === 'function' && $('deployDrawer').classList.contains('open')) loadDeploy().catch(() => {}); }
-      } catch (e) { toast(e.message, 'error'); el.querySelectorAll('[data-dec]').forEach((x) => { x.disabled = false; }); }
-    }));
+    wireAgentProposalDecision(el, p, (r) => {
+      if (r.status !== 'approved') return;
+      toast(`${labels[p.action] || p.action}: started`, 'success');
+      if (typeof loadDeploy === 'function' && $('deployDrawer').classList.contains('open')) loadDeploy().catch(() => {});
+    });
     $('agentMessages').appendChild(el);
     $('agentMessages').scrollTop = $('agentMessages').scrollHeight;
     return;
   }
   const t = p.rule;
+  if (!t) {
+    el.innerHTML = `<div class="ap-head">${esc(p.kind || 'Action')} proposal</div><pre>${esc(JSON.stringify(p, null, 2))}</pre><div class="actions"><button class="approve" data-dec="approve">Accept</button><button class="reject" data-dec="reject">Reject</button></div>`;
+    wireAgentProposalDecision(el, p);
+    $('agentMessages').appendChild(el);
+    return;
+  }
   el.innerHTML = `
     <div class="ap-head">Rule ${p.action === 'update' ? `update: <b>${esc(p.targetName || '')}</b> → <b>${esc(t.name)}</b>` : `proposal: <b>${esc(t.name)}</b>`}
       ${t.draft ? '<span class="badge draftbadge">draft</span>' : ''}</div>
@@ -2825,23 +3030,95 @@ function appendAgentProposal(p) {
       <button class="approve" data-dec="approve">Approve and save</button>
       <button class="reject" data-dec="reject">Reject</button>
     </div>`;
-  el.querySelectorAll('[data-dec]').forEach((b) => b.addEventListener('click', async () => {
-    try {
-      const r = await api('/api/agent/proposal/' + p.id, { method: 'POST', body: JSON.stringify({ decision: b.dataset.dec }) });
-      el.querySelector('.actions').innerHTML = `<span class="badge ${r.status === 'approved' ? 'approved' : 'rejected'}">${r.status}</span>`;
-      appendAgentMsg('note', '', null, { kind: 'decision', decision: r.status, proposalAction: p.action, ruleName: t.name });
-      if (r.status === 'approved') loadRules();
-    } catch (e) { toast(e.message); }
-  }));
+  wireAgentProposalDecision(el, p, (r) => {
+    appendAgentMsg('note', '', null, { kind: 'decision', decision: r.status, proposalAction: p.action, ruleName: t.name });
+    if (r.status === 'approved') loadRules();
+  });
   $('agentMessages').appendChild(el);
   $('agentMessages').scrollTop = $('agentMessages').scrollHeight;
 }
 
+// A card the server has already spent, or one sealed to a terminal that has moved on, is not
+// pending any more: say why on the card rather than inviting the user to click into the same 409.
+const AP_SPENT_RE = /no longer pending|already (?:approved|rejected|failed|executing)|terminal changed|classification changed|not found in this server session/i;
+const AP_STALE_RE = /terminal changed|classification changed|closed or belongs to another/i;
+
+/* One function owns a card's decision, so "first click wins" is a property of the card and not of
+   whichever button was pressed. Accept / Reject / Alternative all pass through here. */
+function wireAgentProposalDecision(el, p, onDone) {
+  const sessionId = p.sessionId || agentSessionId(), epoch = agentSessionEpoch;
+  const actions = el.querySelector('.actions');
+  actions.insertAdjacentHTML('beforeend', '<button type="button" data-alternative>Reply with alternative</button>');
+  const reply = document.createElement('form');
+  reply.className = 'agent-alternative'; reply.hidden = true;
+  reply.innerHTML = '<label>What should the assistant do instead?<textarea required rows="2" placeholder="For example: check the configuration before restarting"></textarea></label><div class="actions"><button type="submit" class="primary">Reject and send alternative</button><button type="button" data-cancel-alternative>Cancel</button></div>';
+  el.appendChild(reply);
+  // "Reply with alternative" only opens the box: the decision is not spent until it is sent
+  actions.querySelector('[data-alternative]').addEventListener('click', () => { if (el.dataset.state !== 'pending') return; reply.hidden = false; reply.querySelector('textarea').focus(); });
+  reply.querySelector('[data-cancel-alternative]').addEventListener('click', () => { reply.hidden = true; actions.querySelector('[data-alternative]').focus(); });
+  const decide = async (decision, alternative) => {
+    // first click wins: a second one finds the card no longer pending and does nothing at all
+    if (el.dataset.state !== 'pending') return;
+    if (sessionId !== agentSessionId() || epoch !== agentSessionEpoch) return;
+    setProposalState(el,
+      decision === 'approve' ? 'running' : decision === 'alternative' ? 'superseded' : 'rejected',
+      decision === 'approve' ? 'sent to the shared terminal' : decision === 'alternative' ? 'replaced by your instruction' : '');
+    // the decision resumes the SAME turn on the server, so show the work while it runs and give
+    // the turn an identity: events for anything else are dropped by the SSE guards
+    const turn = agentTurn = { sessionId, turnId: null, cancelled: false };
+    agentPendingSessions.add(sessionId);
+    agentBusy = true; setAgentBusyUi(true);
+    const working = addAgentWorking();
+    $('agentMessages').scrollTop = $('agentMessages').scrollHeight;
+    try {
+      const r = await api('/api/agent/proposal/' + encodeURIComponent(p.id), { method: 'POST', body: agentSessionBody({ decision, ...(alternative ? { alternative } : {}) }, sessionId) });
+      working.remove();
+      // a reply that lands after the user moved on, or after Stop, is not ours to paint
+      if (sessionId !== agentSessionId() || epoch !== agentSessionEpoch || turn.cancelled) return;
+      applyProposalResult(el, r, decision);
+      if (onDone) { try { onDone(r, decision); } catch (err) { console.error('proposal side effect', err); } }
+      renderDecisionContinuation(r.continuation, decision, alternative);
+    } catch (e) {
+      working.remove();
+      if (sessionId !== agentSessionId() || epoch !== agentSessionEpoch) return;
+      toast(e.message, 'error');
+      if (AP_SPENT_RE.test(e.message)) setProposalState(el, AP_STALE_RE.test(e.message) ? 'stale' : 'superseded', e.message);
+      else setProposalState(el, 'pending', 'not sent: ' + e.message); // a transport failure is not a decision
+    } finally {
+      agentPendingSessions.delete(sessionId);
+      if (agentTurn === turn) { agentTurn = null; agentFeedEl = null; agentBusy = false; setAgentBusyUi(false); }
+    }
+  };
+  actions.querySelectorAll('[data-dec]').forEach((b) => b.addEventListener('click', () => decide(b.dataset.dec)));
+  reply.addEventListener('submit', (e) => { e.preventDefault(); const alternative = reply.querySelector('textarea').value.trim(); if (alternative) decide('alternative', alternative); });
+}
+
+function setAgentBusyUi(busy) {
+  document.body.classList.toggle('agent-busy', busy);
+  $('btnAgentSend').classList.toggle('busy', busy);
+  $('btnAgentSend').title = busy ? 'Stop this session’s reply' : 'Send (Enter)';
+}
+function addAgentWorking() {
+  const pending = document.createElement('div');
+  pending.className = 'agent-working';
+  pending.innerHTML = '<div class="aw-head"><span class="spinner"></span><span>Working…</span></div><div class="agent-feed ql-steps"></div><div class="agent-stream" hidden></div>';
+  $('agentMessages').appendChild(pending);
+  agentFeedEl = pending.querySelector('.agent-feed');
+  return pending;
+}
+
 async function agentSend() {
   if (agentBusy) return;
+  // sessionId null is the project conversation: a valid target, not a missing prerequisite
+  const sessionId = agentSessionId(), epoch = agentSessionEpoch;
+  if (agentSessionEnded()) { toast('This terminal session has ended: start a new one to continue', 'warning'); return; }
   const msg = $('agentInput').value.trim();
   if (!msg) return;
+  // every turn gets an identity, so a reply (or a stream of events) can be matched back to the
+  // session and the turn that asked for it; a superseded or cancelled one is dropped, not painted
+  const turn = agentTurn = { sessionId, turnId: null, cancelled: false };
   agentBusy = true;
+  agentPendingSessions.add(sessionId);
   $('btnAgentSend').classList.add('busy'); // the send action becomes Stop while the agent works
   $('btnAgentSend').title = 'Stop';
   $('agentInput').value = '';
@@ -2862,28 +3139,51 @@ async function agentSend() {
   agentFeedEl = pending.querySelector('.agent-feed'); // the SSE 'agent' listener streams progress lines into it
   document.body.classList.add('agent-busy'); // pulses the header button icon too
   try {
-    const r = await api('/api/agent/chat', { method: 'POST', body: projectBody({ message: msg, module: currentModuleLabel() }) });
+    const r = await api('/api/agent/chat', { method: 'POST', body: agentSessionBody({ message: msg }, sessionId) });
     pending.remove();
+    // a late reply: the user pressed Stop, started another turn, or moved to another session.
+    // Nothing of it is rendered - the conversation it belonged to is not the one on screen.
+    if (!agentTurnIsCurrent(turn) || epoch !== agentSessionEpoch) return;
     if (r.cancelled) { appendAgentMsg('note', 'Reply stopped by the user.'); return; }
     appendAgentMsg('ai', r.reply, r.actions);
     (r.proposals || []).forEach(appendAgentProposal);
   } catch (e) {
     pending.remove();
+    if (!agentTurnIsCurrent(turn) || epoch !== agentSessionEpoch) return;
     appendAgentMsg('ai', 'Error: ' + e.message);
   } finally {
+    agentPendingSessions.delete(sessionId);
+    // only the turn that is still current may hand the composer back: a superseded or cancelled
+    // one must not clear the busy state of the turn (or the session) that replaced it
+    if (agentTurn !== turn) return;
+    agentTurn = null;
     agentFeedEl = null;
     agentBusy = false;
     document.body.classList.remove('agent-busy');
     $('btnAgentSend').classList.remove('busy');
     $('btnAgentSend').title = 'Send (Enter)';
-    $('agentInput').focus();
+    if (!$('agentInput').disabled) $('agentInput').focus();
   }
 }
+/** True only while this turn is still the one the user is looking at. */
+const agentTurnIsCurrent = (turn) => agentTurn === turn && !turn.cancelled && turn.sessionId === agentSessionId();
 let agentCancelling = false;
 async function agentCancel() { // Stop: the server kills the provider run and records a note in the conversation
-  if (!agentBusy || agentCancelling) return;
+  const turn = agentTurn;
+  if (!agentBusy || !turn || agentCancelling) return;
   agentCancelling = true;
-  try { await api('/api/agent/chat/cancel', { method: 'POST' }); } catch (e) { toast(e.message); } finally { agentCancelling = false; }
+  const sessionId = turn.sessionId;
+  turn.cancelled = true; // from here on, anything arriving for this turn is dropped, not rendered
+  // reflect the stop straight away: the user should not wait for the server to acknowledge it
+  agentFeedEl = null;
+  $('agentMessages').querySelectorAll('.agent-working').forEach((el) => el.remove());
+  appendAgentMsg('note', 'Reply stopped by the user.');
+  agentPendingSessions.delete(sessionId);
+  agentBusy = false;
+  setAgentBusyUi(false); // also drops body.agent-busy
+  try { await api('/api/agent/chat/cancel', { method: 'POST', body: agentSessionBody({}, sessionId) }); }
+  catch (e) { if (sessionId === agentSessionId()) toast(e.message); }
+  finally { agentCancelling = false; }
 }
 $('btnAgentSend').addEventListener('click', () => { if (agentBusy) agentCancel(); else agentSend(); });
 $('agentInput').addEventListener('keydown', (e) => {
@@ -2918,9 +3218,12 @@ async function saveAgentModel() {
 $('agentModel').addEventListener('change', saveAgentModel); // fires on datalist pick and on blur-with-change
 $('agentModel').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); $('agentModel').blur(); } });
 $('btnAgentReset').addEventListener('click', async () => {
-  await api('/api/agent/reset', { method: 'POST', body: projectBody() }).catch((e) => toast(e.message));
-  $('agentMessages').innerHTML = '';
-  renderAgentEmpty();
+  const sessionId = agentSessionId(), epoch = agentSessionEpoch;
+  if (!sessionId) return;
+  try {
+    await api('/api/agent/reset', { method: 'POST', body: agentSessionBody({}, sessionId) });
+    if (sessionId === agentSessionId() && epoch === agentSessionEpoch) await openAgent();
+  } catch (e) { if (sessionId === agentSessionId()) toast(e.message); }
 });
 $('btnAgentDisconnect').addEventListener('click', async () => {
   const ok = await confirmDialog({
@@ -2946,6 +3249,7 @@ async function openServers() {
 async function loadServers() {
   const list = $('serversList');
   try {
+    await refreshLiveTerminals(); // so each card can say whether it has a shell to go back to
     const d = await api('/api/ssh/sessions');
     $('serversCount').textContent = d.sessions.length ? `- ${d.sessions.filter((s) => s.connected).length}/${d.sessions.length} connected` : '';
     if (!d.sessions.length) { list.innerHTML = '<div class="empty" style="padding:1rem">No SSH-enabled connection profiles. Enable SSH on a profile in Connections.</div>'; return; }
@@ -2963,9 +3267,176 @@ function meter(label, pct, valueText) {
   </div>`;
 }
 
+/* ---- the assistant on a server: attach state shared by the cards, the agent header and settings ---- */
+async function loadSshAgent() {
+  const sessionId = agentSessionId(), epoch = agentSessionEpoch;
+  if (sessionId) {
+    try {
+      const result = await api(agentSessionUrl('/api/ssh/agent'));
+      if (sessionId === agentSessionId() && epoch === agentSessionEpoch) sshAgent = result;
+    } catch { /* leave the explicitly selected session in place */ }
+  }
+  renderSshAgentChip();
+  applyAgentComposerState();
+  renderWorkspaceIdentity();
+  return sshAgent;
+}
+/* Swap the bound session ATOMICALLY. Everything that identifies the old conversation - its
+   messages, its approval cards, the composer target and the turn in flight - is dropped
+   synchronously, before any await, so a reply still travelling for the old session has nowhere
+   left to land. The SSE stream is re-pointed in the same breath. */
+function selectAgentSession(session) {
+  if (session.sessionId !== agentSessionId()) {
+    agentSessionEpoch++;
+    agentLoadSeq++;
+    agentFeedEl = null;
+    agentTurn = null;              // whatever was running now counts as a late reply
+    agentCards.clear();            // no card from the previous conversation survives the swap
+    agentBusy = agentPendingSessions.has(session.sessionId);
+    agentCancelling = false;
+    $('agentMessages').replaceChildren();
+    $('agentInput').value = '';
+    $('agentConnect').hidden = true;
+    $('agentChatWrap').hidden = true;
+    $('agentCtx').textContent = '';
+    $('agentScopePop').replaceChildren();
+    setAgentBusyUi(agentBusy);
+    setAgentStatus('Loading this server session…', 'busy');
+  }
+  sshAgent = session;
+  // a terminal session IS its own conversation id, so the stream can move at once; the project
+  // conversation's id is only known once GET /api/agent answers (openAgent re-scopes then)
+  agentConversationId = session.sessionId || null;
+  scopeSse();
+  applyAgentComposerState();
+  renderSshAgentChip();
+  renderWorkspaceIdentity();
+}
+
+/* Point the conversation at a terminal session and paint its saved history. The swap itself is the
+   synchronous part above; only the reload is awaited, and it is guarded by session id + sequence. */
+async function switchAgentSession(seed) {
+  const id = seed.sessionId;
+  if (!id) return;
+  selectAgentSession({ attached: false, guard: {}, memory: null, ...seed });
+  await loadSshAgent();                        // the real terminal state (open / closed, control)
+  if (id !== agentSessionId()) return;         // the user moved on while we were asking
+  await openAgent();
+}
+
+/** An ended session is a readable archive: open its saved conversation without touching SSH. */
+async function viewEndedSession(seed) {
+  await switchAgentSession({ ...seed, terminal: { sessionId: seed.sessionId, status: 'closed' } });
+  if (seed.sessionId === agentSessionId()) showSshDrawer();
+}
+
+/** The composer belongs to the conversation on screen: an ENDED session can be read, never
+    continued. No session at all is the project conversation, which is always writable. */
+function applyAgentComposerState() {
+  const bound = !!agentSessionId(), ended = agentSessionEnded();
+  const ta = $('agentInput'), send = $('btnAgentSend');
+  if (!ta || !send) return;
+  ta.disabled = ended;
+  send.disabled = ended;
+  ta.placeholder = ended ? 'This terminal session has ended: the conversation is read-only.'
+    : bound ? 'Ask about this server, or what to run on it…' : 'Ask about rules, schema, data…';
+  $('agentChatWrap').classList.toggle('session-ended', ended);
+  $('agentChatWrap').dataset.sessionState = bound ? (ended ? 'ended' : 'live') : '';
+  const kbd = document.querySelector('#agentChatWrap .ag-kbd');
+  if (kbd) kbd.textContent = ended
+    ? 'Session ended · read-only. Start a terminal on this server for a new session with its own history.'
+    : bound ? 'Enter to send · Shift+Enter for a new line · every command needs your approval'
+      : 'Enter to send · Shift+Enter for a new line · read-only access';
+  // command controls that are still on screen go read-only with it
+  if (ended) for (const [, el] of agentCards) if (el.dataset.state === 'pending') setProposalState(el, 'stale', 'the session has ended');
+}
+function renderSshAgentChip() {
+  const el = $('agentSsh'); if (!el) return;
+  // An ended session keeps its identity on screen: it is a readable archive, not "nothing".
+  // With no session the chip is absent - the conversation is the project's, named beside it.
+  const bound = !!agentSessionId(), ended = agentSessionEnded();
+  el.hidden = !bound;
+  if (bound) {
+    el.textContent = `· ${sshAgent.name || 'server'} · ${String(agentSessionId()).slice(0, 8)}${ended ? ' · ended' : ''}`;
+    el.title = `${sshAgent.user || ''}@${sshAgent.host || ''} — Conversation exclusive to this terminal session.${ended ? ' This session has ended: the conversation is read-only.' : ' Every AI command requires approval.'}`;
+  }
+  const control = $('btnAgentTerminalControl');
+  if (control) {
+    const ai = sshAgent.terminal?.control === 'assistant';
+    control.textContent = ai ? 'Take control' : 'Give AI control';
+    control.classList.toggle('warn', ai);
+    control.disabled = !bound || ended;
+  }
+}
+async function sshAgentAttach(profileId) {
+  return openSsh(profileId, { ai: true });
+}
+/** Leave the server session: the window stays, on the project conversation it had before. */
+async function sshAgentDetach() {
+  selectAgentSession({ attached: false, sessionId: null });
+  if (agentIsDocked() || $('agentDrawer').classList.contains('open')) await openAgent();
+  toast('Assistant back on the project conversation. The terminal session is still there to resume.');
+}
+
+/* The Terminal menu's two ACTIONS always come first and are always what Enter starts. Earlier
+   sessions are offered underneath, in their own scrolling group (live first, ended marked
+   read-only) so a long history can never push the actions off screen, and no group at all when
+   the server has none. Filled when the menu opens, so the list is never stale. */
+async function fillServerSessionMenu(card, srv) {
+  const menu = card.querySelector('.term-dd-menu');
+  if (!menu || menu.hidden) return;
+  menu.querySelector('.term-dd-sessions')?.remove();
+  let list = [];
+  try { list = (await api('/api/ssh/agent/sessions?profileId=' + encodeURIComponent(srv.id))).sessions || []; } catch { return; }
+  // the servers list rebuilds itself on every SSE nudge: never append to a card that has gone
+  if (!list.length || menu.hidden || !menu.isConnected) return;
+  const live = list.filter((x) => !sessionIsDead(x)).reverse();
+  const dead = list.filter(sessionIsDead).reverse().slice(0, 6);
+  const group = document.createElement('div');
+  group.className = 'term-dd-sessions';
+  group.innerHTML = '<div class="term-dd-sec">Recent sessions</div>';
+  for (const x of [...live, ...dead]) {
+    const ended = sessionIsDead(x);
+    const b = document.createElement('button');
+    b.type = 'button'; b.dataset.act = 'session'; b.dataset.sid = x.sessionId;
+    b.textContent = `${String(x.sessionId).slice(0, 8)}${x.messageCount ? ` · ${x.messageCount} msg` : ''}${ended ? ' · ended (read-only)' : ' · live'}`;
+    b.title = ended ? 'Read this ended session’s conversation without connecting' : 'Resume this session and its conversation';
+    // wired here rather than through the card's delegate: these buttons are added after it was built
+    b.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      menu.hidden = true;
+      if (ended) viewEndedSession({ sessionId: x.sessionId, profileId: srv.id, name: x.name || srv.name });
+      else openSsh(srv.id, { ai: true, label: srv.name, sessionId: x.sessionId });
+    });
+    group.appendChild(b);
+  }
+  menu.appendChild(group);
+}
+
+/* Keyboard path for the Terminal menu: arrows move, Home/End jump, Escape closes and returns
+   focus to the trigger. Enter is the button's own activation, so it starts whatever is focused -
+   and focus starts on "Terminal", never on a dead transcript. */
+function wireTermMenuKeys(menu, trigger) {
+  menu.addEventListener('keydown', (e) => {
+    const items = [...menu.querySelectorAll('button')];
+    if (e.key === 'Escape') { menu.hidden = true; trigger.focus(); e.stopPropagation(); return; }
+    const i = items.indexOf(document.activeElement);
+    let n = -1;
+    if (e.key === 'ArrowDown') n = (i + 1) % items.length;
+    else if (e.key === 'ArrowUp') n = (i - 1 + items.length) % items.length;
+    else if (e.key === 'Home') n = 0;
+    else if (e.key === 'End') n = items.length - 1;
+    if (n < 0) return;
+    e.preventDefault();
+    items[n]?.focus();
+  });
+}
+
 function serverCard(s) {
   const el = document.createElement('div');
   el.className = 'srv-card' + (s.connected ? ' connected' : '');
+  // a shell already running on this box: say so, and make going back to it the first action
+  const live = liveTerminals.filter((t) => t.profileId === s.id);
   const m = s.meta;
   let body = '';
   if (s.connected && m && !m.error) {
@@ -2999,14 +3470,18 @@ function serverCard(s) {
         <div class="srv-nameRow">
           <span class="srv-name" title="${esc(s.name)}">${esc(s.connected && m && !m.error ? (m.host || s.name) : s.name)}</span>
           ${s.active ? '<span class="badge approved">active DB</span>' : ''}
+          ${live.length ? `<span class="badge approved srv-live" title="This server has a running shell you can go back to">${live.length} live terminal${live.length === 1 ? '' : 's'}</span>` : ''}
         </div>
         <span class="srv-sub">${esc(s.user)}@${esc(s.host)}</span>
       </div>
     </div>
     ${body}
     <div class="srv-actions">
+      ${sshAgent.attached && sshAgent.profileId === s.id
+        ? '<button data-act="ai-detach" class="aireview glossy on" title="The AI chat is connected to this server: click to disconnect"><img class="ai-mini" src="/assets/robot-logo-animated_1.svg" alt="" aria-hidden="true"><span>AI connected</span></button>'
+        : '<button data-act="ai-attach" class="aireview glossy" title="Connect with AI chat: let the assistant work on this server over SSH (read-only unless you allow more in Settings)"><img class="ai-mini" src="/assets/robot-logo-animated_1.svg" alt="" aria-hidden="true"><span>AI chat</span></button>'}
       ${s.connected
-        ? `<button data-act="refresh">Refresh</button><div class="term-dd"><button data-act="terminal-menu" class="primary">Terminal <svg class="caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button><div class="term-dd-menu" hidden><button data-act="terminal">Terminal</button><button data-act="terminal-ai" class="aireview glossy" title="Open a terminal and launch the connected AI CLI on this server">${AI_LOGO_REST}<span>Terminal + AI</span></button></div></div><span class="spacer"></span><button data-act="disconnect" class="warn">Disconnect</button>`
+        ? `<button data-act="refresh">Refresh</button><div class="term-dd"><button data-act="terminal-menu" class="primary">${live.length ? 'Resume' : 'Terminal'} <svg class="caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button><div class="term-dd-menu" hidden><button data-act="terminal">${live.length ? 'Resume terminal' : 'Terminal'}</button><button data-act="terminal-ai" class="aireview glossy" title="Open a terminal and work in it with the assistant">${AI_LOGO_REST}<span>${live.length ? 'Resume with AI' : 'Terminal + AI'}</span></button><button data-act="terminal-new">New terminal</button></div></div><span class="spacer"></span><button data-act="disconnect" class="warn">Disconnect</button>`
         : `<button data-act="connect" class="primary">Connect</button><span class="spacer"></span>${s.sshOnly ? '<button data-act="remove" class="iconbtn danger" title="Remove this SSH server">' + RULE_ICONS.trash + '</button>' : ''}`}
     </div>`;
   const closeTermMenu = () => { const m = el.querySelector('.term-dd-menu'); if (m) m.hidden = true; };
@@ -3018,11 +3493,25 @@ function serverCard(s) {
       const willOpen = m.hidden;
       document.querySelectorAll('.term-dd-menu').forEach((x) => { x.hidden = true; }); // close others
       m.hidden = !willOpen;
-      if (willOpen) setTimeout(() => document.addEventListener('click', function h() { closeTermMenu(); document.removeEventListener('click', h); }), 0);
+      if (willOpen) {
+        if (!m.dataset.keys) { wireTermMenuKeys(m, b); m.dataset.keys = '1'; }
+        m.querySelector('[data-act="terminal"]').focus(); // Enter starts a terminal, never a dead transcript
+        fillServerSessionMenu(el, s);
+        setTimeout(() => document.addEventListener('click', function h() { closeTermMenu(); document.removeEventListener('click', h); }), 0);
+      }
       return;
     }
+    if (act === 'ai-attach' || act === 'ai-detach') {
+      b.disabled = true;
+      try { if (act === 'ai-attach') await sshAgentAttach(s.id); else await sshAgentDetach(); await loadServers(); }
+      catch (e) { toast(e.message, 'error'); b.disabled = false; }
+      return;
+    }
+    // "terminal" resumes this server's most recent live session when there is one (openSsh
+    // prefers a live session over minting a shell); "terminal-new" always mints one
     if (act === 'terminal') { closeTermMenu(); openSsh(s.id, { label: s.name }); return; }
     if (act === 'terminal-ai') { closeTermMenu(); openSsh(s.id, { ai: true, label: s.name }); return; }
+    if (act === 'terminal-new') { closeTermMenu(); openSsh(s.id, { ai: true, newSession: true, label: s.name }); return; }
     if (act === 'remove') {
       const ok = await confirmDialog({ title: 'Remove SSH server', message: `Remove the SSH server <b>${esc(s.name)}</b>? Its stored credentials are deleted from connections.json.`, okLabel: 'Remove', okClass: 'reject' });
       if (!ok) return;
@@ -3099,27 +3588,31 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && $('serversDrawer').classList.contains('open') && !document.querySelector('dialog[open]')) closeServers();
 });
 
-/* ---------- SSH consoles (xterm.js + WebSocket PTY) ----------
-   Up to MAX_CONSOLES live at once. Each is a self-contained element that lives
-   docked in the drawer (shown one at a time via tabs) or popped out into a
-   free-floating, draggable, resizable window. Moving the element between the
-   two keeps its xterm alive. */
+/* ---------- SSH consoles (xterm.js + WebSocket viewer) ----------
+   Up to MAX_CONSOLES views at once inside the Terminals view, one visible at a time via the tab
+   strip. A console is only a VIEW of a shared session: closing it never touches the shell.
+   The pop-out-to-floating-window affordance went with the drawer it belonged to. */
 const consoles = new Map();
 const MAX_CONSOLES = 3;
 let consoleSeq = 0;
 let activeConsoleId = null;
 const SSH_ICON = {
   clear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M20 20H8.5L3 14.5a2 2 0 0 1 0-2.8l7-7a2 2 0 0 1 2.8 0l6 6a2 2 0 0 1 0 2.8L15 18"/><path d="M8.5 20 14 14.5"/></svg>',
-  popout: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M14 4h6v6"/><path d="M20 4l-8 8"/><path d="M18 13v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h5"/></svg>',
-  dock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 14h18" fill="none"/><rect x="3" y="14" width="18" height="6" rx="0" fill="currentColor" stroke="none"/></svg>',
   close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 6l12 12M18 6L6 18"/></svg>',
 };
 
-const refitConsole = (c) => { try { c.fit.fit(); } catch {} };
+// Fitting a pane that is currently hidden (the other workspace tab, an inactive console) would
+// size the PTY to a 0x0 box, so skip until it has a real one: the ResizeObserver refits on reveal.
+const refitConsole = (c) => {
+  if (!c || !c.fit || !c.termHost || !c.termHost.isConnected) return;
+  const r = c.termHost.getBoundingClientRect();
+  if (r.width < 24 || r.height < 24) return;
+  try { c.fit.fit(); } catch {}
+};
 const refitConsoles = () => consoles.forEach(refitConsole);
-const dockedConsoles = () => [...consoles.values()].filter((c) => !c.floating);
-const showSshDrawer = () => $('sshDrawer').classList.add('open');
-const hideSshDrawer = () => $('sshDrawer').classList.remove('open');
+const dockedConsoles = () => [...consoles.values()]; // every console is in the view now
+const showSshDrawer = () => { $('sshDrawer').classList.add('open'); document.body.classList.toggle('ssh-shared-workspace', $('agentDrawer').classList.contains('open')); };
+const hideSshDrawer = () => { $('sshDrawer').classList.remove('open'); document.body.classList.remove('ssh-shared-workspace'); };
 
 function renderSshTabs() {
   $('sshHostInfo').textContent = consoles.size ? `${consoles.size}/${MAX_CONSOLES}` : '';
@@ -3136,81 +3629,52 @@ function renderSshTabs() {
 }
 
 function activateConsole(id) {
-  const c = consoles.get(id); if (!c || c.floating) return;
+  const c = consoles.get(id); if (!c) return;
   activeConsoleId = id;
   $('sshConsoleHost').querySelectorAll('.ssh-console').forEach((el) => el.classList.toggle('active', el.dataset.id === id));
   renderSshTabs();
+  renderWorkspaceIdentity(); // the session bar names whichever console is on screen
+  rememberTerminal(c.sessionId);
+  syncTerminalRoute(c.sessionId);
   refitConsole(c); c.term.focus();
+  // the conversation follows the console the user is looking at, atomically
+  if (c.session && c.sessionId !== agentSessionId()) {
+    selectAgentSession(c.session);
+    if (agentIsDocked() || $('agentDrawer').classList.contains('open')) openAgent();
+  }
 }
 
 function setConsoleStatus(c, msg, cls) {
   c.statusCls = cls || '';
   if (c.statusEl) { c.statusEl.textContent = msg; c.statusEl.className = 'ssh-console-status ' + (cls || ''); }
   renderSshTabs();
+  renderWorkspaceIdentity();
 }
 
 function buildConsoleEl(c) {
   const el = document.createElement('div');
   el.className = 'ssh-console'; el.dataset.id = c.id;
+  // the view's session bar owns identity, the session picker, new/end and ownership; this bar is
+  // only the console's own chrome, so nothing here is a second copy of any of that
   el.innerHTML = `
     <div class="ssh-console-bar">
       <span class="ssh-console-title">${esc(c.label)}</span>
       <span class="ssh-console-status">connecting…</span>
       <span class="spacer"></span>
+      <button type="button" data-cact="reconnect" hidden>Reconnect view</button>
       <button class="iconbtn" data-cact="clear" title="Clear output">${SSH_ICON.clear}</button>
-      <button class="iconbtn" data-cact="popout" title="Pop out to a floating window">${SSH_ICON.popout}</button>
-      <button class="iconbtn danger" data-cact="close" title="Close console">${SSH_ICON.close}</button>
+      <button class="iconbtn" data-cact="close" title="Close this view; the session keeps running">${SSH_ICON.close}</button>
     </div>
     <div class="ssh-console-term"></div>`;
   c.el = el;
   c.statusEl = el.querySelector('.ssh-console-status');
   c.termHost = el.querySelector('.ssh-console-term');
   el.querySelector('[data-cact="clear"]').addEventListener('click', () => c.term.clear());
-  el.querySelector('[data-cact="popout"]').addEventListener('click', () => toggleFloat(c.id));
   el.querySelector('[data-cact="close"]').addEventListener('click', () => closeConsole(c.id));
-  const bar = el.querySelector('.ssh-console-bar'); // drag handle when floating
-  bar.addEventListener('pointerdown', (e) => {
-    if (!c.floating || e.target.closest('button')) return;
-    const r = el.getBoundingClientRect(); const ox = e.clientX - r.left, oy = e.clientY - r.top;
-    // pin the current position as left/top BEFORE dropping the right anchor, or
-    // the switch from right- to left-anchored jumps the window on the first click
-    el.style.left = r.left + 'px'; el.style.top = r.top + 'px'; el.style.right = 'auto';
-    const move = (ev) => {
-      el.style.left = Math.min(Math.max(0, ev.clientX - ox), window.innerWidth - 60) + 'px';
-      el.style.top = Math.min(Math.max(0, ev.clientY - oy), window.innerHeight - 40) + 'px';
-    };
-    const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
-    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up); e.preventDefault();
-  });
+  el.querySelector('[data-cact="reconnect"]').addEventListener('click', () => { c.term.reset(); connectConsole(c); });
   c.ro = new ResizeObserver(() => refitConsole(c));
   c.ro.observe(c.termHost);
   return el;
-}
-
-function toggleFloat(id) {
-  const c = consoles.get(id); if (!c) return;
-  const popBtn = c.el.querySelector('[data-cact="popout"]');
-  if (!c.floating) {
-    // set the target geometry BEFORE going fixed so there is no offset-less frame
-    const n = [...consoles.values()].filter((x) => x.floating && x !== c).length; // stagger multiple floats
-    c.el.style.left = ''; c.el.style.right = (24 + n * 30) + 'px'; c.el.style.top = (72 + n * 30) + 'px';
-    c.el.style.width = '520px'; c.el.style.height = '360px';
-    c.floating = true; c.el.classList.add('floating');
-    document.body.appendChild(c.el);
-    popBtn.innerHTML = SSH_ICON.dock; popBtn.title = 'Dock back into the drawer';
-    if (activeConsoleId === id) activeConsoleId = null;
-    const next = dockedConsoles()[0];
-    if (next) activateConsole(next.id); else { renderSshTabs(); if (!dockedConsoles().length) hideSshDrawer(); }
-  } else {
-    // reparent into the host while STILL fixed (viewport-anchored, no reflow), THEN
-    // drop the floating class: otherwise it briefly lays out full-size in <body>
-    $('sshConsoleHost').appendChild(c.el);
-    c.floating = false; c.el.classList.remove('floating');
-    c.el.removeAttribute('style'); // drop floating geometry, back to docked layout
-    popBtn.innerHTML = SSH_ICON.popout; popBtn.title = 'Pop out to a floating window';
-    showSshDrawer(); activateConsole(id);
-  }
-  setTimeout(() => refitConsole(c), 40);
 }
 
 function closeConsole(id) {
@@ -3225,87 +3689,419 @@ function closeConsole(id) {
     if (next) activateConsole(next.id);
   }
   renderSshTabs();
-  if (!dockedConsoles().length) hideSshDrawer();
+  renderWorkspaceIdentity();  // the empty state takes over when the last view closes
+  refreshLiveTerminals();     // the SESSION is untouched: it stays on the sidebar, ready to reopen
+  if (agentSessionId() === c.sessionId) {
+    // the chat follows whatever console is left, or falls back to the project conversation
+    const next = consoles.get(activeConsoleId) || [...consoles.values()][0];
+    if (next) selectAgentSession(next.session);
+    else selectAgentSession({ attached: false, sessionId: null });
+    if (agentIsDocked() || $('agentDrawer').classList.contains('open')) openAgent();
+  }
 }
 
 function connectConsole(c) {
   const { cols, rows } = c.term;
   setConsoleStatus(c, 'connecting…');
-  const ws = new WebSocket(`ws://${location.host}/api/ssh-term?cols=${cols}&rows=${rows}${c.profileId ? '&profile=' + encodeURIComponent(c.profileId) : ''}${c.ai ? '&ai=1' : ''}`);
+  const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/ssh-term?sessionId=${encodeURIComponent(c.sessionId)}&cols=${cols}&rows=${rows}`);
   ws.binaryType = 'arraybuffer'; c.ws = ws;
-  ws.onopen = () => setConsoleStatus(c, 'connected', 'ok');
+  c.el.querySelector('[data-cact="reconnect"]').hidden = true;
+  // the console's own bar shows only while this VIEW has lost its socket: otherwise the session
+  // bar above says everything, and a permanent strip of icons just reads as leftover chrome
+  ws.onopen = () => { c.el.classList.remove('view-detached'); setConsoleStatus(c, 'view connected', 'ok'); };
   ws.onmessage = (e) => {
-    if (typeof e.data === 'string') { if (e.data[0] === '\x00') { c.term.write(e.data.slice(1)); return; } c.term.write(e.data); }
-    else c.term.write(new Uint8Array(e.data));
+    if (typeof e.data !== 'string') { c.term.write(new Uint8Array(e.data)); return; }
+    try {
+      const event = JSON.parse(e.data);
+      if (event.type === 'session' && event.sessionId === c.sessionId) updateTerminalSession(c, event);
+      else if (event.type === 'error') { setConsoleStatus(c, event.message || 'Terminal error', 'err'); toast(event.message || 'Terminal error', 'error'); }
+    } catch { /* terminal output is binary; ignore unknown control messages */ }
   };
-  ws.onclose = () => setConsoleStatus(c, 'disconnected', 'err');
+  ws.onclose = () => { c.el.classList.add('view-detached'); setConsoleStatus(c, 'view disconnected', 'err'); c.el.querySelector('[data-cact="reconnect"]').hidden = false; };
   ws.onerror = () => setConsoleStatus(c, 'connection error', 'err');
-  c.term.onData((d) => { if (ws.readyState === 1) ws.send(new TextEncoder().encode(d)); });
-  c.term.onResize(({ cols, rows }) => { if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'resize', cols, rows })); });
+  c.inputListener?.dispose(); c.resizeListener?.dispose();
+  c.inputListener = c.term.onData((d) => { if (ws.readyState === 1 && c.session.terminal?.control === 'user') ws.send(new TextEncoder().encode(d)); });
+  c.resizeListener = c.term.onResize(({ cols, rows }) => { if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'resize', cols, rows })); });
 }
 
 async function openSsh(profileId, opts = {}) {
   const pid = (typeof profileId === 'string') ? profileId : null;
-  const ai = !!opts.ai;
-  if (!pid) { // active-connection terminal requires an SSH tunnel
-    try { const st = await api('/api/state'); if (!st.config.sshTunnel) { toast('The active connection has no SSH tunnel: enable one in Connections'); return; } }
-    catch (e) { toast(e.message); return; }
-  }
+  if (!pid) { await openServers(); toast('Choose a server to open its shared terminal session.'); return; }
   if (typeof Terminal === 'undefined') { toast('Terminal library not loaded'); return; }
-  if (consoles.size >= MAX_CONSOLES) { toast(`You can run at most ${MAX_CONSOLES} SSH consoles at once: close one first`); return; }
+  const existing = !opts.newSession && [...consoles.values()].find((c) => c.profileId === pid && (!opts.sessionId || c.sessionId === opts.sessionId));
+  if (existing) {
+    showSshDrawer(); activateConsole(existing.id); selectAgentSession(existing.session);
+    if (opts.ai || agentIsDocked()) await openAgent();
+    return existing.session;
+  }
+  if (consoles.size >= MAX_CONSOLES) { toast(`You can view ${MAX_CONSOLES} SSH consoles at once. Close a view first; its session will keep running.`); return; }
+  let sessions = [], selected = opts.sessionId || null, attached;
+  const requestEpoch = ++sshOpenEpoch;
+  if (!opts.newSession) {
+    try {
+      const result = await api('/api/ssh/agent/sessions?profileId=' + encodeURIComponent(pid));
+      sessions = result.sessions || [];
+      let remembered = null; try { remembered = sessionStorage.getItem('st-ssh-session:' + pid); } catch {}
+      const resumable = sessions.filter((s) => !['closed', 'ended', 'error', 'disconnected'].includes(s.terminal?.status || s.status));
+      selected ||= resumable.find((s) => (s.sessionId || s.id) === remembered)?.sessionId || resumable[0]?.sessionId || resumable[0]?.id || null;
+    } catch (e) { toast('Could not list earlier sessions: ' + e.message, 'warning'); }
+  }
+  try { attached = await api('/api/ssh/agent/attach', { method: 'POST', body: JSON.stringify({ profileId: pid, ...(selected ? { sessionId: selected } : {}), projectId: currentProjectId }) }); }
+  catch (e) { toast(e.message, 'error'); return; }
+  if (requestEpoch !== sshOpenEpoch) return;
+  if (!attached.sessionId) { toast('The server did not return a shared terminal session.', 'error'); return; }
+  // An ended session is a readable archive: show its saved conversation, never open a socket for
+  // it (a viewer socket on a dead session is refused, and reviving one silently is worse).
+  if (sessionIsDead(attached)) {
+    await viewEndedSession({ sessionId: attached.sessionId, profileId: pid, name: attached.name || opts.label });
+    toast('That terminal session has ended. Its conversation is read-only; use "New session" to continue.', 'warning');
+    return attached;
+  }
+  try { sessionStorage.setItem('st-ssh-session:' + pid, attached.sessionId); } catch {}
   const id = 'c' + (++consoleSeq);
-  const label = (opts.label || (pid ? 'server' : 'active connection')) + (ai ? ' · AI' : '');
-  const c = { id, profileId: pid, ai, label, floating: false, statusCls: '' };
+  const label = opts.label || attached.name || 'Server';
+  const c = { id, profileId: pid, sessionId: attached.sessionId, session: attached, label, statusCls: '' };
   consoles.set(id, c);
   $('sshConsoleHost').appendChild(buildConsoleEl(c));
   c.term = new Terminal({ cursorBlink: true, fontSize: 13, fontFamily: 'ui-monospace, Consolas, monospace', theme: termTheme() });
   c.fit = new FitAddon.FitAddon(); c.term.loadAddon(c.fit);
   c.term.open(c.termHost);
+  c.sessions = sessions;
+  updateTerminalSession(c, { ...attached.terminal, sessionId: attached.sessionId });
   showSshDrawer(); activateConsole(id);
+  refreshLiveTerminals(); // a new session belongs on the sidebar straight away
   setTimeout(() => { refitConsole(c); connectConsole(c); c.term.focus(); }, 30);
+  if (opts.ai || agentIsDocked()) await openAgent();
+  return attached;
 }
+let sshOpenEpoch = 0;
+
+function updateTerminalSession(c, info) {
+  c.session = { ...c.session, terminal: { ...c.session.terminal, ...info } };
+  const ai = c.session.terminal.control === 'assistant';
+  c.term.options.disableStdin = ai; // the xterm is read-only while the assistant drives
+  c.el.classList.toggle('assistant-driving', ai);
+  if (info.lastActivityAt) c.lastActivityAt = info.lastActivityAt; // the server's own idea of "recently used"
+  if (info.status) setConsoleStatus(c, info.status, ['ready', 'connected', 'open'].includes(info.status) ? 'ok' : '');
+  if (c.sessionId === agentSessionId()) {
+    sshAgent = { ...sshAgent, ...c.session };
+    renderSshAgentChip();
+    applyAgentComposerState();          // an ended shell locks the composer, live or restored
+    markStaleProposals(c.sessionId, Number(info.revision)); // an approval sealed to an older revision cannot run
+  }
+  renderWorkspaceIdentity();
+}
+async function changeTerminalControl(c) {
+  if (!c) return;
+  const control = c.session.terminal?.control === 'assistant' ? 'user' : 'assistant';
+  try {
+    const result = await api(`/api/ssh/terminal/${encodeURIComponent(c.sessionId)}/control`, { method: 'POST', body: JSON.stringify({ control }) });
+    updateTerminalSession(c, { ...(result.terminal || result), sessionId: c.sessionId, control }); // announces in words
+    document.dispatchEvent(new CustomEvent('st:terminal-control', { detail: { id: c.id, profileId: c.profileId, sessionId: c.sessionId, control } }));
+    if (control === 'user') { c.term.focus(); if (agentSessionId() === c.sessionId && $('agentDrawer').classList.contains('open')) await openAgent(); }
+  } catch (e) { toast(e.message, 'error'); }
+}
+// the console the workspace acts on: the docked one on screen, else any docked one
+const workspaceConsole = () => consoles.get(activeConsoleId) || dockedConsoles()[0] || null;
+$('btnAgentTerminalControl')?.addEventListener('click', () => changeTerminalControl([...consoles.values()].find((c) => c.sessionId === agentSessionId())));
 
 // close every console (docked or floating) tied to a given server profile · // used when that server is disconnected so no dead consoles linger
 function closeConsolesForProfile(pid) { [...consoles.values()].filter((c) => c.profileId === pid).forEach((c) => closeConsole(c.id)); }
-function closeSshDrawer() { dockedConsoles().forEach((c) => closeConsole(c.id)); hideSshDrawer(); }
-$('btnSshClose').addEventListener('click', closeSshDrawer);
+/* Leaving the view never touches a session: it detaches this browser's views and nothing else. */
+function closeSshDrawer() { hideSshDrawer(); closeAgentDrawer(); }
 document.addEventListener('keydown', (e) => {
-  // don't close while typing in a terminal; only when focus is elsewhere
-  if (e.key === 'Escape' && $('sshDrawer').classList.contains('open') && !document.querySelector('dialog[open]') && !document.activeElement?.closest('.ssh-console')) closeSshDrawer();
+  // don't close while typing in a terminal or in the workspace chat; only when focus is elsewhere
+  if (e.key === 'Escape' && $('sshDrawer').classList.contains('open') && !document.querySelector('dialog[open]') && !document.activeElement?.closest('.ssh-console, #agentDrawer')) closeSshDrawer();
 });
 
-/* SSH drawer: drag the left/top edge to resize (persisted). Consoles refit via
- * their own ResizeObserver; we also fit once at release so the PTY size is exact. */
-(() => {
-  const drawer = $('sshDrawer'), handle = $('sshResize');
-  if (!drawer || !handle) return;
-  const KEY_W = 'mau-ssh-w', KEY_H = 'mau-ssh-h';
-  const savedW = localStorage.getItem(KEY_W); if (savedW) drawer.style.setProperty('--ssh-w', savedW);
-  const savedH = localStorage.getItem(KEY_H); if (savedH) drawer.style.setProperty('--ssh-h', savedH);
-  handle.addEventListener('pointerdown', (e) => {
-    e.preventDefault();
-    const horizontal = document.body.classList.contains('drawers-h'); // top-edge height vs left-edge width
-    const prop = horizontal ? '--ssh-h' : '--ssh-w', key = horizontal ? KEY_H : KEY_W;
-    let pending = null, rafId = 0;
-    const flush = () => { rafId = 0; if (pending !== null) { drawer.style.setProperty(prop, pending); pending = null; } };
-    const move = (ev) => {
-      pending = horizontal
-        ? Math.min(window.innerHeight * 0.92, Math.max(200, window.innerHeight - ev.clientY)) + 'px'
-        : Math.min(window.innerWidth * 0.96, Math.max(360, window.innerWidth - ev.clientX)) + 'px';
-      if (!rafId) rafId = requestAnimationFrame(flush);
-    };
-    const up = () => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', up);
-      if (rafId) cancelAnimationFrame(rafId);
-      flush();
-      localStorage.setItem(key, drawer.style.getPropertyValue(prop));
-      refitConsoles();
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
+/* ---------- live terminal sessions: the way back to a running shell ----------
+   A session outlives every view of it, including this browser tab, so "what is live" comes from
+   the server (GET /api/ssh/terminal, status === 'open') rather than from the consoles we happen
+   to have open. It drives the sidebar entry, the view's session picker and the servers page, and
+   is kept fresh by our own actions, by activity on the event stream, and by a slow poll for
+   sessions someone else opened or ended. */
+const LIVE_POLL_MS = 8000;
+const LAST_TERMINAL_KEY = 'st-last-terminal';
+let liveTerminals = [];      // newest activity first
+let livePollTimer = 0;
+
+const rememberTerminal = (sessionId) => { try { if (sessionId) localStorage.setItem(LAST_TERMINAL_KEY, sessionId); } catch {} };
+const rememberedTerminal = () => { try { return localStorage.getItem(LAST_TERMINAL_KEY) || null; } catch { return null; } };
+const terminalTime = (t) => Date.parse(t?.lastActivityAt || t?.createdAt || 0) || 0;
+/** The session to reopen when the user just asks for "terminals": their last one if it is still
+    live, otherwise the most recently used one on the box. */
+function mostRecentTerminal() {
+  const remembered = rememberedTerminal();
+  return liveTerminals.find((t) => t.sessionId === remembered) || liveTerminals[0] || null;
+}
+async function refreshLiveTerminals() {
+  let list = [];
+  try { list = ((await api('/api/ssh/terminal')).terminals || []).filter((t) => t.status === 'open'); }
+  catch { list = []; }
+  liveTerminals = list.sort((a, b) => terminalTime(b) - terminalTime(a));
+  renderTerminalsNavEntry();
+  renderWorkspaceSessions();
+  return liveTerminals;
+}
+function scheduleLivePoll() {
+  clearTimeout(livePollTimer);
+  // only while the tab is in front: a hidden tab's sidebar is not being read
+  livePollTimer = setTimeout(async () => { if (!document.hidden) await refreshLiveTerminals(); scheduleLivePoll(); }, LIVE_POLL_MS);
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshLiveTerminals(); });
+
+/** Sidebar entry: present only while at least one session is LIVE, with how many. */
+function renderTerminalsNavEntry() {
+  const link = document.querySelector('#appNav [data-nav="terminals"]');
+  if (!link) return;
+  const n = liveTerminals.length;
+  link.hidden = n === 0;
+  const label = link.querySelector('.nav-label');
+  if (label) label.innerHTML = `Terminals <span class="nav-count">${n}</span>`;
+  link.title = n ? `${n} live terminal session${n === 1 ? '' : 's'} — reopen the most recent` : 'Terminals';
+}
+
+/** Keep the address on the session being watched, without a new history entry. */
+function syncTerminalRoute(sessionId) {
+  if (!sessionId || typeof parseRoute !== 'function') return;
+  if (parseRoute(location.hash)?.id !== 'terminals') return;
+  const r = '#/terminals/' + sessionId;
+  if (location.hash !== r) history.replaceState(null, '', r);
+}
+
+/** The Terminals route: reopen a named session, else the most recently used live one. */
+async function openTerminals(sessionId) {
+  showSshDrawer();
+  const live = await refreshLiveTerminals();
+  const existing = sessionId ? [...consoles.values()].find((c) => c.sessionId === sessionId) : null;
+  if (existing) { activateConsole(existing.id); return; }
+  const want = sessionId ? live.find((t) => t.sessionId === sessionId) : mostRecentTerminal();
+  if (!want) {
+    if (sessionId) toast('That terminal session is no longer running.', 'warning');
+    if (consoles.size) activateConsole(activeConsoleId || dockedConsoles()[0].id);
+    renderWorkspaceIdentity();
+    return;
+  }
+  const open = [...consoles.values()].find((c) => c.sessionId === want.sessionId);
+  if (open) { activateConsole(open.id); return; }
+  await openSsh(want.profileId, { ai: true, sessionId: want.sessionId, label: want.profileName || 'Server' });
+}
+function closeTerminals() { dockedConsoles().forEach((c) => closeConsole(c.id)); hideSshDrawer(); closeAgentDrawer(); }
+
+/* The view's ONE session picker: every live session, grouped by server, plus this console's own
+   if it has ended (so its transcript stays reachable). */
+function renderWorkspaceSessions() {
+  const sel = $('wsSessionPick'); if (!sel) return;
+  const c = workspaceConsole();
+  const byServer = new Map();
+  for (const t of liveTerminals) {
+    const name = t.profileName || t.profileId || 'Server';
+    if (!byServer.has(name)) byServer.set(name, []);
+    byServer.get(name).push({ id: t.sessionId, label: `${String(t.sessionId).slice(0, 8)} · live` });
+  }
+  if (c && !liveTerminals.some((t) => t.sessionId === c.sessionId)) {
+    const name = c.label || 'Server';
+    if (!byServer.has(name)) byServer.set(name, []);
+    byServer.get(name).unshift({ id: c.sessionId, label: `${String(c.sessionId).slice(0, 8)} · ended (read-only)` });
+  }
+  sel.innerHTML = [...byServer].map(([name, rows]) =>
+    `<optgroup label="${esc(name)}">${rows.map((r) => `<option value="${esc(r.id)}"${c && r.id === c.sessionId ? ' selected' : ''}>${esc(r.label)}</option>`).join('')}</optgroup>`).join('');
+  sel.disabled = !sel.options.length;
+}
+
+/* The empty state doubles as a picker when no console is open but sessions are running. */
+function renderWorkspaceEmpty() {
+  const empty = $('wsEmpty'); if (!empty) return;
+  const none = consoles.size === 0;
+  empty.hidden = !none;
+  $('sshConsoleHost').hidden = none;
+  if (!none) return;
+  const host = $('wsEmptyList');
+  host.innerHTML = liveTerminals.map((t) =>
+    `<button type="button" class="ws-resume" data-sid="${esc(t.sessionId)}"><b>${esc(t.profileName || 'Server')}</b><span>${esc(String(t.sessionId).slice(0, 8))} · last used ${esc(shortWhen(t.lastActivityAt || t.createdAt))}</span></button>`).join('');
+  host.querySelectorAll('[data-sid]').forEach((b) => b.addEventListener('click', () => navigate('#/terminals/' + b.dataset.sid)));
+}
+const shortWhen = (iso) => {
+  const t = Date.parse(iso || 0);
+  if (!t) return 'recently';
+  const mins = Math.round((Date.now() - t) / 60000);
+  return mins < 1 ? 'just now' : mins < 60 ? mins + ' min ago' : Math.round(mins / 60) + ' h ago';
+};
+
+(function wireWorkspaceSessionBar() {
+  $('wsSessionPick').addEventListener('change', (e) => {
+    const id = e.target.value;
+    if (!id || id === workspaceConsole()?.sessionId) return;
+    navigate('#/terminals/' + id);
   });
+  $('btnWsClear').addEventListener('click', () => { const c = workspaceConsole(); if (c) { c.term.clear(); c.term.focus(); } });
+  $('btnWsNewSession').addEventListener('click', () => {
+    const c = workspaceConsole();
+    if (!c) { navigate('#/servers'); return; }
+    openSsh(c.profileId, { ai: true, newSession: true, label: c.label });
+  });
+  $('btnWsEndSession').addEventListener('click', async () => {
+    const c = workspaceConsole(); if (!c) return;
+    const ok = await confirmDialog({
+      title: 'End terminal session',
+      message: `End the terminal on <b>${esc(c.label)}</b>? Running commands stop and every viewer loses it. Closing this view instead keeps the session running.`,
+      okLabel: 'End session', okClass: 'reject',
+    });
+    if (!ok) return;
+    try { await api(`/api/ssh/terminal/${encodeURIComponent(c.sessionId)}`, { method: 'DELETE' }); } catch (e) { toast(e.message, 'error'); return; }
+    closeConsole(c.id);
+    await refreshLiveTerminals();
+  });
+  $('btnWsGoServers').addEventListener('click', () => navigate('#/servers'));
 })();
+
+/* ---------- Terminal workspace: the shared shell and its session's chat ----------
+   One workspace, two panes. From 1100px up both are on screen side by side; below that they are
+   Terminal/Chat tabs. The chat pane holds the REAL #agentDrawer element, moved out of the top
+   layer and back again, so there is only ever one conversation in the DOM and every existing chat
+   selector keeps resolving. This block is layout only: pane/tab switching, refitting, the
+   ownership affordances and the aria wiring. Conversation state stays where it already lives. */
+const WS_SPLIT_MQ = window.matchMedia('(min-width: 1100px)');
+const WS_PANES = [['terminal', 'wsTabTerminal', 'wsPaneTerminal'], ['chat', 'wsTabChat', 'wsPaneChat']];
+const WS_OWNER = {
+  user: { badge: 'You have control', say: 'You have control of the terminal.', act: 'Give AI control', hint: 'The assistant cannot type until you hand it over' },
+  assistant: { badge: 'Assistant has control', say: 'The assistant has control of the terminal. Typing is disabled until you take it back.', act: 'Take control', hint: 'The terminal is read-only while the assistant drives' },
+  ended: { badge: 'Session ended', say: 'This terminal session has ended. Its conversation is read-only.', act: 'Session ended', hint: 'Start a new session to run anything on this server' },
+};
+let wsTab = 'terminal';     // which pane the tabs show while the split is off
+let wsAgentWasOpen = false; // was the floating assistant open before the workspace borrowed it?
+let wsLastOwner = '';       // don't re-announce the same owner on every repaint
+
+const agentIsDocked = () => $('agentDrawer')?.classList.contains('ag-docked');
+const wsActive = () => $('sshDrawer').classList.contains('open');
+
+/* Park the assistant in the chat pane, or hand it back to its floating window. */
+function wsDockAgent(on) {
+  const el = $('agentDrawer'); if (!el || on === !!agentIsDocked()) return;
+  if (on) {
+    wsAgentWasOpen = el.classList.contains('open');
+    try { if (el.matches(':popover-open')) el.hidePopover(); } catch {}
+    el.removeAttribute('popover'); // a top-layer popover cannot sit inside the split
+    el.removeAttribute('style');   // drop the floating geometry
+    el.classList.add('ag-docked', 'open');
+    $('wsChatHost').appendChild(el);
+    if (!wsAgentWasOpen) openAgent(); // the existing loader: fetches THIS session's conversation
+  } else {
+    el.classList.remove('ag-docked');
+    document.body.appendChild(el);
+    el.setAttribute('popover', 'manual');
+    if (wsAgentWasOpen) { restoreAgentGeom(); raiseAgentWindow(); }
+    else el.classList.remove('open'); // it was only open because the workspace borrowed it
+  }
+}
+
+/* The one entry point: recompute panes, tabs, aria and sizing from the current state. */
+function applyWorkspaceLayout() {
+  const on = wsActive();
+  const split = on && WS_SPLIT_MQ.matches;
+  document.body.classList.toggle('ws-page', on);
+  document.body.classList.toggle('ws-wide', split);
+  wsDockAgent(on);
+  $('wsTabs').hidden = !on || split;
+  for (const [name, tabId, paneId] of WS_PANES) {
+    const tab = $(tabId), pane = $(paneId);
+    pane.hidden = on ? !(split || wsTab === name) : name === 'chat'; // off the workspace the terminal is the whole drawer
+    if (split || !on) { // both panes stand on their own: tab semantics would be a lie
+      pane.setAttribute('role', 'group');
+      pane.setAttribute('aria-label', name === 'chat' ? 'Assistant chat' : 'Terminal');
+      pane.removeAttribute('aria-labelledby'); pane.removeAttribute('tabindex');
+    } else {
+      pane.setAttribute('role', 'tabpanel');
+      pane.setAttribute('aria-labelledby', tabId);
+      pane.removeAttribute('aria-label');
+      pane.setAttribute('tabindex', '0'); // the panel is a scroll container, so it takes focus
+    }
+    tab.setAttribute('aria-selected', String(wsTab === name));
+    tab.tabIndex = wsTab === name ? 0 : -1; // roving tabindex: one stop for the whole strip
+  }
+  renderWorkspaceIdentity();
+  wsRefitSoon();
+}
+
+function setWorkspaceTab(tab, opts = {}) {
+  wsTab = tab === 'chat' ? 'chat' : 'terminal';
+  applyWorkspaceLayout();
+  if (opts.focus) $(wsTab === 'chat' ? 'wsTabChat' : 'wsTabTerminal').focus();
+  else if (wsTab === 'terminal') { const c = workspaceConsole(); if (c) try { c.term.focus(); } catch {} }
+}
+
+/* Identity (server + session), the ownership badge and both control buttons, in both panes.
+   Ownership is carried by the WORD; the dot and the border only reinforce it. */
+function renderWorkspaceIdentity() {
+  const c = workspaceConsole();
+  const show = $('sshDrawer').classList.contains('open') && !!c;
+  const ident = $('wsIdent'); if (!ident) return;
+  ident.hidden = !show;
+  renderWorkspaceEmpty();
+  renderWorkspaceSessions();
+  if (!show) { $('wsChatIdent').textContent = ''; return; }
+  const dead = sessionIsDead(c.session);
+  const owner = dead ? 'ended' : c.session?.terminal?.control === 'assistant' ? 'assistant' : 'user';
+  const o = WS_OWNER[owner];
+  const server = c.label;
+  const session = `session ${String(c.sessionId || '').slice(0, 8)}`;
+  $('wsServer').textContent = server;
+  $('wsChatIdent').textContent = `${server} · ${session}${dead ? ' · ended' : ''}`;
+  for (const id of ['wsOwner', 'wsChatOwner']) {
+    const el = $(id); el.dataset.owner = owner;
+    el.querySelector('.ws-owner-text').textContent = o.badge;
+  }
+  for (const id of ['btnWsControl', 'btnWsControlChat']) {
+    const b = $(id); b.textContent = o.act; b.title = o.hint; b.disabled = dead;
+    b.classList.toggle('warn', owner === 'assistant');
+  }
+  announceOwnership(owner);
+}
+/* One live region for both panes, and only when the owner actually changed. A handover briefly
+   reports the OLD owner while the shell is probed, so the announcement waits for it to settle. */
+let wsAnnounceTimer = 0;
+function announceOwnership(owner) {
+  if (wsLastOwner === owner) return;
+  const first = !wsLastOwner; // the first paint states the situation, it does not announce it
+  wsLastOwner = owner;
+  if (first) return;
+  clearTimeout(wsAnnounceTimer);
+  wsAnnounceTimer = setTimeout(() => { if (wsLastOwner === owner) $('wsOwnerLive').textContent = WS_OWNER[owner].say; }, 250);
+}
+
+/* Refit whenever the visible box can have changed, coalesced into one frame. */
+let wsRefitRaf = 0;
+function wsRefitSoon() {
+  if (wsRefitRaf) return;
+  wsRefitRaf = requestAnimationFrame(() => { wsRefitRaf = 0; refitConsoles(); });
+}
+
+(function wireWorkspace() {
+  WS_SPLIT_MQ.addEventListener('change', () => applyWorkspaceLayout());
+  // the split box changes with the sidebar, the drawer orientation and the window
+  new ResizeObserver(wsRefitSoon).observe($('wsSplit'));
+  window.addEventListener('resize', wsRefitSoon);
+  // .open is set by the router: follow it rather than duplicating the routing
+  new MutationObserver(() => applyWorkspaceLayout()).observe($('sshDrawer'), { attributes: true, attributeFilter: ['class'] });
+  $('wsTabTerminal').addEventListener('click', () => setWorkspaceTab('terminal'));
+  $('wsTabChat').addEventListener('click', () => setWorkspaceTab('chat'));
+  $('wsTabs').addEventListener('keydown', (e) => {
+    const order = WS_PANES.map(([n]) => n), i = order.indexOf(wsTab);
+    let n = -1;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') n = (i + 1) % order.length;
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') n = (i - 1 + order.length) % order.length;
+    else if (e.key === 'Home') n = 0;
+    else if (e.key === 'End') n = order.length - 1;
+    if (n < 0) return;
+    e.preventDefault();
+    setWorkspaceTab(order[n], { focus: true });
+  });
+  for (const id of ['btnWsControl', 'btnWsControlChat']) $(id).addEventListener('click', () => changeTerminalControl(workspaceConsole()));
+  applyWorkspaceLayout();
+})();
+loadSshAgent(); // deferred to here: it paints the session chip and the workspace identity together
+refreshLiveTerminals(); // a session running from a previous visit must offer its way back at once
+scheduleLivePoll();
 
 /* ---------- History (timeline of app + SSH + AI activity) ---------- */
 let auditData = [];
@@ -3773,12 +4569,14 @@ requestAnimationFrame(() => requestAnimationFrame(() => document.body.classList.
 const AI_GEOM_KEY = 'st-ai-geom';
 let agentUserResized = false; // set once the corner grip is used; until then the window hugs its content
 function saveAgentGeom() {
-  const el = $('agentDrawer'); const r = el.getBoundingClientRect();
+  const el = $('agentDrawer'); if (el.classList.contains('ag-docked')) return; // a pane has no window geometry
+  const r = el.getBoundingClientRect();
   const h = agentUserResized || el.style.height ? r.height : null;
   try { localStorage.setItem(AI_GEOM_KEY, JSON.stringify({ left: r.left, top: r.top, w: r.width, h })); } catch {}
 }
 function restoreAgentGeom() { // called when the window opens
   const el = $('agentDrawer');
+  if (el.classList.contains('ag-docked')) return; // sized by the workspace pane, not by the saved window
   let g = null; try { g = JSON.parse(localStorage.getItem(AI_GEOM_KEY)); } catch {}
   if (!g) return;
   el.style.width = Math.min(g.w, window.innerWidth * 0.96) + 'px';
@@ -3791,6 +4589,7 @@ function restoreAgentGeom() { // called when the window opens
   const el = $('agentDrawer'); if (!el) return;
   const header = el.querySelector(':scope > div'); // the title/controls row is the drag handle
   header.addEventListener('pointerdown', (e) => {
+    if (el.classList.contains('ag-docked')) return; // docked in the workspace: the header is not a drag handle
     if (e.target.closest('button, input, .ag-menu')) return; // controls and the options menu are not drag targets
     const r = el.getBoundingClientRect();
     const ox = e.clientX - r.left, oy = e.clientY - r.top;
