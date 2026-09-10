@@ -2787,7 +2787,7 @@ function showAgentChat(st) {
   agentCards.clear();
   for (const m of st.chat || []) appendAgentMsg(m.role, m.text, null, m);
   for (const p of st.proposals || []) appendAgentProposal(p);
-  if (!$('agentMessages').children.length) renderAgentEmpty();
+  if (!$('agentMessages').children.length || [...$('agentMessages').children].every((el) => el.classList.contains('agent-session-note'))) renderAgentEmpty();
   agentBusy = !!st.busy || agentPendingSessions.has(agentSessionId());
   setAgentBusyUi(agentBusy);
   if (agentBusy) addAgentWorking();
@@ -2863,14 +2863,29 @@ function appendAgentMsg(role, text, actions, meta) {
         <div class="ap-head">Log shared: <b>${esc(meta.mode || 'run')}</b> on <b>${esc(meta.target || '')}</b> <span class="badge ${esc(meta.status || '')}">${esc(String(meta.status || '').replace('_', ' '))}</span></div>
         <div class="ap-meta">${esc(meta.runId || '')}${meta.stage ? ` · stage ${esc(meta.stage)}` : ''}${meta.error ? ` · ${esc(String(meta.error).slice(0, 120))}` : ''}</div>
         <details><summary>${(meta.lines || []).length} log line(s)</summary><pre>${esc((meta.lines || []).join('\n'))}</pre></details>`;
+    } else if (meta?.kind === 'ssh-attach') {
+      el.className = 'agent-session-note';
+      el.innerHTML = `<details><summary>Session connected</summary><div class="agent-note-body">${esc(text)}</div></details>`;
+    } else if (meta?.kind === 'deploy-explain' || meta?.kind === 'deploy-preship') {
+      el.className = 'agent-report';
+      const title = meta.kind === 'deploy-explain' ? 'Deployment analysis' : 'Pre-ship review';
+      const lines = String(text || '').split('\n');
+      const context = lines.shift() || '';
+      // Keep the saved note intact, but separate its identity from its formatted report.
+      el.innerHTML = `<details><summary><span>${title}</span><small>${esc(meta.runId || 'View review')}</small></summary><div class="agent-report-body"><p class="agent-report-context">${esc(context)}</p><div class="txt">${renderAgentText(lines.join('\n'))}</div></div></details>`;
     } else if (meta?.kind === 'decision') {
       el.className = 'agent-note';
       el.innerHTML = meta.proposalKind && meta.proposalKind !== 'rule'
         ? `<span class="badge ${meta.decision === 'approved' ? 'approved' : 'rejected'}">${esc(meta.decision)}</span> ${esc(String(text || '').replace(/^User (approved|rejected) the agent's /, ''))}`
         : `<span class="badge ${meta.decision === 'approved' ? 'approved' : 'rejected'}">${esc(meta.decision)}</span> rule ${esc(meta.proposalAction || '')} proposal <b>${esc(meta.ruleName || '')}</b>`;
     } else {
-      el.className = 'agent-note';
-      el.textContent = text;
+      if (String(text || '').length > 280 || String(text || '').split('\n').length > 3) {
+        el.className = 'agent-report';
+        el.innerHTML = `<details><summary>Activity details</summary><div class="agent-report-body txt">${renderAgentText(text)}</div></details>`;
+      } else {
+        el.className = 'agent-note';
+        el.textContent = text;
+      }
     }
     $('agentMessages').appendChild(el);
     $('agentMessages').scrollTop = $('agentMessages').scrollHeight;
@@ -3345,7 +3360,7 @@ function applyAgentComposerState() {
   const kbd = document.querySelector('#agentChatWrap .ag-kbd');
   if (kbd) kbd.textContent = ended
     ? 'Session ended · read-only. Start a terminal on this server for a new session with its own history.'
-    : bound ? 'Enter to send · Shift+Enter for a new line · every command needs your approval'
+    : bound ? 'Enter to send · Shift+Enter for a new line'
       : 'Enter to send · Shift+Enter for a new line · read-only access';
   // command controls that are still on screen go read-only with it
   if (ended) for (const [, el] of agentCards) if (el.dataset.state === 'pending') setProposalState(el, 'stale', 'the session has ended');
@@ -3382,6 +3397,38 @@ async function sshAgentDetach() {
    sessions are offered underneath, in their own scrolling group (live first, ended marked
    read-only) so a long history can never push the actions off screen, and no group at all when
    the server has none. Filled when the menu opens, so the list is never stale. */
+function closeServerTermMenu(menu, restoreFocus = false) {
+  menu.hidden = true;
+  const trigger = menu.parentElement.querySelector('[data-act="terminal-menu"]');
+  trigger?.setAttribute('aria-expanded', 'false');
+  if (restoreFocus) trigger?.focus();
+}
+
+function positionServerTermMenu(menu) {
+  if (menu.hidden) return;
+  const anchor = menu.parentElement.getBoundingClientRect();
+  const gap = 6, margin = 12;
+  const below = window.innerHeight - anchor.bottom - gap - margin;
+  const above = anchor.top - gap - margin;
+  menu.style.maxHeight = Math.max(0, Math.max(below, above)) + 'px';
+  const height = menu.getBoundingClientRect().height;
+  const top = below >= height || below >= above ? anchor.bottom + gap : anchor.top - gap - height;
+  menu.style.top = Math.max(margin, top) + 'px';
+  menu.style.left = Math.max(margin, Math.min(anchor.left, window.innerWidth - menu.offsetWidth - margin)) + 'px';
+}
+
+document.addEventListener('click', (event) => {
+  document.querySelectorAll('.term-dd-menu:not([hidden])').forEach((menu) => {
+    if (!menu.parentElement.contains(event.target)) closeServerTermMenu(menu);
+  });
+});
+window.addEventListener('resize', () => document.querySelectorAll('.term-dd-menu:not([hidden])').forEach(positionServerTermMenu));
+document.addEventListener('scroll', (event) => {
+  document.querySelectorAll('.term-dd-menu:not([hidden])').forEach((menu) => {
+    if (!menu.contains(event.target)) positionServerTermMenu(menu);
+  });
+}, true);
+
 async function fillServerSessionMenu(card, srv) {
   const menu = card.querySelector('.term-dd-menu');
   if (!menu || menu.hidden) return;
@@ -3404,22 +3451,29 @@ async function fillServerSessionMenu(card, srv) {
     // wired here rather than through the card's delegate: these buttons are added after it was built
     b.addEventListener('click', (ev) => {
       ev.stopPropagation();
-      menu.hidden = true;
+      closeServerTermMenu(menu);
       if (ended) viewEndedSession({ sessionId: x.sessionId, profileId: srv.id, name: x.name || srv.name });
       else openSsh(srv.id, { ai: true, label: srv.name, sessionId: x.sessionId });
     });
     group.appendChild(b);
   }
   menu.appendChild(group);
+  positionServerTermMenu(menu);
 }
 
 /* Keyboard path for the Terminal menu: arrows move, Home/End jump, Escape closes and returns
    focus to the trigger. Enter is the button's own activation, so it starts whatever is focused -
    and focus starts on "Terminal", never on a dead transcript. */
 function wireTermMenuKeys(menu, trigger) {
+  trigger.setAttribute('aria-expanded', 'true');
+  menu.addEventListener('focusout', () => {
+    requestAnimationFrame(() => {
+      if (!menu.parentElement.contains(document.activeElement)) closeServerTermMenu(menu);
+    });
+  });
   menu.addEventListener('keydown', (e) => {
     const items = [...menu.querySelectorAll('button')];
-    if (e.key === 'Escape') { menu.hidden = true; trigger.focus(); e.stopPropagation(); return; }
+    if (e.key === 'Escape') { closeServerTermMenu(menu, true); e.preventDefault(); e.stopPropagation(); return; }
     const i = items.indexOf(document.activeElement);
     let n = -1;
     if (e.key === 'ArrowDown') n = (i + 1) % items.length;
@@ -3462,13 +3516,15 @@ function serverCard(s) {
     body = `<div class="srv-err">Could not read VM info: ${esc(m.error)}</div>`;
   } else if (!s.connected) {
     body = `<div class="srv-metaline">Not connected: connect to pull live VM stats.</div>`;
+  } else {
+    body = '<div class="srv-metaline">Connected. Refresh to load server statistics.</div>';
   }
   el.innerHTML = `
     <div class="srv-head">
       <span class="srv-dot ${s.connected ? 'on' : ''}"></span>
       <div class="srv-id">
         <div class="srv-nameRow">
-          <span class="srv-name" title="${esc(s.name)}">${esc(s.connected && m && !m.error ? (m.host || s.name) : s.name)}</span>
+          <span class="srv-name" title="${esc(m?.host ? `${s.name} (${m.host})` : s.name)}">${esc(s.name)}</span>
           ${s.active ? '<span class="badge approved">active DB</span>' : ''}
           ${live.length ? `<span class="badge approved srv-live" title="This server has a running shell you can go back to">${live.length} live terminal${live.length === 1 ? '' : 's'}</span>` : ''}
         </div>
@@ -3484,20 +3540,22 @@ function serverCard(s) {
         ? `<button data-act="refresh">Refresh</button><div class="term-dd"><button data-act="terminal-menu" class="primary">${live.length ? 'Resume' : 'Terminal'} <svg class="caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button><div class="term-dd-menu" hidden><button data-act="terminal">${live.length ? 'Resume terminal' : 'Terminal'}</button><button data-act="terminal-ai" class="aireview glossy" title="Open a terminal and work in it with the assistant">${AI_LOGO_REST}<span>${live.length ? 'Resume with AI' : 'Terminal + AI'}</span></button><button data-act="terminal-new">New terminal</button></div></div><span class="spacer"></span><button data-act="disconnect" class="warn">Disconnect</button>`
         : `<button data-act="connect" class="primary">Connect</button><span class="spacer"></span>${s.sshOnly ? '<button data-act="remove" class="iconbtn danger" title="Remove this SSH server">' + RULE_ICONS.trash + '</button>' : ''}`}
     </div>`;
-  const closeTermMenu = () => { const m = el.querySelector('.term-dd-menu'); if (m) m.hidden = true; };
+  el.querySelector('[data-act="terminal-menu"]')?.setAttribute('aria-expanded', 'false');
+  const closeTermMenu = () => { const m = el.querySelector('.term-dd-menu'); if (m) closeServerTermMenu(m); };
   el.querySelectorAll('.srv-actions [data-act]').forEach((b) => b.addEventListener('click', async (ev) => {
     const act = b.dataset.act;
     if (act === 'terminal-menu') {
       ev.stopPropagation();
       const m = el.querySelector('.term-dd-menu');
       const willOpen = m.hidden;
-      document.querySelectorAll('.term-dd-menu').forEach((x) => { x.hidden = true; }); // close others
+      document.querySelectorAll('.term-dd-menu').forEach((x) => closeServerTermMenu(x));
       m.hidden = !willOpen;
+      b.setAttribute('aria-expanded', String(willOpen));
       if (willOpen) {
+        positionServerTermMenu(m);
         if (!m.dataset.keys) { wireTermMenuKeys(m, b); m.dataset.keys = '1'; }
         m.querySelector('[data-act="terminal"]').focus(); // Enter starts a terminal, never a dead transcript
         fillServerSessionMenu(el, s);
-        setTimeout(() => document.addEventListener('click', function h() { closeTermMenu(); document.removeEventListener('click', h); }), 0);
       }
       return;
     }

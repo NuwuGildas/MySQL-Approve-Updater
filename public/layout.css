@@ -225,7 +225,33 @@ body.shell #connModal[open]:not([data-st-modal]) > * { max-width: 920px; }
    to show both panes at once. Below that they are Terminal/Chat tabs and only the selected pane
    is in the flow. The body classes deliberately do NOT reuse the .ws-split component class: a body
    class colliding with a component class silently applies that component's rules to <body>. */
-body.ws-wide .ws-pane-chat { flex: 0 0 clamp(320px, 34%, 460px); border-left: 1px solid var(--border); padding-left: .65rem; }
+body.ws-wide .ws-pane-chat { flex: 0 0 clamp(360px, 32%, 480px); }
+body.ws-page .ws-split { border: 0; padding: .65rem 0 0; gap: 1rem; }
+body.ws-page .ws-pane-term { border: 1px solid var(--border); border-radius: 12px;border-top-left-radius: 0; background: var(--panel); overflow: hidden; }
+body.ws-page .ws-ident { gap: .5rem; margin: 0; padding: .65rem .75rem; background: var(--panel2); border-bottom: 1px solid var(--border); }
+body.ws-page .ssh-console { padding-bottom: 0; }
+body.ws-page .ssh-console-term { border: 0; border-radius: 0; padding: .75rem; }
+body.ws-page .ws-ident button, body.ws-page .ws-session-pick { min-height: 34px; }
+body.ws-page .ws-session-pick { min-width: 0; width: auto; max-width: min(16rem, 100%); }
+body.ws-page .ws-ident .spacer { min-width: 0; }
+body.ws-page #agentDrawer.ag-docked, body.shell.agent-dock-pref.agent-open #agentDrawer.ag-docked { resize: none; overflow: hidden; border: 1px solid var(--border); border-radius: 12px; }
+#agentDrawer.ag-docked .ag-sub { flex-wrap: wrap; white-space: normal; overflow-wrap: anywhere; row-gap: .2rem; line-height: 1.5; }
+#agentDrawer.ag-docked #agentMessages { min-height: 0; }
+#agentDrawer.ag-docked .ag-head { padding: .85rem 1rem; }
+#agentDrawer.ag-docked #agentMessages { padding: .8rem 1rem; gap: .75rem; }
+#agentDrawer.ag-docked .ag-empty { margin-block: auto; padding: 1.5rem .5rem; }
+#agentDrawer.ag-docked .ag-empty .ag-ico { width: 44px; height: 44px; }
+#agentDrawer.ag-docked .ag-empty .ag-ico .ai-mini { height: 34px; }
+#agentDrawer.ag-docked .ag-empty .hint { display: none; }
+#agentDrawer.ag-docked .ag-composer { margin: .75rem 1rem 0; min-height: 48px; }
+#agentDrawer.ag-docked .ag-kbd { padding: .4rem 1rem .85rem; }
+.ag-composer textarea { min-width: 0; width: 100%; }
+.ag-kbd { font-size: .7rem; line-height: 1.5; opacity: 1; }
+#serversList { grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); }
+.srv-card { min-width: 0; max-width: none; }
+.srv-nameRow { flex-wrap: wrap; row-gap: .25rem; }
+.srv-sub, .srv-metaline, .srv-os { overflow-wrap: anywhere; }
+.srv-actions > button, .srv-actions .term-dd > button { min-height: 34px; }
 /* Side by side, two identity lines read as a duplicate: the terminal pane's session bar is already
    on screen, so the chat pane shows its own only when it stands alone as a tab. The same argument
    applies to the ownership badge. The control ACTION stays in both panes at every width, because
