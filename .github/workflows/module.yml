@@ -98,3 +98,84 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: artifacts/*
+
+  # The marketplace catalog, rebuilt from every module release once this one is
+  # published. It lives here rather than in a workflow of its own on master,
+  # because a tag push only runs workflows that exist in the TAGGED commit - and
+  # these tags point into this module branch, which carries only this file. (An
+  # `on: release` workflow would not help either: a release created with
+  # GITHUB_TOKEN raises no event that starts another workflow.)
+  #
+  # The concurrency group is shared by every module's copy of this job, so two
+  # modules released at once publish the catalog one after the other instead of
+  # overwriting one another.
+  catalog:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/history-v')
+    runs-on: ubuntu-latest
+    concurrency:
+      group: module-catalog
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+
+      # Every released module's description file. "<id>-v<version>" is the tag
+      # shape a module release uses; the catalog's own release is not one.
+      - name: Collect every released module
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p artifacts
+          found=0
+          for tag in $(gh release list --limit 200 --json tagName --jq '.[].tagName'); do
+            case "$tag" in *-v*) ;; *) continue ;; esac
+            if gh release download "$tag" --pattern '*.json' --dir artifacts --clobber 2>/dev/null; then
+              echo "collected $tag"
+              found=$((found + 1))
+            else
+              echo "::warning::$tag has no module description asset; skipped"
+            fi
+          done
+          [ "$found" -gt 0 ] || { echo "::error::no module releases found"; exit 1; }
+
+      - name: Build the catalog
+        run: |
+          node scripts/build-catalog.js \
+            --dir artifacts \
+            --out catalog.json \
+            --name "Server Tools modules" \
+            --url-template '${{ github.server_url }}/${{ github.repository }}/releases/download/{id}-v{version}/{file}'
+
+      # An unsigned entry would offer users a version the application then
+      # refuses to install. Better to fail here, and say why.
+      - name: Refuse to publish an unsigned catalog
+        run: |
+          node -e "
+            const catalog = require('./catalog.json');
+            const bad = catalog.modules.flatMap((m) => m.versions.filter((v) => !v.package.signature).map((v) => m.id + ' ' + v.version));
+            if (bad.length) {
+              console.error('unsigned: ' + bad.join(', '));
+              console.error('Set the MODULE_SIGNING_KEY secret and MODULE_SIGNING_KEY_ID variable, then release again.');
+              process.exit(1);
+            }
+            console.log(catalog.modules.length + ' module(s), every version signed');
+          "
+
+      - name: Publish it at one unchanging URL
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view catalog >/dev/null 2>&1; then
+            gh release upload catalog catalog.json --clobber
+          else
+            gh release create catalog catalog.json --title "Module catalog" \
+              --notes "The marketplace catalog, rebuilt whenever a module is released."
+          fi
+          echo "published ${{ github.server_url }}/${{ github.repository }}/releases/download/catalog/catalog.json"
