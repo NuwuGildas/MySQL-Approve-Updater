@@ -150,7 +150,7 @@ test('two sessions on one server keep separate conversations and separate memory
   await assert.rejects(ctx.agent.attach('p2', { sessionId: a.sessionId }), /another server/);
 });
 
-test('the conversation outlives the terminal, and outlives this module', async (t) => {
+test('a closed terminal keeps its conversation and loses its tools', async (t) => {
   const ctx = setup(t);
   const session = await ctx.agent.attach('p1');
   ctx.push(session.sessionId, { role: 'user', text: 'still here' });
@@ -160,12 +160,16 @@ test('the conversation outlives the terminal, and outlives this module', async (
   // Closed: no tools, but the transcript is still readable.
   assert.equal(ctx.agent.tools.ssh_exec.enabled(session.sessionId), false);
   assert.equal(ctx.history(session.sessionId).at(-1).text, 'still here');
+  assert.equal((await ctx.status(session.sessionId)).attached, false);
+  await assert.rejects(ctx.agent.tools.ssh_exec.run({ cmd: 'ls' }, { sessionId: session.sessionId }), /closed|ended/i);
 
-  // With no module publishing a view at all - the module removed - the store is
-  // still readable and simply refuses to be worked in.
-  ctx.conversations.setSessionView(null);
-  assert.equal(ctx.conversations.history(session.sessionId).at(-1).text, 'still here');
-  assert.throws(() => ctx.conversations.requireSession(session.sessionId), /not installed/);
+  /* What the module publishes is what makes a session workable, so withdrawing
+     it - which is what removing this module does - closes every session while
+     leaving every transcript where it was. The host's own suite covers the
+     other half: that the store survives the module entirely. */
+  await ctx.host.call('sessions.publish', { sessions: {} });
+  assert.equal(ctx.history(session.sessionId).at(-1).text, 'still here');
+  assert.equal((await ctx.status(session.sessionId)).attached, false);
 });
 
 test('the read-file helper produces one capped, quoted, absolute-path approval', async (t) => {
