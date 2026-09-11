@@ -43,6 +43,9 @@ const AGENTS = {
        makes no edit. Print mode with no interactive prompt cannot be granted
        anything it was not started with. */
     run: '-p --permission-mode plan',
+    /* Which variable this CLI reads a borrowed credential from. A setup-token
+       (sk-ant-oat…) is the OAuth one; anything else is treated as an API key. */
+    tokenEnv: (kind) => (kind === 'oauth' ? 'CLAUDE_CODE_OAUTH_TOKEN' : 'ANTHROPIC_API_KEY'),
     login: 'Open the server terminal and run "claude" once to sign in; the CLI keeps its own credentials on the server.',
   },
   codex: {
@@ -53,6 +56,7 @@ const AGENTS = {
     /* `codex exec` is the non-interactive form; the read-only sandbox is what
        keeps it from writing. */
     run: 'exec --sandbox read-only --color never -',
+    tokenEnv: () => 'OPENAI_API_KEY',
     login: 'Open the server terminal and run "codex" once to sign in; the CLI keeps its own credentials on the server.',
   },
 };
@@ -167,7 +171,7 @@ function createRemoteAgents({ exec, log = () => {} }) {
    * run - which are proposals, nothing more: the caller puts them through the
    * approval path.
    */
-  async function ask(client, { agent: agentId, task, serverName, cwd, known = null, timeoutMs = 180000, maxBytes = 256 * 1024, signal } = {}) {
+  async function ask(client, { agent: agentId, task, serverName, cwd, known = null, credential = null, timeoutMs = 180000, maxBytes = 256 * 1024, signal } = {}) {
     const agent = AGENTS[agentId];
     if (!agent) throw fail(400, `Unknown agent "${agentId}". Known: ${ids().join(', ')}`);
     const question = String(task || '').trim();
@@ -178,10 +182,27 @@ function createRemoteAgents({ exec, log = () => {} }) {
     const present = (known || await detect(client))[agentId];
     if (!present.installed) throw fail(409, `${agent.label} is not installed on "${serverName}". Install it from the server's card first.`);
 
+    /* A borrowed credential travels on STDIN, never in the command.
+     *
+     * Anything on the command line is visible in `ps` to every user on that
+     * server, and anything written to a file outlives the run - "delete it
+     * afterwards" cannot un-write it. So the token is the FIRST LINE of stdin,
+     * read by a one-line wrapper that exports it and execs the CLI, which then
+     * reads the rest of stdin as its prompt. It exists in that one process's
+     * environment and nowhere else, and is gone when the process exits: there is
+     * nothing left to clean up, which is the only kind of cleanup worth having.
+     *
+     * It is still readable by that user and by root while it runs. That is the
+     * trust this asks for, and it is why it is off by default.
+     */
+    const wrapped = credential
+      ? `sh -c 'IFS= read -r __st_tok; export ${agent.tokenEnv(credential.kind)}="$__st_tok"; unset __st_tok; exec ${agentId} ${agent.run}'`
+      : `${agentId} ${agent.run}`;
+
     const started = Date.now();
-    const run = await exec(client, `${PATH_PREFIX}cd ${cwd ? shellSingleQuote(cwd) : '"$HOME"'} && ${agentId} ${agent.run}`, {
+    const run = await exec(client, `${PATH_PREFIX}cd ${cwd ? shellSingleQuote(cwd) : '"$HOME"'} && ${wrapped}`, {
       timeoutMs, maxBytes, signal,
-      stdin: briefing({ task: question, serverName, cwd }),
+      stdin: (credential ? `${credential.token}\n` : '') + briefing({ task: question, serverName, cwd }),
     });
     const text = String(run.stdout || '');
     const plan = readPlan(text);

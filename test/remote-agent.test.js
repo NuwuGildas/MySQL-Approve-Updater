@@ -179,3 +179,47 @@ test('a version is the number, because the label is already ours to add', async 
   const none = await detect('claude MISSING\ncodex MISSING\n');
   assert.deepEqual([none.claude.installed, none.claude.version], [false, null]);
 });
+
+test('a borrowed credential never reaches the command line, and nothing is left behind', async () => {
+  /* The whole point of lending the assistant's sign-in to an agent elsewhere is
+     that it leaves no trace to clean up. Two things make that true, and both are
+     asserted here: the token is not in the command (so `ps` cannot show it) and
+     it is not written anywhere (so there is nothing to delete afterwards). */
+  const SECRET = 'sk-ant-oat-super-secret-value';
+  const exec = fakeExec(present('2.1.250', '0.9.0'));
+  const agents = createRemoteAgents({ exec });
+
+  await agents.ask({}, {
+    agent: 'claude', task: 'why is / full?', serverName: 'BOX',
+    credential: { token: SECRET, kind: 'oauth' },
+  });
+  const call = exec.calls.at(-1);
+
+  assert.equal(call.command.includes(SECRET), false, 'the token is not in argv, so ps cannot show it');
+  assert.equal(/>|tee|cat\s*>/.test(call.command), false, 'nothing redirects it into a file');
+  assert.match(call.command, /IFS= read -r __st_tok/, 'it is read from stdin by the wrapper');
+  assert.match(call.command, /export CLAUDE_CODE_OAUTH_TOKEN="\$__st_tok"/, 'a setup-token goes in the OAuth variable');
+  assert.match(call.command, /unset __st_tok/, 'and the shell variable is dropped before the CLI is exec-ed');
+  assert.match(call.command, /exec claude -p --permission-mode plan/, 'the CLI replaces the wrapper, keeping the same stdin');
+
+  /* The token is the FIRST line of stdin; the briefing follows it. */
+  assert.equal(call.options.stdin.startsWith(SECRET + '\n'), true);
+  assert.match(call.options.stdin, /TASK: why is \/ full\?/);
+
+  /* An API key goes in the API-key variable instead. */
+  await agents.ask({}, { agent: 'claude', task: 'x', serverName: 'BOX', credential: { token: 'sk-ant-api-key', kind: 'api-key' } });
+  assert.match(exec.calls.at(-1).command, /export ANTHROPIC_API_KEY=/);
+
+  await agents.ask({}, { agent: 'codex', task: 'x', serverName: 'BOX', credential: { token: 'oai-key', kind: 'api-key' } });
+  assert.match(exec.calls.at(-1).command, /export OPENAI_API_KEY=/);
+});
+
+test('with no credential to lend, the run is exactly what it always was', async () => {
+  const exec = fakeExec(present('1.0', null));
+  const agents = createRemoteAgents({ exec });
+  await agents.ask({}, { agent: 'claude', task: 'x', serverName: 'BOX' });
+  const call = exec.calls.at(-1);
+  assert.equal(/read -r __st_tok/.test(call.command), false, 'no wrapper when there is nothing to pass');
+  assert.match(call.command, /&& claude -p --permission-mode plan$/);
+  assert.equal(call.options.stdin.startsWith('You are investigating'), true, 'stdin is just the briefing');
+});

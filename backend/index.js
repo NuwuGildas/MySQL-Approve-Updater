@@ -74,8 +74,19 @@ async function activate(host) {
       if (!chosen) {
         throw Object.assign(new Error(`No coding agent is installed on "${serverName}". Install Claude Code or Codex from the server's card first.`), { status: 409 });
       }
+      /* The agent on the server may borrow the assistant's own sign-in, if the
+         user turned that on. The host refuses unless it is on and it actually
+         holds a token, and a refusal is not a failure here: the agent's own
+         login on the box is the normal case. The token is fetched per run and
+         held only for the length of this call. */
+      let credential = null;
+      if (settings.aiAssist?.shareCredentialWithAgents) {
+        try { credential = await host.call('assistant.credential', {}); }
+        catch (error) { log('info', `not sharing the assistant sign-in with "${serverName}": ${error.message}`); }
+      }
+
       return agents.ask(session.client, {
-        agent: chosen, task, serverName, known: found,
+        agent: chosen, task, serverName, known: found, credential,
         timeoutMs: Math.min(600000, Math.max(10000, (Number(timeoutSec) || 180) * 1000)),
       });
     },

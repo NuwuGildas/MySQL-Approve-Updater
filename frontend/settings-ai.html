@@ -13,4 +13,11 @@
           <p class="sg-hint">Write commands you allowed above run without asking each time, so the assistant can finish a task in one go. Destructive commands still stop for approval. Read-only commands never needed it.</p>
           <label class="chk"><input type="checkbox" id="setAiSshMemory" data-assist="sshMemory"> Remember each server's conversation</label>
           <p class="sg-hint">What you discussed and which commands ran are kept per server in <code>ssh-agent-memory.json</code>, and given back as context the next time you connect. The assistant can search it (<code>ssh_recall</code>) and add notes (<code>ssh_remember</code>).</p>
+          <label class="chk"><input type="checkbox" id="setAiShareCredential" data-assist="shareCredentialWithAgents"> Let a server's coding agent sign in as you</label>
+          <p class="sg-hint">
+            Without this, the coding agent on a server uses its own login there, and you renew it by running <code>claude</code> in that server's terminal when it expires.
+            With it, each run borrows this application's AI token instead — handed over on stdin, so it is never in a command line and never written to that machine, and it is gone when the run ends.
+            <b>It is still readable by that server's user and by root while it runs</b>, so leave this off for a server whose root you do not trust.
+            It needs a token this application holds: connect the assistant with <b>Claude (API key or sign-in token)</b> — <code>claude setup-token</code> makes one for exactly this, separate from your main login and revocable on its own.
+          </p>
         </div>
