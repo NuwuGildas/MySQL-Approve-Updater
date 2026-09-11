@@ -1,0 +1,42 @@
+{
+  "packageFormat": 1,
+  "id": "deployments",
+  "name": "Deployments · The Ascension",
+  "description": "Connect a repository, detect its stack, review the plan and ship to a VPS, shared host or platform, with rollback, health checks and run history.",
+  "version": "1.0.0",
+  "publisher": "Server Tools",
+  "hostSdk": "^1.0.0",
+  "frontend": "frontend/index.js",
+  "backend": "backend/index.js",
+  "dependencies": {},
+  "sharedDependencies": [
+    "ssh2",
+    "express",
+    "tar"
+  ],
+  "bundledDependencies": [
+    "picomatch",
+    "basic-ftp"
+  ],
+  "capabilities": [
+    "ui:pages",
+    "ui:commands",
+    "ui:settings",
+    "assistant:tools",
+    "assistant:proposals",
+    "storage:module",
+    "events:subscribe",
+    "audit:write",
+    "connections:read",
+    "connections:write",
+    "connections:secrets",
+    "projects:read",
+    "vault:read",
+    "vault:write",
+    "process:exec",
+    "net:outbound"
+  ],
+  "pages": [
+    "deployments"
+  ]
+}

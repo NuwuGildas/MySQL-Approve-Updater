@@ -1,0 +1,72 @@
+# Build, test and publish the deployments module.
+#
+# This branch holds one standalone package. CI builds it into a versioned,
+# signed archive and attaches that archive to a release; the marketplace catalog
+# then points at the release. Nothing is ever installed from a moving branch:
+# a catalog entry names an immutable commit and a digest.
+name: deployments
+
+on:
+  push:
+    branches: [modules/deployments]
+    tags: ['deployments-v*']
+  pull_request:
+    branches: [modules/deployments]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: module }
+
+      # The host SDK lives on the default branch; the build tooling comes from there.
+      - uses: actions/checkout@v4
+        with: { ref: master, path: host }
+
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+
+      - name: Install host tooling
+        working-directory: host
+        run: npm ci --omit=optional
+
+      - name: Check the manifest against this host SDK
+        working-directory: host
+        run: node -e "const {validateManifest}=require('./lib/host/manifest');const m=validateManifest(require('../module/module.json'));if(!m.compatible)throw new Error(m.name+' is not compatible with host SDK '+require('./lib/host/sdk').HOST_SDK_VERSION);console.log(m.id,m.version,'ok')"
+
+      - name: Test
+        working-directory: module
+        run: |
+          if [ -d test ]; then node --test "test/**/*.test.js"; else echo "no tests in this package"; fi
+
+      - name: Build the package
+        working-directory: host
+        env:
+          SIGNING_KEY: ${{ secrets.MODULE_SIGNING_KEY }}
+          SIGNING_KEY_ID: ${{ vars.MODULE_SIGNING_KEY_ID }}
+        run: |
+          mkdir -p keys
+          if [ -n "$SIGNING_KEY" ]; then printf '%s' "$SIGNING_KEY" > keys/ci.private.pem; fi
+          node scripts/build-module.js deployments \
+            --source ../module \
+            --out ../artifacts \
+            --commit "${{ github.sha }}" \
+            --branch "modules/deployments" \
+            --repository "${{ github.server_url }}/${{ github.repository }}" \
+            ${SIGNING_KEY:+--sign keys/ci.private.pem --key-id "${SIGNING_KEY_ID:-ci}"}
+          rm -f keys/ci.private.pem
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deployments-package
+          path: artifacts/*
+
+      # A tag is what publishes: the archive becomes a release asset, and the
+      # catalog entry that points at it is updated from these same files.
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/deployments-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*

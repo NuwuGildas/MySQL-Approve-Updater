@@ -1,0 +1,17 @@
+        <div class="settings-group">
+          <div class="sg-head">Deploy assistance (The Ascension) <span class="hint" style="margin:0">read-only and advisory: the assistant still cannot ship, roll back or read secrets</span></div>
+          <label class="chk"><input type="checkbox" id="setAiRepoFiles" data-assist="repoFiles"> Read-only repo file access</label>
+          <p class="sg-hint">A whitelisted view of key files (ship.json, Dockerfile, compose, package.json, composer.json, .env.example, requirements.txt, pyproject.toml, Procfile, README) with secret-looking values masked, so the manifest can be reviewed against the real repo.</p>
+          <label class="chk"><input type="checkbox" id="setAiPlanDiff" data-assist="planDiff"> Plan-run diffs</label>
+          <p class="sg-hint">Every Plan records what would change versus the last successful ship: commits since, manifest keys, commands added or removed, build location. Shown in the Plan tab and readable by the assistant.</p>
+          <label class="chk"><input type="checkbox" id="setAiHealth" data-assist="healthProbe"> Post-ship health checks</label>
+          <p class="sg-hint">Exposes the target's health URL and the stored server probe (current release, releases on disk, lock) through a read-only tool, so a ship can be verified instead of inferred.</p>
+          <label class="chk"><input type="checkbox" id="setAiLogSearch" data-assist="logSearch"> Full log search</label>
+          <p class="sg-hint">Search a run's whole redacted log (regex, per stage, with context) instead of only its tail. Also adds a filter box to the Log tab.</p>
+          <label class="chk"><input type="checkbox" id="setAiTemplates" data-assist="templates"> Manifest templates with guardrails</label>
+          <p class="sg-hint">Per-framework starter manifests with required safety fields (database backup before migrations, shared .env and storage paths, start command and port, health path). AI manifest proposals must pass the guardrail check before they reach you.</p>
+          <label class="chk"><input type="checkbox" id="setAiAutoExplain" data-assist="autoExplain"> Propose fixes when a run fails</label>
+          <p class="sg-hint">A failed plan, ship or rollback is analysed automatically. When a deploy action would help (re-plan, retry, roll back, unlock, cancel) it is proposed as a card in the AI chat; nothing runs until you approve it there. Without this, use "Explain with AI" or "Send to AI chat" on the run.</p>
+          <label class="chk"><input type="checkbox" id="setAiPreShip" data-assist="preShipReview"> Pre-ship checklist</label>
+          <p class="sg-hint">Ship first asks the assistant to review the manifest, the latest plan and the last run. Its verdict and findings are shown in the confirmation; you decide.</p>
+        </div>

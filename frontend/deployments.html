@@ -1,0 +1,590 @@
+<aside id="deployDrawer" aria-label="The Ascension" inert>
+  <header class="asc-head">
+    <div class="asc-brand">
+      <span class="asc-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3l5 9-5 3-5-3 5-9z"/><path d="M7 14l5 7 5-7"/><circle cx="12" cy="3" r="1.2" class="asc-star"/></svg></span>
+      <div class="asc-title"><h2>The Ascension</h2><span class="asc-sub">Build → Deploy → Ship</span></div>
+    </div>
+    <div class="asc-status" id="dpSysStatus" title="System status"></div>
+    <span class="spacer"></span>
+    <button id="btnDpNew" class="primary asc-new-btn" title="Guided setup in five steps: source, framework, destination, access, review">New deployment</button>
+    <div class="asc-add">
+      <button id="btnDpAdd" class="asc-add-btn" title="Add a single resource or import/export configuration">Add <span class="asc-caret">▾</span></button>
+      <div class="asc-menu" id="dpAddMenu" hidden>
+        <button data-act="add-repo"><b>Repository</b><span>Git URL or local folder</span></button>
+        <button data-act="add-target"><b>Target</b><span>VPS over SSH or shared hosting</span></button>
+        <button data-act="add-secret"><b>Secret</b><span>Token, password or .env in the vault</span></button>
+        <button data-act="add-cloud"><b>Cloud server</b><span>Provision a VM on DigitalOcean, Hetzner, AWS, GCP or Azure</span></button>
+        <button data-act="wizard"><b>Guided setup</b><span>Source → framework → destination → access → review, in five steps</span></button>
+        <div class="asc-menu-sep"></div>
+        <button data-act="export"><b>Export configuration</b><span>Repos, targets and templates as JSON (no secret values)</span></button>
+        <button data-act="import"><b>Import configuration</b><span>Merge a previously exported file</span></button>
+      </div>
+    </div>
+    <button id="btnDpTheme" class="iconbtn asc-icon theme-toggle" title="Switch light / dark"><svg class="ico-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg><svg class="ico-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></button>
+    <button id="btnDpRefresh" class="iconbtn asc-icon" title="Refresh repos, targets and runs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v5h-5"/></svg></button>
+    <button id="btnDpSettings" class="iconbtn asc-icon" title="Deploy settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+    <button id="btnDpClose" class="iconbtn asc-icon" title="Back to Home (Esc)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+  </header>
+  <div id="deployBody">
+    <nav id="deployNav" aria-label="Workspace">
+      <section class="dp-sec">
+        <div class="dp-sec-head"><span class="dp-sec-title">Repositories</span><span class="dp-sec-n" id="dpReposN"></span><button class="dp-mini" data-act="add-repo" title="Connect a repository">+</button></div>
+        <div id="dpRepos"></div>
+      </section>
+      <section class="dp-sec">
+        <div class="dp-sec-head"><span class="dp-sec-title">Targets</span><span class="dp-sec-n" id="dpTargetsN"></span><button class="dp-mini" data-act="add-target" title="Add a deployment target">+</button></div>
+        <div id="dpTargets"></div>
+      </section>
+      <section class="dp-sec">
+        <div class="dp-sec-head"><span class="dp-sec-title">Secrets</span><span class="dp-sec-n" id="dpSecretsN"></span><button class="dp-mini" data-act="add-secret" title="Store a secret">+</button></div>
+        <div id="dpSecrets"></div>
+      </section>
+      <section class="dp-sec">
+        <div class="dp-sec-head"><span class="dp-sec-title">Cloud servers</span><span class="dp-sec-n" id="dpServersN"></span><button class="dp-mini" data-act="add-cloud" title="Provision a VM">+</button></div>
+        <div id="dpServers"></div>
+      </section>
+      <div class="dp-nav-foot">
+        <span id="dpStatus"></span>
+        <button id="btnDpCompact" class="dp-mini" title="Collapse sidebar">«</button>
+      </div>
+    </nav>
+    <section id="deployMain">
+      <div id="dpCloudPanel" hidden></div>
+      <div id="dpEmpty"></div>
+      <div id="dpTarget" hidden>
+        <div class="dp-context" id="dpContext"></div>
+        <div class="dp-pipeline" id="dpPipeline"></div>
+        <div class="dp-cards" id="dpCards"></div>
+        <div id="dpReview"></div>
+        <div class="dp-tabs" id="dpTabs">
+          <span class="dp-tabgroup" title="These tabs describe the selected run">Run</span>
+          <button data-tab="overview" class="on">Overview</button>
+          <button data-tab="map">Map</button>
+          <button data-tab="plan">Plan</button>
+          <button data-tab="log">Log</button>
+          <span class="dp-tabgroup" title="These tabs describe the target">Target</span>
+          <button data-tab="releases">Releases</button>
+          <button data-tab="setup">Setup</button>
+          <button data-tab="manifest">Manifest</button>
+        </div>
+        <div class="dp-tab on" data-tab="overview" id="dpOverview"></div>
+        <div class="dp-tab" data-tab="map" id="dpMap"></div>
+        <div class="dp-tab" data-tab="plan" id="dpPlan"></div>
+        <div class="dp-tab" data-tab="log">
+          <div class="dp-logbar">
+            <select id="dpRunSel" title="Which run to show"></select>
+            <label class="chk" style="margin:0"><input type="checkbox" id="dpAutoscroll" checked> Follow</label>
+            <button id="btnDpExplain" title="Ask the AI assistant to explain this run's failure">Explain with AI</button>
+            <button id="btnDpToChat" title="Share this run's summary and redacted log tail in the AI chat"><img class="ai-mini" src="/assets/robot-logo-animated_1.svg" alt="" aria-hidden="true" style="height:14px"> Send to AI chat</button>
+            <input id="dpLogFilter" type="search" placeholder="Filter log…" title="Show only lines matching this text or regex" hidden style="width:auto;max-width:220px;font-size:.78rem;padding:.2rem .5rem">
+            <span class="spacer"></span>
+            <span class="hint" id="dpLogHint"></span>
+          </div>
+          <pre id="dpLog" class="dp-log"></pre>
+        </div>
+        <div class="dp-tab" data-tab="releases" id="dpReleases"></div>
+        <div class="dp-tab" data-tab="setup" id="dpSetup"></div>
+        <div class="dp-tab" data-tab="manifest">
+          <div class="hint" style="margin:0 0 .4rem">The repo's <b>ship.json</b> (if any) is merged with this saved manifest and the target's overrides. Leave empty to rely on detection alone.</div>
+          <div id="dpAiSuggestion" hidden></div>
+          <textarea id="dpManifest" spellcheck="false" class="dp-code" rows="16" placeholder='{ "stack": { "type": "php", "framework": "laravel" }, ... }'></textarea>
+          <div class="dp-actions" style="margin-top:.5rem">
+            <button id="btnDpManifestValidate">Validate</button>
+            <button id="btnDpManifestSave" class="primary">Save manifest</button>
+            <button id="btnDpManifestDetected">Use detected</button>
+            <a id="dpManifestDownload" class="btn-link" download="ship.json" href="#">Download ship.json</a>
+            <span class="hint" id="dpManifestMsg"></span>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+</aside>
+
+<dialog id="dpRepoModal" aria-label="Repo">
+  <form id="dpRepoForm" method="dialog">
+    <h3 id="dpRepoTitle">Connect a repo</h3>
+
+    <!-- Repository identity -->
+    <section class="form-section">
+      <label for="drName">Name</label>
+      <input
+              id="drName"
+              required
+              placeholder="shop"
+      >
+    </section>
+
+    <!-- Source -->
+    <section class="form-section">
+      <label for="drKind">Source</label>
+      <select id="drKind">
+        <option value="git">Git repository</option>
+        <option value="local">Local folder</option>
+      </select>
+    </section>
+
+    <!-- Git source -->
+    <div data-kind="git">
+
+      <!-- Repository -->
+      <section class="form-section">
+        <label for="drUrl">Repository URL</label>
+        <input
+                id="drUrl"
+                placeholder="https://github.com/acme/shop.git or git@github.com:acme/shop.git"
+        >
+
+        <div class="row">
+          <div>
+            <label for="drBranch">Branch</label>
+            <input
+                    id="drBranch"
+                    placeholder="main"
+            >
+            <span class="hint">Default branch when empty.</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Repository browser -->
+      <section class="form-section">
+        <label>Browse repositories</label>
+
+        <div class="row">
+          <div>
+            <label for="drProvider">Provider</label>
+            <select id="drProvider">
+              <option value="">provider</option>
+              <option value="github">GitHub</option>
+              <option value="gitlab">GitLab</option>
+              <option value="bitbucket">Bitbucket</option>
+            </select>
+          </div>
+
+          <div>
+            <label for="drProviderToken">Token secret</label>
+            <select id="drProviderToken"></select>
+          </div>
+
+          <div class="row-action">
+            <button
+                    type="button"
+                    id="btnDrBrowse"
+                    title="List your repositories using the token"
+            >
+              Browse
+            </button>
+          </div>
+        </div>
+
+        <div id="drBrowse" hidden>
+          <input
+                  id="drBrowseFilter"
+                  placeholder="Filter repositories…"
+          >
+
+          <div id="drBrowseList" class="dp-browse"></div>
+        </div>
+      </section>
+
+      <!-- Authentication -->
+      <section class="form-section">
+        <label for="drAuth">Authentication</label>
+
+        <select id="drAuth">
+          <option value="none">
+            None / Git Credential Manager / SSH Agent
+          </option>
+          <option value="https-token">
+            HTTPS token from the vault
+          </option>
+          <option value="ssh">
+            Specific SSH private key
+          </option>
+        </select>
+
+        <!-- HTTPS authentication -->
+        <div data-auth="https-token">
+          <label for="drTokenRef">Token secret</label>
+          <select id="drTokenRef"></select>
+
+          <span class="hint">
+          Add tokens under Secrets first (PAT, deploy token…).
+        </span>
+        </div>
+
+        <!-- SSH authentication -->
+        <div data-auth="ssh">
+          <label for="drKeyPath">Private key path</label>
+          <input
+                  id="drKeyPath"
+                  placeholder="C:\Users\you\.ssh\id_ed25519"
+          >
+        </div>
+      </section>
+
+    </div>
+
+    <!-- Local source -->
+    <div data-kind="local" hidden>
+      <section class="form-section">
+        <label for="drPath">Folder path on this machine</label>
+
+        <input
+                id="drPath"
+                placeholder="C:\dev\shop"
+        >
+
+        <span class="hint">
+        Deploys the working tree as-is (uncommitted changes included).
+      </span>
+      </section>
+    </div>
+
+    <!-- Actions -->
+    <div class="modal-foot">
+      <button
+              type="button"
+              id="btnDpRepoCancel"
+      >
+        Cancel
+      </button>
+
+      <button
+              type="submit"
+              class="primary"
+      >
+        Save repository
+      </button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dpTargetModal" aria-label="Deploy target">
+  <form id="dpTargetForm" method="dialog" novalidate>
+    <header class="tf-head">
+      <div class="tf-title">
+        <h3 id="dpTargetTitle">New deployment</h3>
+        <p class="tf-subtitle" id="dtSubtitle" aria-live="polite"></p>
+      </div>
+      <div class="tf-head-tools">
+        <select id="dtTemplate" title="Start from a saved configuration" aria-label="Start from a template"><option value="">Start from a template…</option></select>
+      </div>
+    </header>
+
+    <!-- ===== Source: what am I deploying? ===== -->
+    <section class="tf-sec" aria-labelledby="tfSrcH">
+      <h4 id="tfSrcH">Source</h4>
+      <div class="tf-grid">
+        <div class="tf-field"><label for="dtProject">Project</label><select id="dtProject" required aria-describedby="dtProjectHelp"><option value="general">General</option></select><p class="tf-help" id="dtProjectHelp">Every deployment belongs to one project.</p></div>
+        <div class="tf-field"><label for="dtName">Name</label><input id="dtName" required maxlength="80" placeholder="shop-prod" autocomplete="off"><p class="tf-help">Prefilled from the repository; edit freely.</p></div>
+        <div class="tf-field"><label for="dtRepo">Repository</label><select id="dtRepo" required></select></div>
+        <div class="tf-field"><label for="dtBranchView">Branch</label><input id="dtBranchView" readonly tabindex="-1" aria-describedby="dtBranchHelp"><p class="tf-help" id="dtBranchHelp">Repository branch; the automation section can follow another one.</p></div>
+      </div>
+      <label class="chk tf-auto"><input type="checkbox" id="dtAutoEnabled"> <span>Deploy automatically when <code id="dtAutoBranchLabel">main</code> changes</span></label>
+    </section>
+
+    <!-- ===== Server: where is it going? ===== -->
+    <section class="tf-sec" aria-labelledby="tfSrvH">
+      <h4 id="tfSrvH">Server</h4>
+      <div class="tf-grid">
+        <div class="tf-field"><label for="dtType">Destination</label><select id="dtType"><option value="shared-hosting">Shared hosting (SFTP / FTP)</option><option value="local">This computer (a folder on this machine)</option><option value="vps-ssh">Your own server over SSH</option><option value="paas">Platform (Vercel, Netlify, Cloudflare, Fly.io, Render)</option></select></div>
+      </div>
+
+      <div data-type="shared-hosting" hidden>
+        <div class="tf-grid">
+          <div class="tf-field"><label for="dtTransport">Connection method</label><select id="dtTransport"><option value="sftp">SFTP (SSH server profile)</option><option value="ftps">FTPS (FTP over TLS)</option><option value="ftp">FTP (unencrypted)</option></select></div>
+          <div class="tf-field" data-transport="sftp"><label for="dtSftpProfile">Server</label><select id="dtSftpProfile"></select><p class="tf-help">Host, user and key come from the server profile. <button type="button" class="tf-link" data-act="add-server">Add a server…</button></p></div>
+          <div class="tf-field" data-transport="ftp" hidden><label for="dtFtpHost">Host</label><input id="dtFtpHost" placeholder="ftp.example.com" autocomplete="off"></div>
+          <div class="tf-field" data-transport="ftp" hidden><label for="dtFtpUser">Username</label><input id="dtFtpUser" placeholder="acme" autocomplete="off"></div>
+          <div class="tf-field" data-transport="ftp" hidden><label for="dtFtpPass">Password / secret</label><div class="tf-inline"><select id="dtFtpPass"></select><button type="button" class="tf-mini" data-act="new-secret" data-for="dtFtpPass" title="Store a new secret in the vault">+ Secret</button></div></div>
+          <div class="tf-field"><label for="dtDocroot">Deployment directory</label><input id="dtDocroot" placeholder="/public_html" autocomplete="off"><p class="tf-help">The folder your web server serves. Releases are staged next to it.</p></div>
+        </div>
+        <details class="tf-more tf-more-sub" id="dtConnAdv">
+          <summary>Advanced connection settings <span class="tf-sum" id="dtConnSum"></span></summary>
+          <div class="tf-grid">
+            <div class="tf-field" data-transport="ftp"><label for="dtFtpPort">Port</label><input id="dtFtpPort" type="number" min="1" max="65535" placeholder="21"><p class="tf-help" id="dtPortHelp">Default for the selected method; only change it for a custom port.</p></div>
+            <div class="tf-field" data-transport="ftps" hidden><label for="dtFtpSecure">TLS mode</label><select id="dtFtpSecure"><option value="explicit">Explicit (AUTH TLS, port 21)</option><option value="implicit">Implicit (port 990)</option></select></div>
+            <div class="tf-field tf-span" data-transport="ftp"><label for="dtConnUrl">Paste a connection URL</label><input id="dtConnUrl" placeholder="ftp://acme@ftp.example.com:21/public_html" autocomplete="off"><p class="tf-help">Fills method, host, port, username and directory. Passwords in the URL are ignored: pick a vault secret instead.</p></div>
+          </div>
+        </details>
+      </div>
+
+      <div data-type="vps-ssh" hidden>
+        <div class="tf-grid">
+          <div class="tf-field"><label for="dtProfile">Server</label><select id="dtProfile"></select><p class="tf-help">An SSH server profile. <button type="button" class="tf-link" data-act="add-server">Add a server…</button></p></div>
+          <div class="tf-field"><label for="dtRoot">Deployment directory</label><input id="dtRoot" placeholder="/var/www/shop" autocomplete="off"><p class="tf-help">Releases, shared files and the <code>current</code> link live here.</p></div>
+          <div class="tf-field"><label for="dtWeb">Web server</label><select id="dtWeb"><option value="nginx">nginx</option><option value="apache">apache</option><option value="none">none / other</option></select></div>
+        </div>
+        <details class="tf-more tf-more-sub" id="dtVpsAdv">
+          <summary>Domain, reload commands and runtime <span class="tf-sum" id="dtVpsSum"></span></summary>
+          <div class="tf-grid">
+            <div class="tf-field"><label for="dtDomain">Domain <span class="hint">(optional)</span></label><input id="dtDomain" placeholder="shop.example.com" autocomplete="off"><p class="tf-help">An nginx vhost is written after each deploy.</p></div>
+            <div class="tf-field"><label for="dtSslEmail">Certificate e-mail</label><input id="dtSslEmail" placeholder="ops@example.com" autocomplete="off">
+              <div class="tf-checks"><label class="chk"><input type="checkbox" id="dtSsl"> Let's Encrypt certificate</label><label class="chk"><input type="checkbox" id="dtWww"> also www.</label></div></div>
+            <div class="tf-field"><label for="dtReload">Reload command</label><input id="dtReload" placeholder="sudo -n systemctl reload nginx" autocomplete="off"><p class="tf-help">Filled from the web server choice.</p></div>
+            <div class="tf-field"><label for="dtFpm">PHP-FPM reload <span class="hint">(PHP apps)</span></label><input id="dtFpm" placeholder="sudo -n systemctl reload php8.3-fpm" autocomplete="off"></div>
+            <div class="tf-field"><label for="dtProc">Process manager <span class="hint">(Node / Python)</span></label><select id="dtProc"><option value="none">none</option><option value="systemd">systemd</option><option value="pm2">pm2</option></select></div>
+            <div class="tf-field" id="dtProcNameWrap"><label for="dtProcName">systemd unit / pm2 app name</label><input id="dtProcName" placeholder="shop.service or shop" autocomplete="off"></div>
+            <div class="tf-field"><label for="dtBuild">Build location</label><select id="dtBuild"><option value="auto">Auto (on the server when it has the toolchain)</option><option value="remote">On the server</option><option value="local">On this machine, upload the artifact</option></select></div>
+          </div>
+        </details>
+      </div>
+
+      <div data-type="local" hidden>
+        <div class="tf-grid">
+          <div class="tf-field"><label for="dtLocalRoot">Deployment directory</label><input id="dtLocalRoot" placeholder="C:\www\shop" autocomplete="off"><p class="tf-help">A folder on this machine. Releases, shared files and <code>current</code> live inside it.</p></div>
+          <div class="tf-field"><label for="dtLocalProc">Process manager <span class="hint">(Node / Python)</span></label><select id="dtLocalProc"><option value="none">none</option><option value="pm2">pm2</option></select></div>
+          <div class="tf-field" id="dtLocalProcNameWrap" hidden><label for="dtLocalProcName">pm2 app name</label><input id="dtLocalProcName" placeholder="shop" autocomplete="off"></div>
+          <div class="tf-field tf-span"><label for="dtLocalReload">After activation, run <span class="hint">(optional)</span></label><input id="dtLocalReload" placeholder="net stop nginx &amp;&amp; net start nginx" autocomplete="off"><p class="tf-help">Runs in this machine's shell after <code>current</code> is swapped, for example to restart a local web server.</p></div>
+        </div>
+      </div>
+      <div data-type="paas" hidden>
+        <div class="tf-grid">
+          <div class="tf-field"><label for="dtPaasProvider">Platform</label><select id="dtPaasProvider"></select></div>
+          <div class="tf-field"><label for="dtPaasToken">API token</label><div class="tf-inline"><select id="dtPaasToken"></select><button type="button" class="tf-mini" data-act="new-secret" data-for="dtPaasToken" title="Store a new secret in the vault">+ Secret</button></div></div>
+          <div class="tf-field"><label class="chk" style="margin-top:1.6rem"><input type="checkbox" id="dtPaasProd" checked> Production deploy</label></div>
+        </div>
+        <p class="tf-help" id="dtPaasHint"></p>
+        <div class="tf-grid" id="dtPaasFields"></div>
+      </div>
+
+      <div class="tf-test" id="dtTestBox">
+        <button type="button" id="btnDtTest">Test connection</button>
+        <div class="tf-test-result" id="dtTestResult" role="status" aria-live="polite"></div>
+      </div>
+    </section>
+
+    <!-- ===== Progressive disclosure ===== -->
+    <details class="tf-more" id="dtSecEnv">
+      <summary>Environment <span class="tf-sum" id="dtEnvSum"></span><span class="tf-issues" hidden></span></summary>
+      <div class="tf-grid">
+        <div class="tf-field"><label for="dtEnvVault">Environment file</label><div class="tf-inline"><select id="dtEnvVault"><option value="">None</option></select><button type="button" class="tf-mini" data-act="new-secret" data-for="dtEnvVault" title="Store a new secret in the vault">+ Secret</button></div><p class="tf-help">A vault secret whose value is the file content (for example a full <code>.env</code>).</p></div>
+        <div class="tf-field" data-env="on"><label for="dtEnvMode">When deploying</label><select id="dtEnvMode"><option value="upload">Upload it if missing</option><option value="always">Overwrite it every deploy</option><option value="keep">Never write it</option></select></div>
+        <div class="tf-field" data-env="on"><label for="dtEnvTarget">Destination</label><input id="dtEnvTarget" placeholder="shared/.env" autocomplete="off"><p class="tf-help">Relative to the deployment directory.</p></div>
+      </div>
+    </details>
+
+    <details class="tf-more" id="dtSecHealth">
+      <summary>Health checks <span class="tf-sum" id="dtHealthSum"></span><span class="tf-issues" hidden></span></summary>
+      <label class="chk"><input type="checkbox" id="dtHealthEnabled"> Verify the deployment after publishing</label>
+      <div class="tf-grid" data-health="on">
+        <div class="tf-field tf-span"><label for="dtHealth">URL to check</label><input id="dtHealth" type="url" placeholder="https://shop.example.com/up" autocomplete="off"><p class="tf-help">Expected to answer 2xx/3xx within a minute. If it fails, the previous release is restored.</p></div>
+        <div class="tf-field" id="dtHealthRemoteWrap"><label class="chk" style="margin-top:.2rem"><input type="checkbox" id="dtHealthRemote"> Run the check from the server (curl over SSH)</label></div>
+      </div>
+    </details>
+
+    <details class="tf-more" id="dtSecRelease">
+      <summary>Release settings <span class="tf-sum" id="dtReleaseSum"></span><span class="tf-issues" hidden></span></summary>
+      <div class="tf-grid">
+        <div class="tf-field"><label for="dtKeep">Previous releases to keep</label><input id="dtKeep" type="number" min="2" max="50" placeholder="auto" autocomplete="off"><p class="tf-help">Rollback can only go back this far.</p></div>
+        <div class="tf-field" data-type-only="shared-hosting"><label for="dtStrategy">Publishing method</label><select id="dtStrategy"><option value="auto">Auto (detected on the server)</option><option value="symlink">Symlink the document root to the release</option><option value="htaccess">.htaccess rewrite into the release</option><option value="in-place">In place: upload, then swap folders (FTP)</option></select></div>
+        <div class="tf-field" data-type-only="shared-hosting"><label for="dtHome">Releases folder</label><input id="dtHome" placeholder="auto" autocomplete="off"><p class="tf-help" id="dtHomeHelp">Where releases and shared files are kept. Leave empty to derive it from the deployment directory.</p></div>
+      </div>
+    </details>
+
+    <details class="tf-more" id="dtSecAuto" hidden>
+      <summary>Automation details <span class="tf-sum" id="dtAutoSum"></span><span class="tf-issues" hidden></span></summary>
+      <div class="tf-grid">
+        <div class="tf-field"><label for="dtAutoMode">Trigger</label><select id="dtAutoMode"><option value="webhook">Webhook from GitHub / GitLab / Bitbucket / Gitea</option><option value="poll">Poll the remote (git ls-remote)</option></select></div>
+        <div class="tf-field"><label for="dtAutoBranch">Branch to follow</label><input id="dtAutoBranch" placeholder="repository branch" autocomplete="off"><p class="tf-help">Leave empty to follow the repository branch.</p></div>
+        <div class="tf-field" data-auto="poll" hidden><label for="dtAutoPoll">Check every (minutes)</label><input id="dtAutoPoll" type="number" min="1" max="1440" placeholder="5"></div>
+        <div class="tf-field tf-span" data-auto="webhook" id="dtWebhookWrap">
+          <label>Webhook</label>
+          <div class="tf-webhook" id="dtWebhookInfo"><span class="hint">The webhook URL and its secret appear here once the target is saved.</span></div>
+        </div>
+      </div>
+      <p class="tf-help" id="dtAutoHint">Pushes are verified with a per-target secret (HMAC or token). The listener binds to 127.0.0.1:3001 by default: expose it with a tunnel or reverse proxy (<code>DEPLOY_HOOK_BIND</code> / <code>DEPLOY_HOOK_PORT</code> in <code>.env</code>). Polling needs no inbound access.</p>
+    </details>
+
+    <details class="tf-more" id="dtSecOverrides">
+      <summary>Advanced overrides <span class="tf-sum" id="dtOverridesSum"></span><span class="tf-issues" hidden></span></summary>
+      <div class="tf-field tf-span">
+        <label for="dtOverrides">Manifest overrides</label>
+        <p class="tf-help">Target-specific JSON that overrides the repository deployment manifest (build env, hooks, runtime…).</p>
+        <textarea id="dtOverrides" class="dp-code" rows="6" spellcheck="false" placeholder='{ "build": { "env": { "APP_URL": "https://shop.example.com" } } }'></textarea>
+        <p class="tf-err" id="dtOverridesErr" hidden></p>
+      </div>
+      <div class="tf-actions-row"><button type="button" id="btnDtSaveTemplate" class="tf-mini">Save these settings as a template…</button></div>
+    </details>
+
+    <p class="tf-err tf-form-error" id="dtFormError" hidden></p>
+    <div class="modal-foot tf-foot">
+      <button type="button" id="btnDpTargetCancel">Cancel</button>
+      <span class="spacer"></span>
+      <button type="button" id="btnDtSaveAnyway" hidden>Save without testing</button>
+      <button type="submit" class="primary" id="btnDtSubmit">Test &amp; create</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dpSecretModal" aria-label="Secret">
+  <form id="dpSecretForm" method="dialog">
+    <h3>Store a secret</h3>
+    <span class="hint">Encrypted at rest (AES-256-GCM). Values are never shown again or sent to the browser; reference them as <code>${vault:NAME}</code>.</span>
+    <label for="dsName">Name (UPPER_SNAKE_CASE)</label><input id="dsName" required pattern="[A-Z][A-Z0-9_]{0,63}" placeholder="GH_TOKEN_ACME">
+    <label for="dsValue">Value</label><textarea id="dsValue" rows="4" required spellcheck="false" autocomplete="off"></textarea>
+    <div class="modal-foot"><button type="button" id="btnDpSecretCancel">Cancel</button><button type="submit" class="primary">Save secret</button></div>
+  </form>
+</dialog>
+
+<dialog id="dpWizard" aria-label="Guided setup">
+  <div class="wz-head">
+    <div><h3>Begin your Ascension</h3><span class="hint">Five short steps: most fields are pre-filled. Everything can be changed later from the target settings.</span><div class="wz-stepnum" id="wzStepNum" aria-live="polite"></div></div>
+    <ol class="wz-steps" aria-hidden="true"><li data-step="1" class="on">Source</li><li data-step="2">Framework</li><li data-step="3">Destination</li><li data-step="4">Access</li><li data-step="5">Review</li></ol>
+  </div>
+  <form id="wzForm" method="dialog">
+    <section class="wz-step on" data-step="1">
+      <label for="wzProject">Project</label><select id="wzProject" required aria-describedby="wzProjectHelp"><option value="general">General</option></select>
+      <p class="hint" id="wzProjectHelp">This project will own the deployment. Repositories and servers remain reusable.</p>
+      <div class="wz-choice" id="wzSourceKind">
+        <button type="button" class="on" data-v="git"><b>Git repository</b><span>GitHub, GitLab, Bitbucket or any git URL</span></button>
+        <button type="button" data-v="local"><b>Local folder</b><span>A checkout on this machine</span></button>
+        <button type="button" data-v="existing"><b>Connected repository</b><span>Reuse one already in the list</span></button>
+      </div>
+      <div data-wz="git">
+        <label for="wzUrl">Repository URL</label><input id="wzUrl" placeholder="https://github.com/acme/shop.git">
+        <div class="row"><div><label for="wzBranch">Branch <span class="hint">(empty = default)</span></label><input id="wzBranch" placeholder="main"></div><div><label for="wzAuth">Private repository?</label><select id="wzAuth"><option value="none">No: public, or my git already has access</option><option value="token">Yes · I will paste an access token</option><option value="ssh">Yes: use an SSH key file</option></select></div></div>
+        <div data-wzauth="token" hidden><label for="wzToken">Access token <span class="hint">(stored encrypted in the vault as GIT_TOKEN_&lt;repo&gt;)</span></label><input id="wzToken" type="password" autocomplete="off" placeholder="ghp_… / glpat-…"></div>
+        <div data-wzauth="ssh" hidden><label for="wzKeyPath">Private key path</label><input id="wzKeyPath" placeholder="C:\Users\you\.ssh\id_ed25519"></div>
+      </div>
+      <div data-wz="local" hidden><label for="wzPath">Folder path</label><input id="wzPath" placeholder="C:\dev\shop"></div>
+      <div data-wz="existing" hidden><label for="wzRepo">Repository</label><select id="wzRepo"></select></div>
+      <label for="wzRepoName">Name <span class="hint">(how it appears in the sidebar)</span></label><input id="wzRepoName" placeholder="shop">
+    </section>
+    <section class="wz-step" data-step="2">
+      <div class="fw-head">
+        <div class="fw-tabs" id="fwTabs"><button type="button" data-g="all" class="on">All</button><button type="button" data-g="frontend">Frontend</button><button type="button" data-g="backend">Backend</button><button type="button" data-g="fullstack">Fullstack</button><button type="button" data-g="static">Static</button></div>
+        <span class="spacer"></span>
+        <button type="button" id="btnFwAi" class="aireview glossy fw-ai" title="Read the repository, detect the framework and fill in the deploy configuration"><img class="ai-mini" src="/assets/robot-logo-animated_1.svg" alt="" aria-hidden="true"><span>AI detect</span></button>
+        <button type="button" id="btnFwDetected" class="fw-detected" hidden>✦ Use detected</button>
+      </div>
+      <p class="fw-hint" id="fwDetectHint"></p>
+      <div class="fw-grid" id="fwGrid"></div>
+      <div class="dp-card" style="margin-top:.7rem;padding:.6rem .8rem">
+        <div class="fw-cfg-head"><b>Deploy configuration</b><span class="hint" id="fwCfgHint">pick a framework to apply its defaults; everything stays editable</span></div>
+        <div class="row">
+          <div><label for="fwInstall">Install command</label><input id="fwInstall" placeholder="npm ci"></div>
+          <div><label for="fwBuild">Build command</label><input id="fwBuild" placeholder="npm run build"></div>
+        </div>
+        <div class="row">
+          <div><label for="fwStart">Start command <span class="hint">(servers only; $PORT is provided)</span></label><input id="fwStart" placeholder="node server.js"></div>
+          <div><label for="fwPort">Port <span class="hint">(loopback only, proxied by nginx)</span></label><input id="fwPort" type="number" placeholder="3000"></div>
+        </div>
+        <div class="row">
+          <div><label for="fwOut">Output directory <span class="hint">(static builds)</span></label><input id="fwOut" placeholder="dist"></div>
+          <div><label for="fwDocroot">Web root inside the release <span class="hint">(PHP: public)</span></label><input id="fwDocroot" placeholder="."></div>
+          <div><label for="fwHealth">Health path</label><input id="fwHealth" placeholder="/"></div>
+        </div>
+      </div>
+    </section>
+    <section class="wz-step" data-step="3">
+      <div class="wz-choice" id="wzDestKind">
+        <button type="button" class="on" data-v="vps-ssh"><b>My server (SSH)</b><span>VPS or dedicated: atomic releases, rollback</span></button>
+        <button type="button" data-v="local"><b>This computer</b><span>A folder on this machine: releases, rollback, local URL</span></button>
+        <button type="button" data-v="shared-hosting"><b>Shared hosting</b><span>cPanel / Plesk over SFTP or FTP</span></button>
+        <button type="button" data-v="paas"><b>Platform</b><span>Vercel, Netlify, Cloudflare, Fly.io, Render</span></button>
+        <button type="button" data-v="cloud"><b>New cloud server</b><span>Provision on DigitalOcean, Hetzner, AWS, GCP, Azure</span></button>
+      </div>
+      <div class="row">
+        <div><label for="wzEnv">Environment</label><select id="wzEnv"><option value="production">production</option><option value="staging">staging / preprod</option><option value="dev">dev</option></select></div>
+        <div style="flex:2"><label for="wzTargetName">Target name</label><input id="wzTargetName" placeholder="shop-production"></div>
+        <div style="flex:2"><label for="wzHealth">Site URL <span class="hint">(health check after each deploy)</span></label><input id="wzHealth" placeholder="https://shop.example.com/"></div>
+      </div>
+      <div data-wzd="vps-ssh">
+        <div class="row"><div style="flex:2"><label for="wzProfile">SSH server</label><select id="wzProfile"></select></div><div><label for="wzWeb">Web server</label><select id="wzWeb"><option value="nginx">nginx</option><option value="apache">apache</option><option value="none">none</option></select></div><div style="flex:2"><label for="wzRoot">App folder</label><input id="wzRoot" placeholder="/var/www/shop"></div></div>
+        <div class="row" style="align-items:flex-end">
+          <div><label>Build location</label><div class="seg" id="wzBuildSeg"><button type="button" data-v="auto" class="on">Auto</button><button type="button" data-v="remote">Server</button><button type="button" data-v="local">Local</button></div></div>
+          <div style="flex:3"><p class="hint" id="wzBuildHint" style="margin:0 0 .35rem">Auto builds on the server when it has the toolchain, otherwise here and uploads the artifact.</p></div>
+        </div>
+        <div class="dp-card" style="margin-top:.6rem;padding:.55rem .75rem">
+          <div class="row" style="align-items:flex-end">
+            <div style="flex:2"><label for="wzDomain">Domain <span class="hint">(optional: nginx vhost is written for it after each deploy)</span></label><input id="wzDomain" placeholder="shop.example.com"></div>
+            <div><label class="chk" style="margin:0 0 .4rem"><input type="checkbox" id="wzSsl" checked> Let's Encrypt certificate</label></div>
+            <div style="flex:2"><label for="wzSslEmail">Certificate e-mail</label><input id="wzSslEmail" placeholder="ops@example.com"></div>
+          </div>
+          <p class="hint" style="margin:.3rem 0 0">Point the domain's DNS A record at the server first. If DNS or the certificate is not ready, the deploy still succeeds and the item shows as <b>action required</b>.</p>
+        </div>
+        <p class="hint">No SSH server yet? Add one under <b>SSH servers</b>, or choose <b>New cloud server</b> above.</p>
+      </div>
+      <div data-wzd="local" hidden>
+        <div class="row"><div style="flex:2"><label for="wzLocalRoot">App folder <span class="hint">(releases/, shared/ and current are created inside)</span></label><input id="wzLocalRoot" placeholder="C:\www\shop"></div><div><label for="wzLocalProc">Process</label><select id="wzLocalProc"><option value="none">none (files only)</option><option value="pm2">pm2 (Node / Python servers)</option></select></div></div>
+        <div class="row"><div style="flex:3"><label for="wzLocalReload">After each activation, run <span class="hint">(optional)</span></label><input id="wzLocalReload" placeholder="e.g. net stop nginx &amp;&amp; net start nginx · brew services restart nginx"></div></div>
+        <p class="hint">Builds run on this machine. Point your local web server (XAMPP, Laragon, nginx, IIS, <code>php -S</code>) at <code>&lt;folder&gt;/current/&lt;web root&gt;</code>: each deploy swaps <code>current</code> to the new release and rollback swaps it back.</p>
+      </div>
+      <div data-wzd="shared-hosting" hidden>
+        <div class="row"><div><label for="wzTransport">Connection</label><select id="wzTransport"><option value="ftps">FTPS</option><option value="ftp">FTP</option><option value="sftp">SFTP (SSH server)</option></select></div><div style="flex:2" data-wzt="ftp"><label for="wzFtpHost">Host <span class="hint">(host or host:port)</span></label><input id="wzFtpHost" placeholder="ftp.example.com"></div><div data-wzt="ftp"><label for="wzFtpUser">User</label><input id="wzFtpUser" placeholder="acme"></div><div style="flex:2" data-wzt="sftp" hidden><label for="wzSftpProfile">SSH server</label><select id="wzSftpProfile"></select></div></div>
+        <div class="row"><div><label for="wzHome">Home</label><input id="wzHome" placeholder="/ (FTP) or /home/acme"></div><div style="flex:2"><label for="wzDocroot">Document root</label><input id="wzDocroot" placeholder="/public_html"></div></div>
+      </div>
+      <div data-wzd="paas" hidden>
+        <div class="row"><div><label for="wzPaas">Platform</label><select id="wzPaas"></select></div><div style="flex:2" id="wzPaasFields"></div></div>
+        <p class="hint" id="wzPaasHint"></p>
+      </div>
+      <div data-wzd="cloud" hidden><p class="hint">The wizard will create the repository first, then open the cloud provisioning dialog with a target pre-configured for it.</p></div>
+    </section>
+    <section class="wz-step" data-step="4">
+      <p class="hint" id="wzAccessIntro">Credentials go into the encrypted vault and are referenced by name; they never reach the browser again.</p>
+      <div id="wzSecrets"></div>
+      <div class="dp-card" style="margin-top:.7rem;padding:.55rem .75rem"><label class="chk" style="margin:0"><input type="checkbox" id="wzAuto"> <b>Auto-ship</b> when the branch changes <span class="hint">(webhook or polling: configurable later)</span></label></div>
+    </section>
+    <section class="wz-step" data-step="5">
+      <div id="wzReview" class="dp-card"></div>
+      <label class="chk"><input type="checkbox" id="wzPlanNow" checked> Run a Plan right after setup (read-only preview of the deploy)</label>
+    </section>
+    <div class="modal-foot">
+      <button type="button" id="btnWzCancel">Cancel</button>
+      <span class="spacer"></span>
+      <button type="button" id="btnWzBack" hidden>Back</button>
+      <button type="button" id="btnWzNext" class="primary">Next</button>
+      <button type="submit" id="btnWzFinish" class="primary" hidden>Create</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dpImportModal" aria-label="Import configuration">
+  <form id="dpImportForm" method="dialog">
+    <h3>Import configuration</h3>
+    <span class="hint">Paste an export (or choose the file). Repos, targets and templates whose names are new are created; secret values are never included: you will be told which ones to add.</span>
+    <label for="dpImportProject">Destination project</label><select id="dpImportProject" required aria-describedby="dpImportProjectHelp"><option value="general">General</option></select>
+    <p class="hint" id="dpImportProjectHelp">All newly imported deployments belong to this project. Repositories and templates remain reusable.</p>
+    <input type="file" id="dpImportFile" accept="application/json" style="margin:.6rem 0 .3rem">
+    <textarea id="dpImportText" class="dp-code" rows="8" spellcheck="false" placeholder='{ "format": "ascension-config", ... }'></textarea>
+    <div id="dpImportReport" class="hint" style="margin-top:.4rem"></div>
+    <div class="modal-foot"><button type="button" id="btnDpImportCancel">Cancel</button><button type="button" id="btnDpImportDry">Preview</button><button type="submit" class="primary">Import</button></div>
+  </form>
+</dialog>
+
+<dialog id="dpCloudModal" aria-label="Provision a cloud server">
+  <form id="dpCloudForm" method="dialog">
+    <h3>Provision a cloud server</h3>
+    <span class="hint">Creates a VM with cloud-init: a <code>deploy</code> user with your key, the stack packages, nginx, firewall 22/80/443 and <code>/var/www/&lt;app&gt;</code>. When it is reachable, an SSH profile (and optionally a target) is registered automatically.</span>
+    <div class="row">
+      <div style="flex:2"><label for="dcProvider">Provider</label><select id="dcProvider"></select></div>
+      <div style="flex:2" id="dcTokenWrap"><label for="dcToken">API token (vault secret)</label><select id="dcToken"></select></div>
+      <div><label for="dcName">Server name</label><input id="dcName" required pattern="[a-z][a-z0-9-]{1,38}[a-z0-9]" placeholder="web-1"></div>
+    </div>
+    <p class="hint" id="dcProviderHint" style="margin:.2rem 0 0"></p>
+    <div class="row">
+      <div><label for="dcRegion">Region</label><select id="dcRegion" hidden></select><input id="dcRegionText" placeholder="region"></div>
+      <div><label for="dcSize">Size</label><select id="dcSize" hidden></select><input id="dcSizeText" placeholder="size / instance type"></div>
+      <div><label for="dcImage">Image</label><select id="dcImage" hidden></select><input id="dcImageText" placeholder="image"></div>
+      <div style="flex:0;align-self:flex-end"><button type="button" id="btnDcOptions" title="Load regions, sizes and images with the token">Load options</button></div>
+    </div>
+    <div class="row">
+      <div style="flex:2"><label for="dcRecipe">Server recipe</label><select id="dcRecipe"></select></div>
+      <div style="flex:3"><label for="dcKeyPath">SSH key</label><input id="dcKeyPath" placeholder="leave empty to generate an ed25519 key (saved under deploy-keys/), or a private key path"></div>
+    </div>
+    <div class="dp-card" style="margin:.7rem 0 0;padding:.55rem .75rem">
+      <label class="chk" style="margin:0"><input type="checkbox" id="dcMakeTarget"> <b>Also create a deploy target</b> on this server</label>
+      <div class="row" id="dcTargetRow" hidden>
+        <div style="flex:2"><label for="dcProject">Project</label><select id="dcProject" disabled><option value="general">General</option></select></div>
+        <div style="flex:2"><label for="dcRepo">Repository</label><select id="dcRepo"></select></div>
+        <div style="flex:2"><label for="dcTargetName">Target name (also the app folder)</label><input id="dcTargetName" placeholder="shop-prod"></div>
+        <div style="flex:2"><label for="dcHealth">Health URL (defaults to http://&lt;ip&gt;/)</label><input id="dcHealth" placeholder="https://shop.example.com/up"></div>
+      </div>
+    </div>
+    <details style="margin-top:.6rem"><summary style="cursor:pointer;font-size:.78rem;color:var(--accent)">Preview the cloud-init that will run on first boot</summary><pre id="dcPreview" class="dp-code" style="max-height:260px;overflow:auto;margin-top:.3rem"></pre></details>
+    <div class="modal-foot"><button type="button" id="btnDpCloudCancel">Cancel</button><button type="submit" class="primary">Provision</button></div>
+  </form>
+</dialog>
