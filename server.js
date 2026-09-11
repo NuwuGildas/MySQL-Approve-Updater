@@ -2490,11 +2490,25 @@ const projectOwnership = new Map();
 
 /* Where module metadata is fetched from. A local path or file: URL works, which
    is how the offline and test registries are used. */
+/* Where modules are published: the catalog release, rebuilt by
+   .github/workflows/catalog.yml whenever a module is released. The URL never
+   changes, so an installation needs no configuration to find modules, and every
+   package it names is a GitHub release asset pinned to one version. */
+const PUBLISHED_REGISTRY = 'https://github.com/NuwuGildas/MySQL-Approve-Updater/releases/download/catalog/catalog.json';
+
 function moduleRegistries() {
-  const configured = String(process.env.MODULE_REGISTRIES || '').split(',').map((s) => s.trim()).filter(Boolean);
+  /* MODULE_REGISTRIES wins, and "none" means "look nowhere" - an installation
+     that must make no outbound request until the user asks for one. */
+  const raw = String(process.env.MODULE_REGISTRIES ?? '').trim();
+  if (raw.toLowerCase() === 'none') return [];
+  const configured = raw.split(',').map((s) => s.trim()).filter(Boolean);
   if (configured.length) return configured.map((url, i) => ({ name: i === 0 ? 'Server Tools' : `Registry ${i + 1}`, url }));
+
+  /* A catalog built locally (scripts/modules-local.js) is the developer's, and
+     takes precedence over the published one. */
   const local = path.join(DATA_DIR, 'registry', 'catalog.json');
-  return fs.existsSync(local) ? [{ name: 'Server Tools (local)', url: local }] : [];
+  if (fs.existsSync(local)) return [{ name: 'Server Tools (local)', url: local }];
+  return [{ name: 'Server Tools', url: PUBLISHED_REGISTRY }];
 }
 
 /* ================= projects: the read model the assistant always needs =================

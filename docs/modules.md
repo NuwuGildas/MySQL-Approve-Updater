@@ -406,14 +406,57 @@ To publish a new version of a module:
 
 1. bump `version` in its `module.json` on its branch;
 2. push the branch, let CI build and test the package;
-3. tag `<id>-v<version>`; CI attaches the archive to the release;
-4. rebuild the catalog with `--base-url` pointing at the release assets and
-   publish `catalog.json` where the app's `MODULE_REGISTRIES` points;
+3. tag `<id>-v<version>`; CI attaches the archive **and its sidecar** to a
+   GitHub release;
+4. `.github/workflows/catalog.yml` reacts to that release, collects every
+   released module's sidecar and publishes one `catalog.json`;
 5. users see the new version in **Modules** with an **Update** action. A module
    that is busy is never updated silently.
 
 Rolling back is publishing a catalog that offers the previous version; installed
 copies are untouched until the user acts.
+
+### Releases on GitHub
+
+The catalog is published as an asset of a release on the fixed `catalog` tag, so
+it has one URL that never changes:
+
+```
+https://github.com/<owner>/<repo>/releases/download/catalog/catalog.json
+```
+
+That URL is the application's default registry (`PUBLISHED_REGISTRY` in
+server.js), so a fresh installation finds modules with no configuration and
+downloads each package straight from its release asset:
+
+```
+https://github.com/<owner>/<repo>/releases/download/<id>-v<version>/<id>-<version>.tgz
+```
+
+Every one of those URLs is pinned to a single version, and the digest and
+signature in the catalog are checked against `config/trusted-publishers.json`
+before a byte is executed — GitHub is a place to put bytes, not something the
+installer trusts. A `MODULE_REGISTRIES` value overrides the default; a locally
+built catalog (`npm run modules:local`) takes precedence over both; and
+`MODULE_REGISTRIES=none` makes the application look nowhere at all.
+
+**CI must be able to sign, or nothing is installable.** The module workflow
+builds an unsigned package when no key is configured, and `catalog.yml` then
+refuses to publish rather than offering versions the application will reject.
+One-time setup on the repository:
+
+| | |
+|---|---|
+| Secret `MODULE_SIGNING_KEY` | the private PEM of a key whose **public** half is in `config/trusted-publishers.json` |
+| Variable `MODULE_SIGNING_KEY_ID` | that key's id, e.g. `st-ci-2026` |
+
+Generate one with `npm run modules:keys -- --key-id st-ci-2026`; commit the
+changed trust anchor, put the private half in the secret, and keep it out of
+`keys/` so local builds keep using the development key.
+
+`test/e2e/release-install.e2e.js` runs this whole shape against a local server
+that answers the same paths GitHub does — catalog fetch, release-asset download,
+signature check, activation, and the refusal of a tampered asset.
 
 ---
 

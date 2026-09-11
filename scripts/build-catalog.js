@@ -1,8 +1,9 @@
 'use strict';
 /* Assemble a marketplace catalog from built artifacts.
  *
- *   node scripts/build-catalog.js [--dir dist/modules] [--base-url http://127.0.0.1:8788/packages]
- *                                 [--out dist/modules/catalog.json]
+ *   node scripts/build-catalog.js [--dir dist/modules] [--out dist/modules/catalog.json]
+ *                                 [--base-url http://127.0.0.1:8788/packages]
+ *                                 [--url-template 'https://host/{id}-v{version}/{file}']
  *
  * The catalog carries metadata only: which versions exist, what they need, what
  * they may do, where the archive is, its digest and the publisher signature over
@@ -20,6 +21,7 @@ const arg = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); r
 function build() {
   const dir = path.resolve(ROOT, arg('dir', path.join('dist', 'modules')));
   const baseUrl = arg('base-url', null);
+  const urlTemplate = arg('url-template', null);   // {id} {version} {file}
   const out = path.resolve(ROOT, arg('out', path.join(dir, 'catalog.json')));
 
   const artifacts = fs.readdirSync(dir)
@@ -35,9 +37,14 @@ function build() {
         publisher: artifact.publisher, versions: [],
       });
     }
-    const url = baseUrl
-      ? `${baseUrl.replace(/\/$/, '')}/${artifact.package.file}`
-      : require('node:url').pathToFileURL(path.join(dir, artifact.package.file)).href;
+    /* Where this exact version's archive lives. A template is what GitHub
+       releases need: every module version is its own tag, so the location
+       depends on the module and the version, not just on a shared prefix. */
+    const url = urlTemplate
+      ? urlTemplate.replace(/\{id\}/g, artifact.id).replace(/\{version\}/g, artifact.version).replace(/\{file\}/g, artifact.package.file)
+      : baseUrl
+        ? `${baseUrl.replace(/\/$/, '')}/${artifact.package.file}`
+        : require('node:url').pathToFileURL(path.join(dir, artifact.package.file)).href;
     byId.get(artifact.id).versions.push({
       version: artifact.version,
       hostSdk: artifact.hostSdk,

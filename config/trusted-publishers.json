@@ -10,6 +10,12 @@
           "algorithm": "ed25519",
           "publicKey": "MCowBQYDK2VwAyEAQtbyC0SrNBw+sXJLmAwEjuO1n4na5UDXo/AflQoyzzI=",
           "addedAt": "2026-09-10T16:42:08.231Z"
+        },
+        {
+          "keyId": "st-ci-2026",
+          "algorithm": "ed25519",
+          "publicKey": "MCowBQYDK2VwAyEAPUXkv+qQ6DCVi2J41lt81wTMDRc++oriYaAOHmbKmng=",
+          "addedAt": "2026-09-11T12:48:06.628Z"
         }
       ]
     }

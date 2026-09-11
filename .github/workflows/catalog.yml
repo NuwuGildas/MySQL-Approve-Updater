@@ -1,0 +1,104 @@
+# The marketplace catalog, assembled from what has actually been released.
+#
+# Each module branch cuts its own release when a <id>-v<version> tag is pushed:
+# the archive and its description (digest, signature, source commit) become the
+# release's assets. This job collects every one of those descriptions and turns
+# them into one catalog.json whose package URLs point straight at the release
+# assets - so adding a module in the app downloads the release from GitHub.
+#
+# The catalog is published as an asset of a release on the fixed `catalog` tag,
+# which gives it one URL that never changes:
+#
+#   https://github.com/<owner>/<repo>/releases/download/catalog/catalog.json
+#
+# Nothing is invented here. A catalog entry can only say what the module's own
+# build said, and the digest and signature travel unchanged - the application
+# still verifies both against its local trust anchor before it runs a byte.
+name: catalog
+
+on:
+  release:
+    types: [published, edited, deleted]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: catalog
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    # Publishing the catalog edits a release, which would trigger this workflow
+    # again. Its own release is the one release it ignores.
+    if: github.event_name == 'workflow_dispatch' || github.event.release.tag_name != 'catalog'
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: master }
+      - uses: actions/setup-node@v4
+        with: { node-version: '22', cache: npm }
+      - run: npm ci
+
+      # Every module release's description file. `<id>-v<version>` is the tag
+      # shape the module workflows publish under; anything else (this catalog
+      # release included) is skipped.
+      - name: Collect every released module
+        env: { GH_TOKEN: '${{ github.token }}' }
+        run: |
+          mkdir -p artifacts
+          found=0
+          for tag in $(gh release list --limit 200 --json tagName --jq '.[].tagName'); do
+            case "$tag" in
+              *-v*) ;;
+              *) continue ;;
+            esac
+            if gh release download "$tag" --pattern '*.json' --dir artifacts --clobber 2>/dev/null; then
+              echo "collected $tag"
+              found=$((found + 1))
+            else
+              echo "::warning::$tag has no module description asset; skipped"
+            fi
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "::error::no module releases found. Push a tag like servers-v1.0.0 to cut one."
+            exit 1
+          fi
+
+      - name: Build the catalog
+        run: |
+          node scripts/build-catalog.js \
+            --dir artifacts \
+            --out catalog.json \
+            --name "Server Tools modules" \
+            --url-template '${{ github.server_url }}/${{ github.repository }}/releases/download/{id}-v{version}/{file}'
+          echo '--- catalog.json ---'
+          cat catalog.json
+
+      # An unsigned entry would be offered to users the application then refuses
+      # to install. Better to fail here and say why.
+      - name: Refuse to publish an unsigned catalog
+        run: |
+          node -e "
+            const catalog = require('./catalog.json');
+            const bad = catalog.modules.flatMap((m) => m.versions.filter((v) => !v.package.signature).map((v) => m.id + ' ' + v.version));
+            if (bad.length) {
+              console.error('unsigned: ' + bad.join(', '));
+              console.error('Set the MODULE_SIGNING_KEY secret and MODULE_SIGNING_KEY_ID variable, then re-run the module release.');
+              process.exit(1);
+            }
+            console.log('every version is signed');
+          "
+
+      - name: Publish it at one unchanging URL
+        env: { GH_TOKEN: '${{ github.token }}' }
+        run: |
+          if gh release view catalog >/dev/null 2>&1; then
+            gh release upload catalog catalog.json --clobber
+          else
+            gh release create catalog catalog.json \
+              --title "Module catalog" \
+              --notes "The marketplace catalog, rebuilt whenever a module is released. Point an installation at it with:
+          MODULE_REGISTRIES=${{ github.server_url }}/${{ github.repository }}/releases/download/catalog/catalog.json"
+          fi
