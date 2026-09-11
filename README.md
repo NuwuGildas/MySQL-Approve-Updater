@@ -18,6 +18,7 @@ publisher signature and activates it in place.
 
 - `ui:pages`
 - `ui:commands`
+- `projects:read`
 - `storage:module`
 - `events:subscribe`
 - `audit:write`
