@@ -75,7 +75,11 @@ async function activate(host) {
 
   /* Projects belong to the host; this is the read model the engine checks
      ownership against, refreshed from it. */
-  const projects = createProjectView({ load: () => host.call('projects.list', {}), log: (level, message) => host.log(level, message) });
+  const projects = createProjectView({
+    load: () => host.call('projects.list', {}),
+    visible: (projectId, kind, ids) => host.call('projects.visible', { projectId, kind, ids }),
+    log: (level, message) => host.log(level, message),
+  });
   await projects.refresh();
   const projectTimer = setInterval(() => projects.refresh(), 15000);
   projectTimer.unref?.();

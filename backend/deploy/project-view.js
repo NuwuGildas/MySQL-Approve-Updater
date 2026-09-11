@@ -13,7 +13,7 @@
 
 const DEFAULT = { id: 'general', name: 'General', description: '', color: null, resources: {} };
 
-function createProjectView({ load = async () => [], log = () => {} } = {}) {
+function createProjectView({ load = async () => [], visible = null, log = () => {} } = {}) {
   let projects = [DEFAULT];
   let readOnly = null;
   let deployments = null;
@@ -37,6 +37,16 @@ function createProjectView({ load = async () => [], log = () => {} } = {}) {
     list: () => projects,
     get: (id) => projects.find((p) => p.id === id) || null,
     projectsFor: (kind, resourceId) => projects.filter((project) => (view.resourcesFor(project)[kind] || []).some((value) => (value.id || value) === resourceId)),
+    /* Which of `ids` a project may see. The rule - attached to a project means
+       attached to that project ALONE, unattached means shared - belongs to the
+       host, and this asks it rather than restating it, so the deployments list
+       and every other list agree about what a project contains. Without a host
+       to ask (an older host, or no project named) nothing is hidden. */
+    async visible(projectId, kind, ids) {
+      if (!projectId || !visible) return ids;
+      try { return await visible(projectId, kind, ids); }
+      catch (error) { log('warn', `project scope could not be read (${error.message}); showing everything`); return ids; }
+    },
     /** Targets this module owns, merged into a project's resources for display. */
     bindDeployments: (access) => { deployments = access; },
     resourcesFor: (project) => ({

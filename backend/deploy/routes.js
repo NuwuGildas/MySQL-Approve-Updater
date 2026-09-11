@@ -169,8 +169,14 @@ function createRouter({ ctx, engine, stores, vault, redact, agentApi, autoShip, 
     res.json({ git: { available: !!tools.git, version: tools.git }, tools, vault: { keySource: vault.keySource, file: path.basename(vault.file) }, activeRuns: engine.activeIds(), targetTypes: Object.values(TARGETS).map((t) => ({ id: t.id, label: t.label, capabilities: t.capabilities })), paasProviders: Object.values(TARGETS.paas.PROVIDERS).map((p) => ({ id: p.id, label: p.label, cli: p.cli, install: p.install, tokenEnv: p.tokenEnv, tokenHint: p.tokenHint, buildLocal: p.buildLocal, fields: p.fields })), stacks: STACKS.map((s) => ({ id: s.id, label: s.label })), ai: ctx.agent.isConnected(), aiAssist: { ...(ctx.settings.aiAssist || {}) }, platform: process.platform, home: require('os').homedir(), sep: path.sep, autoShip: autoShip ? autoShip.status() : null });
   }));
 
-  /* ---- repos ---- */
-  r.get('/repos', (req, res) => res.json({ repos: stores.repos.get().repos.map(maskRepo) }));
+  /* ---- repos ----
+     A repository attached to a project exists only inside it; one attached to
+     nothing is shared. The host says which project the caller is in. */
+  r.get('/repos', wrap(async (req, res) => {
+    const all = stores.repos.get().repos;
+    const visible = new Set(await stores.projects.visible(req.get('x-project'), 'repos', all.map((repo) => repo.id)));
+    res.json({ repos: all.filter((repo) => visible.has(repo.id)).map(maskRepo) });
+  }));
   r.post('/repos', wrap(async (req, res) => {
     const repo = sanitizeRepo(req.body || {}, ctx, vault, null);
     stores.repos.get().repos.push(repo); await stores.repos.save();
@@ -254,7 +260,11 @@ function createRouter({ ctx, engine, stores, vault, redact, agentApi, autoShip, 
   /* ---- targets ---- */
   const lastRunFor = (t) => engine.list({ targetId: t.id, limit: 1 })[0] || null;
   r.get('/targets', wrap(async (req, res) => {
-    const project = req.query.projectId === undefined ? null : requireProject(stores, req.query.projectId);
+    /* A deployment target always has exactly one owning project, so scoping it
+       is already its ownership. An explicit projectId still wins: that is how
+       the Projects page asks for one project's deployments. */
+    const asked = req.query.projectId === undefined ? req.get('x-project') || undefined : req.query.projectId;
+    const project = asked === undefined ? null : requireProject(stores, asked);
     res.json({ targets: stores.targets.get().targets.filter((t) => !project || t.projectId === project.id).map((t) => ({ ...maskAutoShip(maskTarget(t, engine)), projectName: stores.projects.get(t.projectId)?.name || null, lastRun: lastRunFor(t) })) });
   }));
   r.post('/targets', wrap(async (req, res) => {

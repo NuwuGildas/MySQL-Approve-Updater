@@ -55,6 +55,12 @@ export async function activate(host) {
     focus: () => drawer.querySelector('.asc-title h2'),
   });
 
+  /* Switching project, or attaching a repository to one, changes what this
+     project can see. Targets already belong to exactly one project. */
+  const reloadForProject = () => { if (drawer.classList.contains('open')) ui.openDeploy().catch(() => {}); };
+  host.on(document, 'st:project', reloadForProject);
+  host.on(document, 'st:project-resources', reloadForProject);
+
   host.registerLauncherTile({
     id: 'deploy', name: 'Deployments', route: '#/deployments', tag: 'The Ascension', accent: '--green', order: 20,
     icon: host.ui.icons.rocket,
