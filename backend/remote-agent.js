@@ -126,10 +126,15 @@ function createRemoteAgents({ exec, log = () => {} }) {
     for (const id of ids()) {
       const line = (out.stdout || '').split('\n').find((l) => l.startsWith(id + ' '));
       const rest = line ? line.slice(id.length + 1).trim() : 'MISSING';
+      /* `claude --version` prints "2.1.250 (Claude Code)" and `codex --version`
+         its own preamble. The label is ours to add, so the version kept here is
+         the number alone - otherwise the name is said twice. */
+      const reported = rest && rest !== 'MISSING' ? rest.slice(0, 60) : null;
+      const number = reported && (reported.match(/\d+(?:\.\d+)+(?:[-+][\w.]+)?/) || [])[0];
       agents[id] = {
         id, label: AGENTS[id].label,
-        installed: !!rest && rest !== 'MISSING',
-        version: rest && rest !== 'MISSING' ? rest.slice(0, 60) : null,
+        installed: !!reported,
+        version: number || reported,
       };
     }
     return agents;

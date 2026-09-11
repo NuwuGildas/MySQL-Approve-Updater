@@ -155,3 +155,27 @@ test('the working directory is quoted, so a path cannot break out of the command
   // What a shell would hand to cd is the path itself, unchanged.
   assert.equal(quoted.slice(1, -1).split("'\\''").join("'"), nasty);
 });
+
+test('a version is the number, because the label is already ours to add', async () => {
+  /* `claude --version` prints "2.1.250 (Claude Code)", so prefixing the label
+     said the name twice: "Claude Code 2.1.250 (Claude Code) on rbo-hosting". */
+  const detect = async (stdout) => createRemoteAgents({ exec: async () => ({ stdout, stderr: '', code: 0 }) }).detect({});
+
+  const claudeish = await detect('claude 2.1.250 (Claude Code)\ncodex MISSING\n');
+  assert.equal(claudeish.claude.version, '2.1.250');
+  assert.equal(claudeish.claude.installed, true);
+  assert.equal(claudeish.codex.version, null);
+
+  const codexish = await detect('claude 1.0.0\ncodex codex-cli 0.9.3\n');
+  assert.equal(codexish.codex.version, '0.9.3');
+  assert.equal(codexish.claude.version, '1.0.0');
+
+  /* Something unparseable is still reported: a CLI that is there but whose
+     version we cannot read is not the same as one that is missing. */
+  const odd = await detect('claude some-weird-build\ncodex MISSING\n');
+  assert.equal(odd.claude.installed, true);
+  assert.equal(odd.claude.version, 'some-weird-build');
+
+  const none = await detect('claude MISSING\ncodex MISSING\n');
+  assert.deepEqual([none.claude.installed, none.claude.version], [false, null]);
+});
