@@ -48,9 +48,17 @@ async function until(predicate, { timeout = 20000, what = 'condition' } = {}) {
  * the timing. The last attempt uses the full timeout so a genuine failure still
  * reports as one.
  */
-async function clickUntil(page, click, condition, { attempts = 3, what = 'the click to take effect' } = {}) {
+async function clickUntil(page, click, condition, { attempts = 4, what = 'the click to take effect' } = {}) {
   for (let attempt = 1; attempt <= attempts; attempt++) {
-    if (typeof click === 'function') await click(); else await page.click(click);
+    try {
+      if (typeof click === 'function') await click(); else await page.click(click);
+    } catch (error) {
+      // "Node is detached from document": the element was replaced between
+      // finding it and clicking it. Look it up again rather than failing.
+      if (attempt === attempts) throw error;
+      await wait(200);
+      continue;
+    }
     if (attempt === attempts) break;
     try { return await until(condition, { timeout: 4000, what }); } catch { /* the UI moved under it; go again */ }
   }
@@ -194,30 +202,47 @@ async function main() {
         /* The palette fetches its sources, so the list can still be re-rendered
            after the row first appears. Wait for it to settle, or a click lands
            on a row that is being replaced and dispatches nothing. */
+        /* The palette fetches its sources, so the list is still re-rendered after
+           the row first appears. Wait for it to settle - and for Enter, wait for
+           the row to be the FIRST one, because that is the one Enter activates.
+           Without this the keyboard paths select whatever was top at that
+           instant, which is a different row a fraction of a second earlier. */
+        const shape = () => page.evaluate(() => {
+          const rows = [...document.querySelectorAll('#cmdkList .cmdk-row')];
+          const index = rows.findIndex((el) => el.textContent.includes('Palette deployment'));
+          // ".on" is the row Enter activates (palette.js keeps aria-selected on it).
+          // The markup is included so any repaint at all counts as "not settled".
+          return {
+            count: rows.length, index,
+            highlighted: rows.findIndex((el) => el.classList.contains('on')),
+            html: document.getElementById('cmdkList').innerHTML.length,
+          };
+        });
         await until(async () => {
-          const seen = await page.evaluate(() => {
-            const rows = [...document.querySelectorAll('#cmdkList .cmdk-row')];
-            return rows.some((el) => el.textContent.includes('Palette deployment')) ? rows.length : 0;
-          });
-          if (!seen) return false;
-          await wait(120);
-          const again = await page.evaluate(() => {
-            const rows = [...document.querySelectorAll('#cmdkList .cmdk-row')];
-            return rows.some((el) => el.textContent.includes('Palette deployment')) ? rows.length : 0;
-          });
-          return seen === again && again;
-        }, { what: 'deployment search result to settle' });
+          const seen = await shape();
+          if (seen.index < 0) return false;
+          // Enter activates the HIGHLIGHTED row, so for the keyboard paths that
+          // has to be the deployment before the key is pressed - not merely the
+          // first row, and not a row that is about to be replaced.
+          if (mode !== 'mouse' && seen.highlighted !== seen.index) return false;
+          await wait(250);
+          const again = await shape();
+          return seen.count === again.count && seen.index === again.index
+            && seen.highlighted === again.highlighted && seen.html === again.html;
+        }, { what: `deployment search result to settle (${mode})` });
 
-        if (mode === 'mouse') {
-          // Click the row that IS the deployment, not whichever row is first:
-          // once this has been chosen before, a "recent" entry joins the list.
+        /* Activating the row, and retrying if the list moved under it. Clicking
+           targets the row that IS the deployment rather than whichever is first:
+           once this has been chosen before, a "recent" entry joins the list. */
+        const activate = async () => {
+          if (mode !== 'mouse') return page.keyboard.press('Enter');
           const row = await page.evaluateHandle(() => [...document.querySelectorAll('#cmdkList .cmdk-row')].find((el) => el.textContent.includes('Palette deployment')));
           const element = row.asElement();
           assert.ok(element, 'the deployment row is still in the document');
           await element.click();
           await element.dispose();
-        } else await page.keyboard.press('Enter');
-        await until(() => page.evaluate(() => window.__paletteRoute === '#/deployments/targets/palette-target'), { what: mode + ' selection to dispatch the deployment route' });
+        };
+        await clickUntil(page, activate, () => page.evaluate(() => window.__paletteRoute === '#/deployments/targets/palette-target'), { what: mode + ' selection to dispatch the deployment route' });
         assert.equal(await page.$eval('#cmdkModal', (el) => el.open), false);
       }
       await page.keyboard.down('Control');
@@ -253,7 +278,7 @@ async function main() {
       await HostSDK.apis.get('connectors').reload();
     });
     try {
-      await page.click('#connectorsList [data-act="edit"]');
+      await clickUntil(page, '#connectorsList [data-act="edit"]', () => page.$eval('#cnModal', (el) => el.open), { what: 'the connector editor to open' });
       await until(() => page.$eval('#cnModal', (el) => el.open), { what: 'connector editor' });
       assert.equal(await page.$eval('#cnName', (el) => !!el.closest('[inert]')), false, 'editor input has no inert ancestor');
       assert.equal(await page.$eval('#connectorsDrawer', (el) => el.inert), true, 'background module view stays blocked');
@@ -264,9 +289,9 @@ async function main() {
       await page.type('#cnName', 'Edited connector');
       await clickUntil(page, '#btnCnSave', () => page.$eval('#cnModal', (el) => !el.open), { what: 'editor to save and close' });
       assert.equal(await page.evaluate(() => window.__connectorSaved.name), 'Edited connector');
-      await page.click('#connectorsList [data-act="edit"]');
+      await clickUntil(page, '#connectorsList [data-act="edit"]', () => page.$eval('#cnModal', (el) => el.open), { what: 'the connector editor to open' });
       await clickUntil(page, '#btnCnCancel', () => page.$eval('#cnModal', (el) => !el.open), { what: 'editor cancel' });
-      await page.click('#connectorsList [data-act="edit"]');
+      await clickUntil(page, '#connectorsList [data-act="edit"]', () => page.$eval('#cnModal', (el) => el.open), { what: 'the connector editor to open' });
       await page.keyboard.press('Escape');
       await until(() => page.$eval('#cnModal', (el) => !el.open), { what: 'editor Escape' });
       assert.equal(await page.$eval('#connectorsDrawer', (el) => el.inert), false, 'background interaction is restored');
