@@ -73,6 +73,10 @@ body.page-home #pageHead { display: none; }
 /* Project switcher: a single pill (dot + name + chevron) with quiet icon buttons beside it, and a
    menu anchored to the pill's left edge. No nested pills, no text glyphs standing in for icons. */
 .proj-switch { display: inline-flex; align-items: center; gap: .15rem; max-width: 260px; min-width: 0; position: relative; }
+/* An author `display` beats the UA's [hidden] rule, so setting .hidden on the
+   switcher would otherwise change nothing. It is hidden whenever no module
+   provides project management. */
+.proj-switch[hidden] { display: none; }
 .proj-select-source { position: absolute !important; width: 1px !important; height: 1px !important; opacity: 0 !important; pointer-events: none !important; }
 .proj-trigger { display: inline-flex; align-items: center; gap: .45rem; min-width: 0; max-width: 15rem; padding: .3rem .55rem .3rem .6rem; border: 1px solid var(--border); border-radius: 99px; background: var(--panel2); color: var(--text); font: inherit; font-size: .78rem; font-weight: 600; line-height: 1.2; cursor: pointer; transition: border-color .15s, background .15s, box-shadow .15s; }
 .proj-trigger #projTriggerName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
