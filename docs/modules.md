@@ -408,8 +408,8 @@ To publish a new version of a module:
 2. push the branch, let CI build and test the package;
 3. tag `<id>-v<version>`; CI attaches the archive **and its sidecar** to a
    GitHub release;
-4. `.github/workflows/catalog.yml` reacts to that release, collects every
-   released module's sidecar and publishes one `catalog.json`;
+4. the same workflow then rebuilds the catalog from every released module
+   and publishes it;
 5. users see the new version in **Modules** with an **Update** action. A module
    that is busy is never updated silently.
 
