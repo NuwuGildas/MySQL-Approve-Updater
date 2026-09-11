@@ -16,13 +16,19 @@ server="${GITHUB_SERVER_URL:-https://github.com}"
 repo="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
 catalog_url="$server/$repo/releases/download/catalog/catalog.json"
 
-# The module ids a catalog document names, sorted, space separated.
-ids_of() { node -e "
+# Every id@version a catalog document offers, sorted, space separated.
+#
+# Deliberately id AND version: comparing ids alone answers "is this module in the
+# catalog", which is true the moment its first version is - so a newly released
+# version could go missing and the check would still pass. It did.
+versions_of() { node -e "
   let s = '';
   process.stdin.on('data', (d) => { s += d; })
     .on('end', () => {
-      try { console.log(JSON.parse(s).modules.map((m) => m.id).sort().join(' ')); }
-      catch { console.log(''); }
+      try {
+        const catalog = JSON.parse(s);
+        console.log(catalog.modules.flatMap((m) => m.versions.map((v) => m.id + '@' + v.version)).sort().join(' '));
+      } catch { console.log(''); }
     });
 "; }
 
@@ -32,11 +38,28 @@ for pass in 1 2 3; do
   for tag in $(gh release list --limit 200 --json tagName --jq '.[].tagName'); do
     case "$tag" in *-v*) ;; *) continue ;; esac      # the catalog's own release is not a module
     if gh release download "$tag" --pattern '*.json' --dir artifacts --clobber 2>/dev/null; then
-      released="$released ${tag%-v*}"
+      released="$released ${tag%-v*}@${tag##*-v}"
     else
       echo "::warning::$tag has no module description asset; skipped"
     fi
   done
+
+  # The release this run just created may not be in `gh release list` yet -
+  # GitHub's listing lags behind the release API by a second or two, and the
+  # catalog job starts the moment the build job finishes. Ask for it by name.
+  own_tag="${GITHUB_REF_NAME:-}"
+  case "$own_tag" in
+    *-v*)
+      if gh release download "$own_tag" --pattern '*.json' --dir artifacts --clobber 2>/dev/null; then
+        own="${own_tag%-v*}@${own_tag##*-v}"
+        case " $released " in
+          *" $own "*) ;;
+          *) released="$released $own"; echo "collected $own_tag (not yet listed)" ;;
+        esac
+      fi
+      ;;
+  esac
+
   if [ -z "$released" ]; then
     echo "::error::no module releases found. Push a tag like servers-v1.0.0 to cut one."
     exit 1
@@ -70,14 +93,15 @@ for pass in 1 2 3; do
   fi
 
   sleep 5   # the asset is served from a CDN; give the replacement a moment
-  published=$(curl -fsSL "$catalog_url" | ids_of || echo '')
-  echo "pass $pass: published [$published] / released [$expected]"
+  published=$(curl -fsSL "$catalog_url" | versions_of || echo '')
+  echo "pass $pass: published [$published]"
+  echo "pass $pass: released  [$expected]"
   if [ "$published" = "$expected" ]; then
-    echo "the catalog offers every released module: $catalog_url"
+    echo "the catalog offers every released version: $catalog_url"
     exit 0
   fi
   echo "a release landed while this was building; going round again"
 done
 
-echo "::error::the published catalog does not list every released module after 3 passes"
+echo "::error::the published catalog does not list every released version after 3 passes"
 exit 1
