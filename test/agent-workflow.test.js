@@ -566,3 +566,63 @@ test('a proposal kind that describes no label is still decidable', async (t) => 
   assert.equal(notes.some((n) => n.text.includes('restart "web-01"')), true, JSON.stringify(notes.map((n) => n.text)));
   assert.equal(notes.some((n) => n.text.includes('module-action proposal')), true, 'and a card with no label still reads as something');
 });
+
+/* ---------- a reply that announces a command it never proposed ---------- */
+
+test('describing a command without proposing it is caught, and the model is made to do it properly', async (t) => {
+  /* Seen in the wild: asked "who are the 2 users connected?", the model wrote
+     "Proposed command: who ... Please Accept, Reject, or provide an
+     Alternative" and called no tool. No card existed, nothing was pending, and
+     the user was invited to press buttons that were not there. */
+  const ctx = setup(t);
+  const { sessionId } = await ctx.api.attach('p1').then((a) => ({ sessionId: a.sessionId }));
+  await ctx.terminals.setControl(sessionId, 'assistant');
+
+  const narration = 'Good question! Let me propose a command to see who the connected users are.\n\n'
+    + 'Proposed command: `who`\n\nPlease Accept, Reject, or provide an Alternative command.';
+  ctx.model.push(narration);
+  ctx.model.push(JSON.stringify({ tool: 'ssh_exec', input: { cmd: 'who' } }), 'Proposed `who` for your approval.');
+
+  const out = await ctx.workflow.runTurn(sessionId, { message: 'who are the 2 users connected?' });
+
+  /* It was told what it did, in the same turn. */
+  assert.match(ctx.model.prompts.at(-1), /TURN GUIDANCE: your last reply described a command/);
+  assert.match(ctx.model.prompts.at(-1), /NOTHING was proposed/);
+
+  /* And the second attempt raised a real card. */
+  assert.equal(out.proposals.length, 1);
+  assert.equal(out.proposals[0].cmd, 'who');
+  assert.equal(ctx.state.ran.length, 0, 'proposing still runs nothing');
+});
+
+test('a model that will not stop narrating does not leave the user waiting for a card', async (t) => {
+  const ctx = setup(t);
+  const { sessionId } = await ctx.api.attach('p1').then((a) => ({ sessionId: a.sessionId }));
+
+  const narration = 'Proposed command: `who`. Please Accept, Reject, or provide an Alternative.';
+  ctx.model.push(narration);
+  ctx.model.push(narration);
+
+  const out = await ctx.workflow.runTurn(sessionId, { message: 'who is connected?' });
+
+  assert.equal(out.proposals.length, 0, 'nothing was proposed, and the turn does not pretend otherwise');
+  assert.match(out.reply, /Nothing was actually proposed/);
+  assert.equal(ctx.api.history(sessionId).at(-1).text.includes('Nothing was actually proposed'), true,
+    'the transcript carries the correction, not just the claim');
+});
+
+test('the covering note after a REAL proposal is left alone', async (t) => {
+  /* "I have proposed a command for you to approve" is honest when a card was
+     actually raised: the detector must not fire on the truth. */
+  const ctx = setup(t);
+  const { sessionId } = await ctx.api.attach('p1').then((a) => ({ sessionId: a.sessionId }));
+  await ctx.terminals.setControl(sessionId, 'assistant');
+
+  ctx.model.push(JSON.stringify({ tool: 'ssh_exec', input: { cmd: 'who' } }),
+    'Proposed command: `who`. Please Accept, Reject, or provide an Alternative.');
+
+  const out = await ctx.workflow.runTurn(sessionId, { message: 'who is connected?' });
+  assert.equal(out.proposals.length, 1);
+  assert.equal(out.reply.includes('Nothing was actually proposed'), false);
+  assert.equal(ctx.model.prompts.some((p) => /described a command/.test(p)), false, 'it was never accused');
+});
