@@ -1,1 +1,0 @@
-{ "private": true, "scripts": { "build": "vite build" }, "devDependencies": { "vite": "^5.0.0", "laravel-vite-plugin": "^1.0" } }

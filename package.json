@@ -15,7 +15,16 @@
     "dev:node-watch": "node --watch server.js",
     "vendor:toast": "esbuild node_modules/gooey-toast/dist/index.js --bundle --format=iife --global-name=gooeyToast --minify --outfile=public/vendor/gooey-toast/gooey-toast.iife.js && node -e \"require('fs').copyFileSync('node_modules/gooey-toast/dist/styles.css','public/vendor/gooey-toast/styles.css')\"",
     "build": "pkg . --output dist/server-tools.exe",
-    "test": "node --test \"test/**/*.test.js\""
+    "verify:base": "node scripts/verify-base.js",
+    "modules:keys": "node scripts/module-keys.js init",
+    "modules:build": "node scripts/build-modules.js",
+    "modules:catalog": "node scripts/build-catalog.js",
+    "modules:registry": "node scripts/module-registry.js",
+    "modules:branches": "node scripts/publish-module-branch.js --all",
+    "test": "node --test \"test/**/*.test.js\"",
+    "test:modules": "node scripts/test-modules.js",
+    "test:all": "npm test && npm run test:modules && npm run verify:base",
+    "test:e2e": "node test/e2e/module-install.e2e.js"
   },
   "pkg": {
     "targets": [
@@ -23,6 +32,7 @@
     ],
     "assets": [
       "public/**/*",
+      "config/**/*",
       "node_modules/intro.js/minified/**",
       "node_modules/tabulator-tables/dist/**",
       "node_modules/codemirror/lib/**",
@@ -37,9 +47,6 @@
     ]
   },
   "dependencies": {
-    "@xterm/addon-fit": "^0.11.0",
-    "@xterm/xterm": "^6.0.0",
-    "basic-ftp": "^5.3.1",
     "codemirror": "^5.65.21",
     "dotenv": "^16.4.5",
     "express": "^4.21.2",
@@ -47,16 +54,19 @@
     "intro.js": "^8.5.0",
     "mysql2": "^3.11.5",
     "php-serialize": "^4.1.1",
-    "picomatch": "^4.0.7",
     "ssh2": "^1.16.0",
     "tabulator-tables": "^6.5.2",
-    "tar": "^7.5.22",
-    "ws": "^8.21.3"
+    "tar": "^7.5.22"
   },
   "devDependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "@yao-pkg/pkg": "^6.22.0",
+    "basic-ftp": "^5.3.1",
     "esbuild": "^0.28.2",
     "ftp-srv": "^4.6.3",
-    "puppeteer-core": "^25.8.0"
+    "picomatch": "^4.0.7",
+    "puppeteer-core": "^25.8.0",
+    "ws": "^8.21.3"
   }
 }

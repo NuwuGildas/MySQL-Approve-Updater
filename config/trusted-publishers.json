@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "publishers": [
+    {
+      "id": "server-tools",
+      "name": "Server Tools",
+      "keys": [
+        {
+          "keyId": "st-2026",
+          "algorithm": "ed25519",
+          "publicKey": "MCowBQYDK2VwAyEAQtbyC0SrNBw+sXJLmAwEjuO1n4na5UDXo/AflQoyzzI=",
+          "addedAt": "2026-09-10T16:42:08.231Z"
+        }
+      ]
+    }
+  ]
+}

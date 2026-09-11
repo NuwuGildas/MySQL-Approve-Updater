@@ -17,7 +17,9 @@ const path = require('path');
 const root = process.cwd();
 const entry = path.resolve(root, process.argv[2] || 'server.js');
 const WATCH = [entry, path.join(root, 'lib'), path.join(root, 'package.json')];
-const IGNORE = /[\\/](node_modules|\.git|deploy-work|deploy-runs|deploy-keys|public|test|scripts|\.idea|\.ui-audit)([\\/]|$)/;
+// Installed module code and module source are not the base application: a change
+// there is picked up by adding or updating the module, not by a restart.
+const IGNORE = /[\\/](node_modules|\.git|module-data|\.worktrees|modules|dist|keys|deploy-work|deploy-runs|deploy-keys|public|test|scripts|\.idea|\.ui-audit)([\\/]|$)/;
 const DEBOUNCE_MS = 250;
 
 const sig = (p) => { try { const s = fs.statSync(p); return s.isFile() ? `${s.size}:${Math.floor(s.mtimeMs)}` : null; } catch { return null; } };

@@ -35,3 +35,19 @@ agent-chat.json.*
 /agent-home/
 ssh-session-chats.json
 ssh-agent-memory.json
+
+# module host: installed packages, module-owned data and publisher keys
+/module-data/
+/keys/
+
+# module source lives on its own branches (modules/<id>); scripts/module-worktrees.js
+# checks them out here for local work
+/.worktrees/
+
+# Module source lives on its own branches (modules/<id>), never in the base
+# application's tree. `node scripts/module-worktrees.js --all` checks them out here.
+/modules/
+
+# tooling artifacts
+/.claude/
+/.ui-audit/

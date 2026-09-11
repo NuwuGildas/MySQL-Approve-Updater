@@ -1,48 +1,29 @@
-# Deploy module — end-to-end tests
+# End-to-end tests
 
-Unit tests (`npm test`) cover the detector, manifest, vault, engine and the FTP
-adapter with an in-process FTP server. The scripts here exercise real servers.
+These drive the real application in a real browser, or the packaged executable,
+against a local module registry. They use a disposable data directory
+(`SERVER_TOOLS_DATA_DIR`), a disposable browser profile and packages built from
+this checkout: no real server, database, account or deployment is touched.
 
-## VPS over SSH (Docker)
-
-```bash
-docker build -t st-vps test/e2e/vps
-docker run -d --rm --name st-vps -p 2222:22 -p 8088:80 st-vps
-node test/e2e/vps/run-e2e.js          # plan → ship → ship → rollback → failed health check → rollback
-docker rm -f st-vps
-```
-
-The container is Ubuntu 24.04 with sshd (user `deploy`/`deploy`), nginx pointing at
-`/var/www/demo/current/public`, PHP-FPM, composer, node and git. The script uses a
-throwaway data dir, so your own `connections.json`, targets and vault are untouched.
-
-To try the same thing through the UI: add an SSH-only server `127.0.0.1:2222`
-(`deploy`/`deploy`) in **SSH servers**, then in **Deploy** connect the
-`test/fixtures/repos/php-web` folder, add a VPS target with root `/var/www/demo`,
-reload commands `sudo -n /usr/sbin/nginx -s reload` and
-`sudo -n /usr/sbin/service php8.3-fpm reload`, health URL `http://127.0.0.1:8088/`.
-
-## Shared hosting over FTP
+Build the packages once, then run whichever you need:
 
 ```bash
-node test/e2e/ftp-server.js            # prints the root dir; user acme / ftp-secret, docroot /public_html
+npm run modules:build
+
+node test/e2e/module-install.e2e.js     # adding a module does not reload the page
+node test/e2e/module-lifecycle.e2e.js   # every module added, opened and removed in one session
+npm run build && node test/e2e/packaged-exe.e2e.js   # module workers inside the packaged .exe
 ```
 
-Then in the UI: Secrets → `FTP_E2E` = `ftp-secret`; connect a repo (e.g.
-`test/fixtures/repos/plain-html`); add a shared-hosting target with transport FTP
-`127.0.0.1:2121`, home `/`, docroot `/public_html`; Plan → Ship. Or from the CLI:
+Chrome is found at `C:/Program Files/Google/Chrome/Application/chrome.exe`;
+override with `CHROME_PATH`. The browser runs headless with `--no-sandbox
+--disable-gpu`, which is what this development environment allows.
 
-```bash
-node server.js plan <target>
-node server.js ship <target> --yes
-node server.js releases <target>
-node server.js rollback <target> --yes
-```
+| Script | What it proves |
+|---|---|
+| `module-install.e2e.js` | one document throughout, an in-memory sentinel and the assistant draft survive, the new route/search/settings/tools appear at once, remove + re-add registers exactly once |
+| `module-lifecycle.e2e.js` | all five modules install, their pages open with no console errors, removal leaves no route, entry, mount, style or search source behind, a second tab reconciles, and installation survives a restart |
+| `packaged-exe.e2e.js` | in the packaged `.exe` a module's worker starts by re-entering the executable, host-shared and package-bundled libraries both resolve, and a module's own HTTP surface is proxied |
 
-## Auto-ship webhook
-
-```bash
-node test/e2e/ftp-server.js            # terminal 1
-PORT=3999 node server.js               # terminal 2
-node test/e2e/webhook-e2e.js           # terminal 3: signed GitHub/GitLab pushes → listener on 127.0.0.1:3001 → ship
-```
+Each module's own end-to-end scripts live with it, in
+`modules/<id>/test/e2e/` — those are the ones that need real servers.

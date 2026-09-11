@@ -20,55 +20,16 @@ const CMDK_SVG = {
 };
 const cmdkIcon = (name) => (typeof CC_ICON !== 'undefined' && CC_ICON[name]) || (typeof NAV_ICON !== 'undefined' && NAV_ICON[name]) || CMDK_SVG[name] || CMDK_SVG.page;
 
-/* ---------- sources: one per searchable kind ---------- */
-const CMDK_SOURCES = [
-  {
-    key: 'projects', prefixes: ['projects', 'project'], label: 'Projects', icon: 'projects',
-    tip: 'Search projects and switch the active one',
-    fetch: () => api('/api/projects').then((d) => d.projects || []),
-    map: (p) => ({ title: p.name, sub: p.description || 'Project', action: { k: 'project', id: p.id }, dot: p.color || 'var(--accent)' }),
-  },
-  {
-    key: 'targets', prefixes: ['targets', 'target', 'deployments', 'deployment'], label: 'Deployments', icon: 'rocket',
-    tip: 'Search deployment targets',
-    fetch: () => api('/api/deploy/targets').then((d) => d.targets || []),
-    map: (t) => ({ title: t.name, sub: [t.type === 'local' ? 'this computer' : t.type, t.paths?.root || t.paths?.docroot || '', t.projectName].filter(Boolean).join(' · '), action: { k: 'route', to: `#/deployments/targets/${t.id}` } }),
-  },
-  {
-    key: 'repos', prefixes: ['repos', 'repo', 'repositories'], label: 'Repositories', icon: 'repo',
-    tip: 'Search connected repositories',
-    fetch: () => api('/api/deploy/repos').then((d) => d.repos || []),
-    map: (r) => ({ title: r.name, sub: r.source?.kind === 'git' ? String(r.source.url || '').replace(/^https?:\/\//, '') : r.source?.path || '', action: { k: 'repo', id: r.id } }),
-  },
-  {
-    key: 'servers', prefixes: ['servers', 'server', 'ssh'], label: 'Servers', icon: 'server',
-    tip: 'Search SSH servers',
-    fetch: () => api('/api/ssh/sessions').then((d) => d.sessions || []),
-    map: (s) => ({ title: s.name, sub: `${s.user}@${s.host}:${s.port}${s.connected ? ' · connected' : ''}`, action: { k: 'server', id: s.id, name: s.name } }),
-  },
-  {
-    key: 'connectors', prefixes: ['connectors', 'connector', 'github', 'gitlab'], label: 'Connectors', icon: 'connectors',
-    tip: 'Search GitHub and GitLab accounts',
-    fetch: () => api('/api/connectors').then((d) => d.connectors || []),
-    map: (c) => ({ title: c.name, sub: `${c.kind}${c.account?.login ? ' · @' + c.account.login : ''} · ${c.status === 'ok' ? 'verified' : c.status}`, action: { k: 'connector', id: c.id, ok: c.status === 'ok' } }),
-  },
-  {
-    key: 'secrets', prefixes: ['secrets', 'secret', 'vault'], label: 'Vault secrets', icon: 'key',
-    tip: 'Search vault secret names',
-    fetch: () => api('/api/deploy/secrets').then((d) => d.secrets || []),
-    map: (s) => ({ title: s.name, sub: s.updatedAt ? `updated ${typeof dpFmtAgo === 'function' ? dpFmtAgo(s.updatedAt) : s.updatedAt}` : 'vault secret', action: { k: 'secret', name: s.name } }),
-  },
+/* ---------- sources: one per searchable kind ----------
+   Only the core's own sources live here. A module adds its searchable kinds
+   through host.registerSearchSource() and they leave with the module, cache
+   included. */
+const CMDK_CORE_SOURCES = [
   {
     key: 'connections', prefixes: ['connections', 'connection', 'db'], label: 'Database connections', icon: 'db',
     tip: 'Search database connection profiles',
     fetch: () => api('/api/connections').then((d) => (d.profiles || []).map((p) => ({ ...p, _active: p.id === d.activeId }))),
     map: (p) => ({ title: p.name, sub: `${p.db?.user || ''}@${p.db?.host || ''}${p.db?.database ? ' · ' + p.db.database : ''}${p._active ? ' · active' : ''}`, action: { k: 'route', to: '#/connections' } }),
-  },
-  {
-    key: 'runs', prefixes: ['runs', 'run', 'deploys'], label: 'Deploy runs', icon: 'history',
-    tip: 'Search deploy and rollback runs',
-    fetch: () => api('/api/deploy/runs?limit=60').then((d) => d.runs || []),
-    map: (r) => ({ title: `${r.mode} ${r.status.replace('_', ' ')} · ${r.targetName || ''}`, sub: `${r.id}${r.release ? ' · release ' + r.release : ''}${r.error ? ' · ' + String(r.error).slice(0, 60) : ''}`, action: { k: 'run', id: r.id, targetId: r.targetId }, hay: `${r.mode} ${r.status} ${r.targetName || ''} ${r.id} ${r.release || ''} ${r.commit || ''}` }),
   },
   {
     key: 'tables', prefixes: ['tables', 'table', 'schema'], label: 'Database tables', icon: 'schema',
@@ -80,20 +41,31 @@ const CMDK_SOURCES = [
     key: 'settings', prefixes: ['settings', 'setting', 'prefs'], label: 'Settings', icon: 'settings',
     tip: 'Jump to a settings section',
     local: true,
-    fetch: async () => Object.entries(typeof SETTINGS_SECTIONS !== 'undefined' ? SETTINGS_SECTIONS : {}).map(([sec, label]) => ({ sec, label })),
+    fetch: async () => Object.entries({ ...CORE_SETTINGS_SECTIONS, ...Object.fromEntries(HostSDK.settingsSections.values().map((s) => [s.id, s.label])) }).map(([sec, label]) => ({ sec, label })),
     map: (s) => ({ title: s.label, sub: `settings · ${s.sec}`, action: { k: 'route', to: `#/settings/${s.sec}` } }),
   },
 ];
-const cmdkSource = (key) => CMDK_SOURCES.find((s) => s.key === key);
+/** Core sources plus every source registered by an installed module. */
+const cmdkSources = () => [...CMDK_CORE_SOURCES, ...HostSDK.searchSources.values()];
+const cmdkSource = (key) => cmdkSources().find((s) => s.key === key);
+/* A remembered result stays in Recents but is only offered while whatever owns
+   it is still installed. */
+const cmdkActionAvailable = (a) => {
+  if (!a) return false;
+  if (a.src) return !!cmdkSource(a.src);
+  if (a.k === 'route') return !!parseRoute(a.to);
+  if (a.k === 'cmd') return !!cmdkCommandDef(a.id);
+  return true;
+};
 
 /* ---------- one-off actions ---------- */
-const CMDK_COMMANDS = [
-  { id: 'new-deployment', title: 'New deployment', sub: 'Guided setup: repository → build → destination', action: { k: 'cmd', id: 'new-deployment' } },
-  { id: 'new-project', title: 'New project', sub: 'Group resources and give the assistant its own conversation', action: { k: 'cmd', id: 'new-project' } },
+const CMDK_CORE_COMMANDS = [
   { id: 'ai', title: 'Open the AI assistant', sub: 'Chat about the current project', action: { k: 'cmd', id: 'ai' } },
   { id: 'tour', title: 'Guided tour', sub: 'Walk through the app', action: { k: 'cmd', id: 'tour' } },
   { id: 'theme', title: 'Toggle light / dark theme', sub: 'Appearance', action: { k: 'cmd', id: 'theme' } },
 ];
+const cmdkCommands = () => [...CMDK_CORE_COMMANDS, ...HostSDK.commands.values().map((c) => ({ ...c, action: { k: 'cmd', id: c.id } }))];
+const cmdkCommandDef = (id) => cmdkCommands().find((c) => c.id === id) || null;
 
 /* ---------- loading + cache ---------- */
 async function cmdkLoad(src, { force = false } = {}) {
@@ -112,7 +84,7 @@ async function cmdkLoad(src, { force = false } = {}) {
 }
 /** Warm every source (or just one when scoped) without blocking the first paint. */
 function cmdkWarm(only) {
-  for (const s of CMDK_SOURCES) { if (only && s.key !== only.key) continue; cmdkLoad(s); }
+  for (const s of cmdkSources()) { if (only && s.key !== only.key) continue; cmdkLoad(s); }
 }
 const cmdkRows = (src) => cmdk.cache.get(src.key)?.rows || [];
 
@@ -141,7 +113,7 @@ function cmdkMark(text, q) {
 /** Parse "prefix:rest" into a scope + query. The prefix stays visible in the field. */
 function cmdkParse(value) {
   const m = /^\s*([A-Za-z]+):\s*([\s\S]*)$/.exec(value || '');
-  if (m) { const src = CMDK_SOURCES.find((s) => s.prefixes.includes(m[1].toLowerCase())); if (src) return { scope: src, q: m[2].trim() }; }
+  if (m) { const src = cmdkSources().find((s) => s.prefixes.includes(m[1].toLowerCase())); if (src) return { scope: src, q: m[2].trim() }; }
   return { scope: null, q: String(value || '').trim() };
 }
 
@@ -177,29 +149,27 @@ function cmdkBuild() {
   }
 
   if (!q) {
-    const rec = cmdkRecents().map((r) => ({ ...r, recent: true }));
+    const rec = cmdkRecents().filter(r => cmdkActionAvailable(r.action)).map((r) => ({ ...r, recent: true }));
     push('Recents', rec);
-    push('Search tips', CMDK_SOURCES.map((s) => ({ title: `${s.prefixes[0]}:`, sub: s.tip, icon: s.icon, group: 'Search tips', tipFor: s.key, action: { k: 'tip', prefix: s.prefixes[0] } })));
+    push('Search tips', cmdkSources().map((s) => ({ title: `${s.prefixes[0]}:`, sub: s.tip, icon: s.icon, group: 'Search tips', tipFor: s.key, action: { k: 'tip', prefix: s.prefixes[0] } })));
     return rows;
   }
 
-  // pages first: they are local and always available
-  const section = {};
-  for (const g of (typeof NAV !== 'undefined' ? NAV : [])) for (const it of g.items) section[it.id] = g.group;
-  const pages = (typeof NAV_ITEMS !== 'undefined' ? NAV_ITEMS : []).map((n) => ({
-    title: n.title || n.label, sub: [section[n.id], n.label !== (n.title || n.label) ? n.label : ''].filter(Boolean).join(' › '), icon: null, iconHtml: n.icon, group: 'Go to',
+  // pages first: they are local, and the registry only holds installed ones
+  const pages = (typeof cmdkPages === 'function' ? cmdkPages() : []).map((n) => ({
+    title: n.title || n.label, sub: [n.group, n.label !== (n.title || n.label) ? n.label : ''].filter(Boolean).join(' › '), icon: null, iconHtml: n.icon, group: 'Go to',
     hay: `${n.label} ${n.title || ''} ${n.desc || ''}`, action: n.route ? { k: 'route', to: n.route } : { k: 'cmd', id: n.action || 'tour' },
   }));
   push('Go to', rank(pages).slice(0, CMDK_MAX_PER_GROUP));
-  push('Actions', rank(CMDK_COMMANDS.map((c) => ({ ...c, icon: 'bolt', group: 'Actions' }))).slice(0, 4));
+  push('Actions', rank(cmdkCommands().map((c) => ({ ...c, icon: 'bolt', group: 'Actions' }))).slice(0, 4));
 
-  for (const src of CMDK_SOURCES) {
-    const all = cmdkRows(src).map((raw) => ({ ...src.map(raw), group: src.label, icon: src.icon }));
+  for (const src of cmdkSources()) {
+    const all = cmdkRows(src).map((raw) => { const row = src.map(raw); return { ...row, action: { ...row.action, src: src.key }, group: src.label, icon: src.icon }; });
     const hits = rank(all);
     push(src.label, hits.slice(0, CMDK_MAX_PER_GROUP), hits.length > CMDK_MAX_PER_GROUP ? `${hits.length} matches · type “${src.prefixes[0]}:” for all` : '');
   }
 
-  const tips = CMDK_SOURCES.filter((s) => s.prefixes.some((p) => p.startsWith(q.toLowerCase())) || s.label.toLowerCase().includes(q.toLowerCase()))
+  const tips = cmdkSources().filter((s) => s.prefixes.some((p) => p.startsWith(q.toLowerCase())) || s.label.toLowerCase().includes(q.toLowerCase()))
     .map((s) => ({ title: `${s.prefixes[0]}:`, sub: s.tip, icon: s.icon, group: 'Search tips', action: { k: 'tip', prefix: s.prefixes[0] } }));
   push('Search tips', tips);
 
@@ -281,28 +251,20 @@ function cmdkFlash(el) { if (!el) return; el.scrollIntoView({ block: 'center', b
 const cmdkGo = (route) => (typeof navigate === 'function' ? navigate(route) : (location.hash = route));
 const cmdkAfter = (fn, ms = 260) => setTimeout(() => { try { fn(); } catch {} }, ms);
 
+/** Pages the palette can jump to: whatever the page registry holds right now. */
+function cmdkPages() {
+  return HostSDK.pages.values().filter((p) => p.label).map((p) => ({
+    id: p.id, label: p.label, title: p.title, desc: p.desc, icon: p.icon, group: p.group || '',
+    route: p.route || '#/' + p.segment + (p.sub ? '/' + p.sub : ''),
+  })).concat(HostSDK.navItems.values().filter((n) => n.label && n.action).map((n) => ({ ...n, route: null })));
+}
+
 function cmdkRun(a) {
   if (!a) return;
+  // A result that came from a module's own source is run by that module.
+  if (a.src) { const source = cmdkSource(a.src); if (source?.run) return source.run(a); }
   switch (a.k) {
     case 'route': cmdkGo(a.to); break;
-    case 'project': if (typeof setProject === 'function') setProject(a.id); break;
-    case 'repo':
-      cmdkGo('#/deployments');
-      cmdkAfter(() => { document.querySelector('.dp-switch [data-res="repos"]')?.click(); cmdkFlash(document.querySelector(`#deployNav [data-repo-id="${a.id}"]`) || document.querySelector('#deployNav .dp-sec.res-on')); });
-      break;
-    case 'secret':
-      cmdkGo('#/deployments');
-      cmdkAfter(() => { document.querySelector('.dp-switch [data-res="secrets"]')?.click(); const row = [...document.querySelectorAll('#deployNav .dp-secret, #deployNav .dp-item')].find((el) => el.textContent.includes(a.name)); cmdkFlash(row); });
-      break;
-    case 'run':
-      if (a.targetId) cmdkGo(`#/deployments/targets/${a.targetId}`); else cmdkGo('#/deployments');
-      cmdkAfter(() => { if (typeof dpShowTab === 'function') { dp.logRun = a.id; dpShowTab('log'); if (typeof dpLoadLog === 'function') dpLoadLog(a.id); } }, 320);
-      break;
-    case 'server':
-      cmdkGo('#/servers');
-      cmdkAfter(() => cmdkFlash([...document.querySelectorAll('#serversList .srv-card')].find((el) => el.textContent.includes(a.name))));
-      break;
-    case 'connector': cmdkGo(a.ok ? `#/connectors/${a.id}/repos` : '#/connectors'); break;
     case 'table':
       cmdkGo('#/database/schema');
       cmdkAfter(() => { const f = $('schemaFilter'); if (f) { f.value = a.name; if (typeof loadSchemaMap === 'function') loadSchemaMap(a.name); } }, 320);
@@ -312,9 +274,9 @@ function cmdkRun(a) {
   }
 }
 function cmdkCommand(id) {
-  if (id === 'new-deployment') { cmdkGo('#/deployments'); cmdkAfter(() => $('btnDpNew')?.click(), 320); }
-  else if (id === 'new-project') { cmdkGo('#/projects'); cmdkAfter(() => $('btnPjAdd')?.click(), 320); }
-  else if (id === 'ai') { if (typeof openAgent === 'function') openAgent(); }
+  const registered = HostSDK.commands.get(id);
+  if (registered?.run) return registered.run();
+  if (id === 'ai') { if (typeof openAgent === 'function') openAgent(); }
   else if (id === 'tour') { if (typeof startTour === 'function') startTour(); }
   else if (id === 'theme') { const now = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light'; if (typeof applyTheme === 'function') applyTheme(now); else document.documentElement.setAttribute('data-theme', now); }
 }
@@ -350,3 +312,11 @@ function cmdkClose() { const dlg = $('cmdkModal'); if (dlg?.open) dlg.close(); }
     if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); if (cmdkIsOpen()) cmdkClose(); else cmdkOpen(); }
   });
 })();
+
+/* A removed module takes its search results with it: drop any cached rows whose
+   source is gone, and repaint if the palette happens to be open. */
+HostSDK.searchSources.onChange(() => {
+  for (const key of [...cmdk.cache.keys()]) if (!cmdkSource(key)) cmdk.cache.delete(key);
+  if (cmdkIsOpen()) cmdkRender();
+});
+HostSDK.pages.onChange(() => { if (cmdkIsOpen()) cmdkRender(); });

@@ -1,0 +1,64 @@
+# The base application: tests, and the check that it ships nothing optional.
+#
+# Module packages are built by their own branches' workflows (modules/<id>), not
+# here. What this job guarantees is the other half of the contract: that the
+# base application is complete on its own and carries no optional module code.
+name: base
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci --omit=optional
+
+      - name: Base application tests
+        run: npm test
+
+      - name: The base distribution contains no optional module
+        run: npm run verify:base
+
+  packages:
+    # Builds every module branch that exists, so a change to the host SDK is
+    # caught against real packages before it is released.
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: '22', cache: npm }
+      - run: npm ci --omit=optional
+
+      - name: Check every module branch out
+        run: |
+          mkdir -p modules
+          for ref in $(git for-each-ref --format='%(refname:short)' refs/remotes/origin/modules); do
+            id="${ref##*/}"
+            git worktree add ".worktrees/$id" "$ref"
+            ln -s "../.worktrees/$id" "modules/$id" || cp -r ".worktrees/$id" "modules/$id"
+            echo "checked out $id"
+          done
+
+      - name: Build every package (unsigned in CI without a key)
+        run: npm run modules:build
+
+      - name: Module test suites
+        run: npm run test:modules
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: module-packages
+          path: dist/modules/*

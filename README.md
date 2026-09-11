@@ -7,6 +7,32 @@ You define rules (fetch + transform) in the browser, run a **preview** (read-onl
 then walk through the proposed changes one by one. Each **Approve** executes exactly
 one parameterized single-row `UPDATE`; **Reject**/**Skip** write nothing.
 
+## What is in the box, and what you add
+
+The application you install is small on purpose: the shell, the **AI assistant**,
+the **database tools** (connections, SQL console, schema map, rule-based updates
+with per-row approval) and the **module manager**.
+
+Everything else is an optional module you add from **+ Add module** in the
+sidebar, without restarting anything and without the page reloading:
+
+| Module | What it adds |
+|---|---|
+| Servers & Terminals | SSH server profiles, live VM stats, shared terminals you and the assistant work in together |
+| Deployments · The Ascension | connect a repository, detect its stack, review the plan, ship to a VPS, shared host or platform, roll back |
+| Git Connectors | GitHub and GitLab accounts, verified once, with their repositories |
+| Projects | group connections, servers, connectors, repositories and deployments; each project has its own assistant conversation |
+| Activity History | the searchable timeline of every decision, edit, session, deployment and assistant action |
+
+A module is downloaded from a marketplace catalog, checked against its publisher's
+signature, and started in its own process. Removing one keeps everything it saved:
+add it again and your servers, deployments, connectors, projects and conversations
+are all still there.
+
+**[docs/modules.md](docs/modules.md)** is the full story: the host SDK, the package
+format, the catalog schema, how installation works, how to publish a version and
+how to write a new module.
+
 ## Setup
 
 Requirements: Node 20+, network access to your MySQL/MariaDB (directly or via SSH).
@@ -15,6 +41,16 @@ Requirements: Node 20+, network access to your MySQL/MariaDB (directly or via SS
 npm install
 copy .env.example .env    # then edit .env
 npm start                 # or: npm run dev (auto-restart on file changes)
+```
+
+To offer modules, point the app at a catalog with `MODULE_REGISTRIES`. To build
+and serve one from this checkout:
+
+```bash
+npm run modules:keys -- --key-id dev   # once: a publisher key + the trust anchor
+npm run modules:build                  # packages + catalog into dist/modules
+npm run modules:registry               # serves them on http://127.0.0.1:8788
+set MODULE_REGISTRIES=http://127.0.0.1:8788/catalog.json && npm start
 ```
 
 Open <http://localhost:3000>. The server binds to **127.0.0.1 only** — there is no

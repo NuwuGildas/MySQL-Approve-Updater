@@ -1,14 +1,29 @@
 /* Application shell (layout-guide.md §3–§5): persistent left navigation, one active page,
    page header, session bar. Loaded after style.css; overrides are deliberate. */
 :root { --nav-w: 232px; --hdr-h: 58px; --nav-compact-w: 60px; }
+#moduleMarketplace { width: min(900px, calc(100vw - 2rem)); max-height: calc(100dvh - 3rem); padding: 1.5rem; overflow-y: auto; color: var(--text); background: var(--panel); border: 1px solid var(--border); border-radius: 16px; }
+#moduleMarketplace::backdrop { background: #0009; }
+.module-market-head, .module-card-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.module-market-head h2, .module-card h3 { margin: 0; }
+.module-market-head p, .module-market-foot { color: var(--muted); font-size: .82rem; }
+#moduleSearch { width: 100%; margin: .5rem 0; }
+#moduleMarketStatus { color: var(--amber); font-size: .82rem; }
+#moduleMarketStatus:empty { display: none; }
+.module-catalog { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 1rem; }
+.module-card { display: flex; flex-direction: column; gap: .65rem; padding: 1rem; border: 1px solid var(--border); border-radius: 12px; background: var(--panel2); min-width: 0; }
+.module-card h3 { font-size: .95rem; }
+.module-card p { margin: 0; color: var(--muted); font-size: .82rem; line-height: 1.5; flex: 1; }
+.module-card small { color: var(--muted); font-size: .7rem; }
+.module-card button { align-self: flex-start; min-height: 36px; }
+.module-card .badge { flex: none; font-size: .65rem; }
+body.shell.page-modules #compass { display: block !important; }
+#settingsModal .nav-item[hidden] { display: none; }
 body.shell.nav-collapsed { --nav-w: var(--nav-compact-w); }
-
 /* header: identity, navigation toggle, assistant, theme, settings */
 body.shell > header { z-index: 30; }
 #btnNav { display: none; }
 body.shell #homeLogo, body.shell #homeTitle { cursor: default; }
 body.shell .sse-link { font-size: .74rem; }
-
 /* navigation column */
 .app-nav { position: fixed; top: var(--hdr-h); left: 0; bottom: 0; width: var(--nav-w); z-index: 25; display: flex; flex-direction: column; background: var(--panel); border-right: 1px solid var(--border); transition: width .18s ease, transform .22s ease; }
 .nav-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: .6rem .55rem; }
@@ -33,33 +48,15 @@ body.nav-collapsed .nav-link { justify-content: center; padding: .5rem 0; }
 body.nav-collapsed .nav-group { margin-bottom: .4rem; padding-top: .3rem; border-top: 1px solid var(--border); }
 body.nav-collapsed .nav-group:first-child { border-top: 0; padding-top: 0; }
 #navScrim { display: none; position: fixed; inset: var(--hdr-h) 0 0 0; background: #0009; z-index: 24; }
-
 /* pages sit to the right of the navigation */
 body.shell #compass, body.shell main, body.shell #pageHead { margin-left: var(--nav-w); }
 body.shell #compass { max-width: none; }
 body.shell #sqlConsole { left: var(--nav-w); }
-body.shell #deployDrawer::before { display: none; }
-body.shell #btnDpClose { display: none; } /* the sidebar is the way out; Escape still returns Home */
-/* The Ascension, Servers, Terminals, Connectors, Projects and History are views in the page flow
-   (no fixed drawer, no slide-in), so the header and sidebar geometry hold by construction */
-body.shell #deployDrawer, body.shell #serversDrawer, body.shell #sshDrawer, body.shell #auditDrawer, body.shell #connectorsDrawer, body.shell #projectsDrawer,
-body.shell.drawers-h #deployDrawer, body.shell.drawers-h #serversDrawer, body.shell.drawers-h #sshDrawer, body.shell.drawers-h #auditDrawer {
-  position: relative; inset: auto; top: auto; left: auto; right: auto; bottom: auto; z-index: auto;
-  margin-left: var(--nav-w); width: auto; min-width: 0; max-width: none;
-  height: calc(100dvh - var(--hdr-h)); max-height: none;
-  transform: none !important; transition: none !important; visibility: visible;
-  border: 0; box-shadow: none; display: none; flex-direction: column;
-}
-body.shell #deployDrawer.open, body.shell #serversDrawer.open, body.shell #sshDrawer.open, body.shell #auditDrawer.open, body.shell #connectorsDrawer.open, body.shell #projectsDrawer.open { display: flex; }
-body.shell #serversDrawer, body.shell #auditDrawer, body.shell #connectorsDrawer, body.shell #projectsDrawer { padding: .9rem clamp(1rem, 2.5vw, 1.6rem); }
 /* one active view: the workspace, the hub and the SQL bar hide while another view is shown */
 body.shell:not(.page-mysql) main { display: none !important; }
 body.shell:not(.page-home) #compass { display: none !important; }
 body.shell:not(.page-mysql):not(.page-sql) #sqlConsole { display: none !important; }
 body.shell:not(.page-mysql):not(.page-sql):not(.page-schema):not(.page-home) #pageHead { display: none; }
-/* the sidebar is the way in and out of a view: no per-view close or dock buttons */
-body.shell #serversDrawer .btn-dock, body.shell #auditDrawer .btn-dock, body.shell #btnServersClose, body.shell #btnAuditClose { display: none; }
-
 /* page header: title, description and (database pages) the active profile */
 #pageHead { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; padding: .9rem clamp(1rem, 3vw, 2rem) 0; }
 #pageHead[hidden] { display: none; }
@@ -69,15 +66,14 @@ body.shell #serversDrawer .btn-dock, body.shell #auditDrawer .btn-dock, body.she
 #pageContextWrap { margin-left: auto; display: inline-flex; align-items: center; gap: .4rem; font-size: .78rem; color: var(--muted); background: var(--panel); border: 1px solid var(--border); border-radius: 99px; padding: .2rem .7rem; }
 #pageContextWrap[hidden] { display: none; }
 #pageContextWrap .sub { font-size: .78rem; }
-body.page-home #pageHead { display: none; } /* Home has its own hero */
-
+body.page-home #pageHead { display: none; }
+/* Home has its own hero */
 /* project context: header switcher (global), page-header chip, assistant sub-line */
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 /* Project switcher: a single pill (dot + name + chevron) with quiet icon buttons beside it, and a
    menu anchored to the pill's left edge. No nested pills, no text glyphs standing in for icons. */
 .proj-switch { display: inline-flex; align-items: center; gap: .15rem; max-width: 260px; min-width: 0; position: relative; }
 .proj-select-source { position: absolute !important; width: 1px !important; height: 1px !important; opacity: 0 !important; pointer-events: none !important; }
-
 .proj-trigger { display: inline-flex; align-items: center; gap: .45rem; min-width: 0; max-width: 15rem; padding: .3rem .55rem .3rem .6rem; border: 1px solid var(--border); border-radius: 99px; background: var(--panel2); color: var(--text); font: inherit; font-size: .78rem; font-weight: 600; line-height: 1.2; cursor: pointer; transition: border-color .15s, background .15s, box-shadow .15s; }
 .proj-trigger #projTriggerName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .proj-trigger:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); background: color-mix(in srgb, var(--accent) 8%, var(--panel2)); }
@@ -87,20 +83,18 @@ body.page-home #pageHead { display: none; } /* Home has its own hero */
 .proj-trigger[aria-expanded="true"] .proj-trigger-chevron { transform: rotate(180deg); color: var(--accent); }
 .proj-dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--proj-color, var(--accent)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--proj-color, var(--accent)) 22%, transparent); }
 .proj-switch[data-readonly] .proj-trigger { cursor: default; }
-
 .proj-switch .proj-manage, .proj-switch .proj-res-btn { flex: none; padding: .25rem; border: 0; background: transparent; color: var(--muted); border-radius: 8px; }
 .proj-switch .proj-manage:hover, .proj-switch .proj-manage:focus-visible, .proj-switch .proj-res-btn:hover, .proj-switch .proj-res-btn:focus-visible { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); outline: none; }
 .proj-switch .proj-manage svg, .proj-switch .proj-res-btn svg { width: 14px; height: 14px; display: block; }
-
 .proj-menu { position: absolute; z-index: 80; top: calc(100% + .45rem); left: 0; width: min(19rem, calc(100vw - 2rem)); padding: .4rem; border: 1px solid var(--border); border-radius: 14px; background: var(--panel); box-shadow: 0 1px 2px rgba(0,0,0,.18), 0 16px 40px rgba(0,0,0,.34); animation: projMenuIn .13s ease-out; }
-@keyframes projMenuIn { from { opacity: 0; transform: translateY(-4px); } }
-.proj-menu[hidden] { display: none; }
+
+@keyframes projMenuIn {from { opacity: 0; transform: translateY(-4px); }
+}.proj-menu[hidden] { display: none; }
 .proj-search { display: flex; align-items: center; gap: .4rem; padding: 0 .55rem; border: 1px solid var(--border); border-radius: 9px; background: var(--panel2); color: var(--muted); }
 .proj-search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent); }
 .proj-search svg { width: 14px; height: 14px; flex: none; }
 .proj-search input { min-width: 0; flex: 1; border: 0; background: transparent; color: var(--text); outline: none; font: inherit; font-size: .78rem; padding: .4rem 0; }
 .proj-search input::-webkit-search-cancel-button { filter: grayscale(1) opacity(.6); }
-
 .proj-options { max-height: 15rem; overflow: auto; padding: .35rem 0 .2rem; display: grid; gap: .1rem; }
 .proj-option { width: 100%; display: flex; align-items: center; gap: .55rem; padding: .45rem .55rem; border: 0; border-radius: 9px; background: transparent; color: var(--text); text-align: left; cursor: pointer; font: inherit; }
 .proj-option:hover, .proj-option:focus-visible { background: color-mix(in srgb, var(--accent) 10%, var(--panel2)); outline: none; }
@@ -112,28 +106,24 @@ body.page-home #pageHead { display: none; } /* Home has its own hero */
 .proj-option-check { flex: none; display: grid; place-items: center; width: 16px; height: 16px; color: var(--accent); }
 .proj-option-check svg { width: 13px; height: 13px; }
 .proj-menu-empty { padding: .9rem .6rem; color: var(--muted); font-size: .76rem; text-align: center; }
-
 .proj-menu-foot { display: flex; align-items: center; gap: .35rem; border-top: 1px solid var(--border); margin-top: .25rem; padding: .45rem .1rem .1rem; }
 .proj-menu-action { display: inline-flex; align-items: center; gap: .3rem; border: 0; background: transparent; color: var(--muted); font: inherit; font-size: .74rem; font-weight: 600; cursor: pointer; padding: .35rem .5rem; border-radius: 8px; }
 .proj-menu-action svg { width: 13px; height: 13px; flex: none; }
 .proj-menu-action:hover, .proj-menu-action:focus-visible { color: var(--text); background: color-mix(in srgb, var(--accent) 12%, transparent); outline: none; }
 .proj-menu-action.primary { color: var(--accent); }
 .proj-menu-action#projManage { margin-left: auto; }
-
 .page-project { display: inline-flex; align-items: center; gap: .4rem; font-size: .78rem; color: var(--muted); background: var(--panel); border: 1px solid var(--border); border-radius: 99px; padding: .2rem .7rem; }
 .page-project b { color: var(--text); font-weight: 600; }
 #pageContextWrap:not([hidden]) + .page-project { margin-left: 0; }
 #pageContextWrap[hidden] + .page-project { margin-left: auto; }
 .ag-proj:empty { display: none; }
-  @media (max-width: 767px) {
-  .proj-switch { max-width: 46vw; }
-  /* the switcher sits mid-header on phones: anchoring to it would push the menu off-screen, so pin it to the viewport */
-  .proj-menu { position: fixed; top: calc(var(--hdr-h) + .4rem); left: .75rem; right: .75rem; width: auto; }
-  .proj-trigger { max-width: 9.5rem; }
-  .page-project { margin-left: 0 !important; }
-}
 
-/* Updates: the session controls moved from the header into a session bar above the panels */
+  @media (max-width: 767px) {.proj-switch { max-width: 46vw; }
+/* the switcher sits mid-header on phones: anchoring to it would push the menu off-screen, so pin it to the viewport */
+.proj-menu { position: fixed; top: calc(var(--hdr-h) + .4rem); left: .75rem; right: .75rem; width: auto; }
+.proj-trigger { max-width: 9.5rem; }
+.page-project { margin-left: 0 !important; }
+}/* Updates: the session controls moved from the header into a session bar above the panels */
 .session-bar { grid-column: 1 / -1; display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; padding: .5rem .8rem; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; }
 .session-bar:empty { display: none; }
 .session-bar .sess-status { margin-right: auto; font-size: .84rem; }
@@ -143,99 +133,74 @@ body.view-mysql .session-bar .tool-only { display: inline-block; }
 .paused-banner b { color: var(--amber); }
 .queue-paused [data-decide], .queue-paused #btnBatchApprove, .queue-paused #btnBatchReject, .queue-paused #btnBatchSkip { opacity: .45; pointer-events: none; }
 
+
 /* responsive (guide §5): 1100–1439 collapsible sidebar; 768–1099 compact icons; below 768 off-canvas */
-@media (max-width: 1099px) {
-  body.shell { --nav-w: var(--nav-compact-w); }
-  body.shell .nav-label, body.shell .nav-group-label { display: none; }
-  body.shell .nav-link { justify-content: center; padding: .5rem 0; }
-  body.shell .nav-group { margin-bottom: .4rem; padding-top: .3rem; border-top: 1px solid var(--border); }
-  body.shell .nav-group:first-child { border-top: 0; padding-top: 0; }
-  body.shell .nav-collapse { display: none; }
+@media (max-width: 1099px) {body.shell { --nav-w: var(--nav-compact-w); }
+body.shell .nav-label, body.shell .nav-group-label { display: none; }
+body.shell .nav-link { justify-content: center; padding: .5rem 0; }
+body.shell .nav-group { margin-bottom: .4rem; padding-top: .3rem; border-top: 1px solid var(--border); }
+body.shell .nav-group:first-child { border-top: 0; padding-top: 0; }
+body.shell .nav-collapse { display: none; }
 }
-@media (max-width: 767px) {
-  body.shell { --nav-w: 0px; }
-  #btnNav { display: inline-grid; place-items: center; }
-  .app-nav { width: min(280px, 84vw); transform: translateX(-104%); box-shadow: 14px 0 40px #0009; }
-  body.shell .nav-label, body.shell .nav-group-label { display: block; }
-  body.shell .nav-link { justify-content: flex-start; padding: .55rem .7rem; min-height: 44px; }
-  body.shell .nav-group { border-top: 0; padding-top: 0; margin-bottom: .7rem; }
-  body.nav-open .app-nav { transform: none; }
-  body.nav-open #navScrim { display: block; }
-  body.shell #compass, body.shell main, body.shell #pageHead { margin-left: 0; }
-  body.shell #sqlConsole { left: 0; }
-  body.shell #deployDrawer, body.shell #serversDrawer, body.shell #auditDrawer, body.shell #connectorsDrawer, body.shell #projectsDrawer { margin-left: 0; }
-  #pageHead { padding: .7rem .9rem 0; }
-  #pageContextWrap { margin-left: 0; }
-  .session-bar .sess-status { flex: 1 1 100%; margin-right: 0; }
-}
-
-
-/* Schema map as a page: the dialog is opened non-modally and fills the content area */
+@media (max-width: 767px) {body.shell { --nav-w: 0px; }
+#btnNav { display: inline-grid; place-items: center; }
+.app-nav { width: min(280px, 84vw); transform: translateX(-104%); box-shadow: 14px 0 40px #0009; }
+body.shell .nav-label, body.shell .nav-group-label { display: block; }
+body.shell .nav-link { justify-content: flex-start; padding: .55rem .7rem; min-height: 44px; }
+body.shell .nav-group { border-top: 0; padding-top: 0; margin-bottom: .7rem; }
+body.nav-open .app-nav { transform: none; }
+body.nav-open #navScrim { display: block; }
+body.shell #compass, body.shell main, body.shell #pageHead { margin-left: 0; }
+body.shell #sqlConsole { left: 0; }
+#pageHead { padding: .7rem .9rem 0; }
+#pageContextWrap { margin-left: 0; }
+.session-bar .sess-status { flex: 1 1 100%; margin-right: 0; }
+}/* Schema map as a page: the dialog is opened non-modally and fills the content area */
 body.shell #schemaModal[open]:not([data-st-modal]) { position: fixed; top: var(--hdr-h); left: var(--nav-w); right: 0; bottom: 0; width: auto; max-width: none; height: auto; max-height: none; margin: 0; border: 0; border-radius: 0; z-index: 20; display: flex; flex-direction: column; }
-@media (max-width: 767px) { body.shell #schemaModal[open]:not([data-st-modal]) { left: 0; } }
-body.shell #schemaModal[open]:not([data-st-modal]) #schemaCanvas { flex: 1; height: auto; min-height: 0; }
+
+@media (max-width: 767px) {body.shell #schemaModal[open]:not([data-st-modal]) { left: 0; }
+}body.shell #schemaModal[open]:not([data-st-modal]) #schemaCanvas { flex: 1; height: auto; min-height: 0; }
 /* the paused banner is a flex row only while shown */
 .paused-banner[hidden] { display: none !important; }
 /* Updates grid inside the shell: the sidebar takes width, so switch to two columns earlier (guide §5, §7) */
 body.shell main { grid-template-columns: 320px minmax(0, 1fr) 340px; }
-@media (max-width: 1439px) {
-  body.shell main { grid-template-columns: minmax(280px, 1fr) minmax(0, 1.6fr); }
-  body.shell #queuePanel { grid-column: auto; order: 2; }
-  body.shell #dashPanel { grid-column: 1 / -1; order: 3; }
-}
-@media (max-width: 1099px) {
-  body.shell main { grid-template-columns: minmax(0, 1fr); }
-  body.shell #rulesPanel, body.shell #queuePanel, body.shell #dashPanel { grid-column: auto; }
-}
 
-/* ---- SQL console as its own page (guide §8): fills the content area below the page header ---- */
+@media (max-width: 1439px) {body.shell main { grid-template-columns: minmax(280px, 1fr) minmax(0, 1.6fr); }
+body.shell #queuePanel { grid-column: auto; order: 2; }
+body.shell #dashPanel { grid-column: 1 / -1; order: 3; }
+}
+@media (max-width: 1099px) {body.shell main { grid-template-columns: minmax(0, 1fr); }
+body.shell #rulesPanel, body.shell #queuePanel, body.shell #dashPanel { grid-column: auto; }
+}/* ---- SQL console as its own page (guide §8): fills the content area below the page header ---- */
 body.shell.page-sql #sqlConsole { top: calc(var(--hdr-h) + var(--phead-h, 0px)); bottom: 0; left: var(--nav-w); right: 0; z-index: 12; border-top: 0; box-shadow: none; display: flex; flex-direction: column; }
 body.shell.page-sql #sqlConsole.open .body { flex: 1; min-height: 0; height: auto; }
 body.shell.page-sql #sqlBar { cursor: default; }
 body.shell.page-sql #btnSqlToggle { display: none; }
-body.shell.page-sql #sqlConsole.open #sqlResize { display: none !important; } /* a page has no drawer height to drag */
+body.shell.page-sql #sqlConsole.open #sqlResize { display: none !important; }
+/* a page has no drawer height to drag */
 body.shell.page-sql main { display: none !important; }
-body.shell.page-mysql #sqlConsole.open .body { display: none; } /* on Updates the console is only a bar that opens the SQL page */
+body.shell.page-mysql #sqlConsole.open .body { display: none; }
+/* on Updates the console is only a bar that opens the SQL page */
 body.shell.page-mysql #btnSqlToggle::after { content: ' SQL page'; }
-@media (max-width: 767px) {
-  body.shell.page-sql #sqlConsole { left: 0; }
-  body.shell.page-sql #sqlConsole.open .body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(160px, 40%) 0 minmax(0, 1fr); padding: 0 .6rem .6rem; }
-  body.shell.page-sql #sqlSplit { display: none; }
-}
-/* ---- Schema map page: toolbar + graph + inspector; inspector becomes a sheet on phones ---- */
+
+@media (max-width: 767px) {body.shell.page-sql #sqlConsole { left: 0; }
+body.shell.page-sql #sqlConsole.open .body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(160px, 40%) 0 minmax(0, 1fr); padding: 0 .6rem .6rem; }
+body.shell.page-sql #sqlSplit { display: none; }
+}/* ---- Schema map page: toolbar + graph + inspector; inspector becomes a sheet on phones ---- */
 body.shell #schemaModal[open]:not([data-st-modal]) > div:last-child { flex: 1; min-height: 0; }
 body.shell #schemaModal[open]:not([data-st-modal]) #schemaDrawer { height: auto; max-width: 360px; }
-@media (max-width: 767px) {
-  body.shell #schemaModal[open]:not([data-st-modal]) > div:last-child { position: relative; }
-  body.shell #schemaModal[open]:not([data-st-modal]) #schemaDrawer { position: absolute; left: 0; right: 0; bottom: 0; max-width: none; width: auto; max-height: 60%; border-radius: 14px 14px 0 0; box-shadow: 0 -12px 40px #000a; }
-}
-/* ---- Settings and Connections as pages (non-modal dialogs filling the content area) ---- */
+
+@media (max-width: 767px) {body.shell #schemaModal[open]:not([data-st-modal]) > div:last-child { position: relative; }
+body.shell #schemaModal[open]:not([data-st-modal]) #schemaDrawer { position: absolute; left: 0; right: 0; bottom: 0; max-width: none; width: auto; max-height: 60%; border-radius: 14px 14px 0 0; box-shadow: 0 -12px 40px #000a; }
+}/* ---- Settings and Connections as pages (non-modal dialogs filling the content area) ---- */
 body.shell #settingsModal[open]:not([data-st-modal]), body.shell #connModal[open]:not([data-st-modal]) { position: fixed; top: var(--hdr-h); left: var(--nav-w); right: 0; bottom: 0; width: auto; max-width: none; height: auto; max-height: none; margin: 0; border: 0; border-radius: 0; z-index: 20; overflow: auto; }
 body.shell #settingsModal[open]:not([data-st-modal]) { display: flex; flex-direction: column; padding: 0; }
 body.shell #settingsModal[open]:not([data-st-modal]) .settings-titlebar .app-logo { display: none; }
 body.shell #connModal[open]:not([data-st-modal]) { padding: 1rem clamp(1rem, 3vw, 2rem); }
 body.shell #connModal[open]:not([data-st-modal]) > * { max-width: 920px; }
-@media (max-width: 767px) { body.shell #settingsModal[open]:not([data-st-modal]), body.shell #connModal[open]:not([data-st-modal]) { left: 0; } }
-/* Terminals needs no geometry of its own: it is in the rule above with the other views, so the
-   header (--hdr-h) and the sidebar (--nav-w) bound it by construction at every width, in every
-   dock orientation and with the sidebar expanded, collapsed or off-canvas. */
 
-/* ---- Terminal workspace (§12a): terminal + its session's chat as one page ----
-   body.ws-page = the workspace is up (Servers → terminal); body.ws-wide = wide enough (>=1100px)
-   to show both panes at once. Below that they are Terminal/Chat tabs and only the selected pane
-   is in the flow. The body classes deliberately do NOT reuse the .ws-split component class: a body
-   class colliding with a component class silently applies that component's rules to <body>. */
-body.ws-wide .ws-pane-chat { flex: 0 0 clamp(360px, 32%, 480px); }
-body.ws-page .ws-split { border: 0; padding: .65rem 0 0; gap: 1rem; }
-body.ws-page .ws-pane-term { border: 1px solid var(--border); border-radius: 12px;border-top-left-radius: 0; background: var(--panel); overflow: hidden; }
-body.ws-page .ws-ident { gap: .5rem; margin: 0; padding: .65rem .75rem; background: var(--panel2); border-bottom: 1px solid var(--border); }
-body.ws-page .ssh-console { padding-bottom: 0; }
-body.ws-page .ssh-console-term { border: 0; border-radius: 0; padding: .75rem; }
-body.ws-page .ws-ident button, body.ws-page .ws-session-pick { min-height: 34px; }
-body.ws-page .ws-session-pick { min-width: 0; width: auto; max-width: min(16rem, 100%); }
-body.ws-page .ws-ident .spacer { min-width: 0; }
-body.ws-page #agentDrawer.ag-docked, body.shell.agent-dock-pref.agent-open #agentDrawer.ag-docked { resize: none; overflow: hidden; border: 1px solid var(--border); border-radius: 12px; }
-#agentDrawer.ag-docked .ag-sub { flex-wrap: wrap; white-space: normal; overflow-wrap: anywhere; row-gap: .2rem; line-height: 1.5; }
+@media (max-width: 767px) {body.shell #settingsModal[open]:not([data-st-modal]), body.shell #connModal[open]:not([data-st-modal]) { left: 0; }
+}#agentDrawer.ag-docked .ag-sub { flex-wrap: wrap; white-space: normal; overflow-wrap: anywhere; row-gap: .2rem; line-height: 1.5; }
 #agentDrawer.ag-docked #agentMessages { min-height: 0; }
 #agentDrawer.ag-docked .ag-head { padding: .85rem 1rem; }
 #agentDrawer.ag-docked #agentMessages { padding: .8rem 1rem; gap: .75rem; }
@@ -247,32 +212,6 @@ body.ws-page #agentDrawer.ag-docked, body.shell.agent-dock-pref.agent-open #agen
 #agentDrawer.ag-docked .ag-kbd { padding: .4rem 1rem .85rem; }
 .ag-composer textarea { min-width: 0; width: 100%; }
 .ag-kbd { font-size: .7rem; line-height: 1.5; opacity: 1; }
-#serversList { grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); }
-.srv-card { min-width: 0; max-width: none; }
-.srv-nameRow { flex-wrap: wrap; row-gap: .25rem; }
-.srv-sub, .srv-metaline, .srv-os { overflow-wrap: anywhere; }
-.srv-actions > button, .srv-actions .term-dd > button { min-height: 34px; }
-/* Side by side, two identity lines read as a duplicate: the terminal pane's session bar is already
-   on screen, so the chat pane shows its own only when it stands alone as a tab. The same argument
-   applies to the ownership badge. The control ACTION stays in both panes at every width, because
-   it is read and used beside an approval card. */
-/* Side by side, the chat pane's copies of the identity, the badge AND the control read as duplicates:
-   the user rejected seeing "Give AI control" twice a few hundred pixels apart. The whole bar goes while
-   both panes are on screen; as a standalone tab the chat keeps all three, so the action stays reachable
-   wherever it is the only pane. Do not restore the control here without asking. */
-body.ws-wide .ws-chat-bar { display: none; }
-/* The console's own bar only appears when this VIEW has lost its socket: everything else it used
-   to carry (identity, ownership, clear, session actions) now lives once in the session bar. */
-body.ws-page .ssh-console .ssh-console-bar { display: none; }
-body.ws-page .ssh-console.view-detached .ssh-console-bar { display: flex; }
-body.ws-page #sshDrawer .ssh-head h2 { flex: none; }
-body.ws-page #sshTabs { margin-top: .1rem; }
-@media (max-width: 767px) {
-  body.ws-page .ws-ident { row-gap: .3rem; }
-  body.ws-page .ws-server { max-width: 100%; }
-  .ws-tab { flex: 1; }
-}
-
 /* The assistant window parked in the chat pane: the SAME #agentDrawer element, moved out of the
    top layer so it can sit beside the terminal instead of over it. These rules must beat
    #agentDrawer:not(:popover-open){display:none} in style.css, hence layout.css (it loads last). */
@@ -280,31 +219,39 @@ body.ws-page #sshTabs { margin-top: .1rem; }
 #agentDrawer.ag-docked > div:first-child { cursor: default; user-select: auto; touch-action: auto; }
 /* no close and no "dock beside the workspace": the pane is the window now */
 #agentDrawer.ag-docked #btnAgentClose, #agentDrawer.ag-docked #btnAgentDock { display: none; }
+
 /* the §16 "dock beside the workspace" preference must not fight the split: while the assistant is
    parked in a pane the pane sizes it, and the terminal page keeps the full width */
 @media (min-width: 1440px) {
-  body.shell.agent-dock-pref.agent-open #agentDrawer.ag-docked { top: auto !important; right: auto !important; bottom: auto !important; left: auto !important; width: auto !important; height: auto !important; }
   /* Terminals is an in-flow view: the assistant pane sizes itself inside it, so the view keeps
      its full width and needs no right offset of its own. */
-}
-/* ---- Assistant docked beside the workspace on wide screens (§16) ---- */
+}/* ---- Assistant docked beside the workspace on wide screens (§16) ---- */
 :root { --agent-w: 400px; }
-@media (min-width: 1440px) {
-  body.shell.agent-dock-pref.agent-open #agentDrawer { top: var(--hdr-h) !important; right: 0 !important; left: auto !important; bottom: 0 !important; width: var(--agent-w) !important; height: auto !important; max-height: none; border-radius: 0; border-top: 0; border-right: 0; border-bottom: 0; box-shadow: none; resize: horizontal; }
-  body.shell.agent-dock-pref.agent-open #agentDrawer .ag-head { cursor: default; }
-  body.shell.agent-dock-pref.agent-open #compass, body.shell.agent-dock-pref.agent-open main, body.shell.agent-dock-pref.agent-open #pageHead { margin-right: var(--agent-w); }
-  body.shell.agent-dock-pref.agent-open #deployDrawer, body.shell.agent-dock-pref.agent-open #serversDrawer, body.shell.agent-dock-pref.agent-open #auditDrawer, body.shell.agent-dock-pref.agent-open #connectorsDrawer, body.shell.agent-dock-pref.agent-open #projectsDrawer { margin-right: var(--agent-w); }
-  body.shell.agent-dock-pref.agent-open #sqlConsole, body.shell.agent-dock-pref.agent-open #schemaModal[open]:not([data-st-modal]), body.shell.agent-dock-pref.agent-open #settingsModal[open]:not([data-st-modal]), body.shell.agent-dock-pref.agent-open #connModal[open]:not([data-st-modal]) { right: var(--agent-w); }
-}
-
 /* ---- readability: larger base size; Manrope as the app font ---- */
 :root { font-size: 16px; }
-@font-face { font-family: "Manrope Fallback"; src: local("Segoe UI"), local("Arial"); size-adjust: 104%; ascent-override: 96%; descent-override: 26%; line-gap-override: 0%; }
-/* Manrope is the UI face in both themes; console, code and other monospace content keep their own families */
+
+@font-face { font-family: "Manrope Fallback"; src: local("Segoe UI"), local("Arial"); size-adjust: 104%; ascent-override: 96%; descent-override: 26%; line-gap-override: 0%; }/* Manrope is the UI face in both themes; console, code and other monospace content keep their own families */
 body { font-family: "Manrope", "Manrope Fallback", sans-serif; }
 button, input:not(.mono), select { font-family: inherit; }
-.xterm, .xterm *, .CodeMirror, .CodeMirror *, pre, code, kbd, .mono, .dp-log, .dp-code, .agent-msg .txt code, .agent-msg .txt pre { font-family: ui-monospace, Consolas, "Cascadia Mono", monospace; }
+.CodeMirror, .CodeMirror *, pre, code, kbd, .mono, .agent-msg .txt code, .agent-msg .txt pre { font-family: ui-monospace, Consolas, "Cascadia Mono", monospace; }
 /* forms shown as modals keep their inline spacing sane */
-#connFormModal, #serverFormModal { width: min(640px, 94vw); }
+#connFormModal { width: min(640px, 94vw); }
 #connFormModal #connForm { border-top: 0 !important; padding-top: 0 !important; }
-#connFormModal #connForm[hidden], #serverFormModal #addServerForm[hidden] { display: none; }
+#connFormModal #connForm[hidden] { display: none; }
+
+/* ---------- where module views are mounted ----------
+   A module's markup is inserted here at activation and removed with the module.
+   The wrapper is transparent to layout, so a module view behaves exactly as it
+   would have as a direct child of <body>. */
+#modulePages, .module-mount { display: contents; }
+.module-mount[hidden] { display: none; }
+.module-error { color: var(--red); font-size: .8rem; margin: 0; }
+.module-progress { width: 100%; height: 4px; }
+.module-caps summary { cursor: pointer; color: var(--muted); font-size: .72rem; }
+.module-caps ul { margin: .3rem 0 0; padding-left: 1.1rem; color: var(--muted); font-size: .74rem; }
+#moduleMarketStatus.error { color: var(--red); }
+.module-startup-error { position: fixed; inset: 1rem 1rem auto; z-index: 9999; padding: 1rem; border: 1px solid var(--red); border-radius: 12px; background: var(--panel); color: var(--text); }
+
+/* a view header shared by module pages: a title row with actions */
+.view-head { display: flex; align-items: center; gap: .5rem; flex: none; }
+.view-head button { padding: .2rem .55rem; font-size: .75rem; }

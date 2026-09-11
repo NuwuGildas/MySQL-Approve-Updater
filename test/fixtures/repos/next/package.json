@@ -1,1 +1,0 @@
-{ "name": "nextapp", "scripts": { "build": "next build", "start": "next start" }, "dependencies": { "next": "14.2.0", "react": "18" }, "engines": { "node": ">=20" } }
