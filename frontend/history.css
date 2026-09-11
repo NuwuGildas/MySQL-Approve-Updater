@@ -73,5 +73,3 @@ body.shell #auditDrawer .btn-dock, body.shell #btnAuditClose { display: none; }
 
 @media (max-width: 767px) {body.shell #auditDrawer { margin-left: 0; }
 }
-@media (min-width: 1440px) {body.shell.agent-dock-pref.agent-open #auditDrawer { margin-right: var(--agent-w); }
-}
