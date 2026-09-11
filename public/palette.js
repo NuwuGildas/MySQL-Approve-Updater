@@ -140,7 +140,10 @@ function cmdkBuild() {
   };
 
   if (scope) {
-    const all = cmdkRows(scope).map((raw) => ({ ...scope.map(raw), group: scope.label, icon: scope.icon }));
+    const all = cmdkRows(scope).map((raw) => {
+      const row = scope.map(raw);
+      return { ...row, action: { ...row.action, src: scope.key }, group: scope.label, icon: scope.icon };
+    });
     const hits = rank(all);
     const err = cmdk.cache.get(scope.key)?.err;
     push(scope.label, hits.slice(0, 60), hits.length > 60 ? `${hits.length} matches` : `${hits.length}`);

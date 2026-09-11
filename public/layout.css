@@ -29,7 +29,7 @@ body.shell .sse-link { font-size: .74rem; }
 .nav-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: .6rem .55rem; }
 .nav-group { margin-bottom: .7rem; }
 .nav-group-label { font-size: .62rem; text-transform: uppercase; letter-spacing: .12em; color: var(--muted); padding: .35rem .6rem .25rem; white-space: nowrap; overflow: hidden; }
-.nav-link { display: flex; align-items: center; gap: .6rem; width: 100%; padding: .48rem .6rem; border-radius: 9px; border: 1px solid transparent; background: transparent; color: var(--text); text-decoration: none; font: inherit; font-size: .86rem; cursor: pointer; text-align: left; min-height: 38px; }
+.nav-link { display: flex; align-items: center; justify-content: flex-start; gap: .6rem; width: 100%; padding: .48rem .6rem; border-radius: 9px; border: 1px solid transparent; background: transparent; color: var(--text); text-decoration: none; font: inherit; font-size: .86rem; cursor: pointer; text-align: left; min-height: 38px; }
 .nav-link:hover { background: var(--panel2); }
 .nav-link:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .nav-link.on { background: #1c3a5e; border-color: #2d5f9e; color: #fff; }
@@ -243,12 +243,13 @@ button, input:not(.mono), select { font-family: inherit; }
    A module's markup is inserted here at activation and removed with the module.
    The wrapper is transparent to layout, so a module view behaves exactly as it
    would have as a direct child of <body>. */
-#modulePages, .module-mount { display: contents; }
+#modulePages, .module-mount:not(.settings-section) { display: contents; }
 .module-mount[hidden] { display: none; }
 .module-error { color: var(--red); font-size: .8rem; margin: 0; }
 .module-progress { width: 100%; height: 4px; }
 .module-caps summary { cursor: pointer; color: var(--muted); font-size: .72rem; }
 .module-caps ul { margin: .3rem 0 0; padding-left: 1.1rem; color: var(--muted); font-size: .74rem; }
+.module-actions { display: flex; flex-wrap: wrap; flex-direction: row; gap: 5px 8px;}
 #moduleMarketStatus.error { color: var(--red); }
 .module-startup-error { position: fixed; inset: 1rem 1rem auto; z-index: 9999; padding: 1rem; border: 1px solid var(--red); border-radius: 12px; background: var(--panel); color: var(--text); }
 

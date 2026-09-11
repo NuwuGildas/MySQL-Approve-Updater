@@ -117,7 +117,8 @@ window.HostSDK = (() => {
         document.body.appendChild(el);
         return el;
       })();
-      const existing = host.querySelector(`[data-module="${id}"][data-mount="${key}"]`);
+      // Settings mounts are moved into the dialog; ownership survives reparenting.
+      const existing = [...containers].find((el) => el.dataset.mount === key);
       if (existing) return existing;
       const el = document.createElement('div');
       el.dataset.module = id;
@@ -178,9 +179,12 @@ window.HostSDK = (() => {
          forgets them entirely when the module is removed. */
       async http(path, init) {
         alive();
-        const response = await fetch(`/api/m/${id}/http${path.startsWith('/') ? path : '/' + path}`, init && init.body !== undefined && typeof init.body !== 'string'
-          ? { ...init, headers: { 'Content-Type': 'application/json', ...(init.headers || {}) }, body: JSON.stringify(init.body) }
-          : init);
+        if (init && init.body !== undefined) {
+          const headers = new Headers(init.headers);
+          if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+          init = { ...init, headers, body: typeof init.body === 'string' ? init.body : JSON.stringify(init.body) };
+        }
+        const response = await fetch(`/api/m/${id}/http${path.startsWith('/') ? path : '/' + path}`, init);
         const body = await response.json().catch(() => ({}));
         if (!response.ok) throw Object.assign(new Error(body.error || response.statusText), { code: body.code, status: response.status });
         return body;
@@ -291,8 +295,8 @@ window.HostSDK = (() => {
       clearTimer(t) { clearTimeout(t); clearInterval(t); timers.delete(t); intervals.delete(t); },
       observe(observer) { alive(); observers.add(observer); return track(() => { try { observer.disconnect(); } catch {} observers.delete(observer); }); },
 
-      navigate: (route, options) => core.navigate(route, options),
-      route: () => core.route(),
+      navigate: (route, options) => core.shell.navigate(route, options),
+      route: () => core.shell.route(),
 
       /* ---- deliberate module-to-module contracts ---- */
       provide(api) { alive(); return track(apis.add(id, id, api)); },

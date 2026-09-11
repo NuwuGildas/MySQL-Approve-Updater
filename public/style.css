@@ -242,7 +242,7 @@ section.panel h2 { margin: 0 0 .8rem; font-size: .85rem; text-transform: upperca
 /* queue panel: title/hint/toolbar stay fixed, only the card list scrolls */
 #queuePanel { max-height: calc(100vh - 76px); display: flex; flex-direction: column; }
 #queue { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
-button { background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: .38rem .8rem; cursor: pointer; font: inherit; font-size: .85rem; }
+button { display: flex; justify-content: center; align-items: center; background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: .38rem .8rem; cursor: pointer; font: inherit; font-size: .85rem;min-width: 30px; min-height: 30px; }
 button:hover:not(:disabled) { border-color: var(--accent); }
 button:disabled { opacity: .45; cursor: not-allowed; }
 button.primary { background: #1c3a5e; border-color: #2d5f9e; }
@@ -498,7 +498,7 @@ body.view-compass #btnCompass, body.view-compass .tool-crumb { display: none; }
 #settingsSearch { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; color: var(--text); padding: .45rem .6rem; font: inherit; font-size: .82rem; }
 #settingsSearch:focus { outline: none; border-color: var(--accent); }
 .settings-nav-list { display: flex; flex-direction: column; gap: .15rem; overflow: auto; }
-.nav-item { text-align: left; background: transparent; border: 0; color: var(--muted); padding: .45rem .6rem; border-radius: 8px; cursor: pointer; font: inherit; font-size: .84rem; }
+.nav-item { text-align: left; justify-content: flex-start; background: transparent; border: 0; color: var(--muted); padding: .45rem .6rem; border-radius: 8px; cursor: pointer; font: inherit; font-size: .84rem; }
 .nav-item:hover { background: #ffffff08; color: var(--text); }
 .nav-item.active { background: color-mix(in oklab, var(--accent) 18%, transparent); color: var(--text); }
 .nav-item[hidden] { display: none; }

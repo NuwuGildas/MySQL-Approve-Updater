@@ -172,6 +172,7 @@ async function renderSettings() {
 /* ---------- settings contributed by modules ----------
    A module's section is its own container, moved into the settings body while
    it is installed and taken back with the module when it is removed. */
+let selectedSettingsSection = 'appearance';
 function renderModuleSettings() {
   const nav = $('settingsNav');
   const body = document.querySelector('#settingsModal .settings-body');
@@ -202,6 +203,7 @@ function renderModuleSettings() {
     if (el.parentElement !== host) host.appendChild(el);
     try { group.render?.(el); } catch (error) { console.error(error); }
   }
+  showSettingsSection(selectedSettingsSection);
 }
 HostSDK.settingsSections.onChange(() => { if ($('settingsModal')?.open) renderModuleSettings(); });
 HostSDK.settingsGroups.onChange(() => { if ($('settingsModal')?.open) renderModuleSettings(); });
@@ -253,6 +255,7 @@ const CORE_SETTINGS_SECTIONS = { appearance: 'Appearance & view', sql: 'SQL cons
 const settingsSectionLabel = (sec) => CORE_SETTINGS_SECTIONS[sec] || HostSDK.settingsSections.get(sec)?.label || null;
 function showSettingsSection(sec) {
   if (!settingsSectionLabel(sec)) sec = 'appearance';
+  selectedSettingsSection = sec;
   document.querySelectorAll('#settingsNav .nav-item').forEach((b) => b.classList.toggle('active', b.dataset.sec === sec));
   document.querySelectorAll('.settings-section').forEach((s) => s.classList.toggle('active', s.dataset.sec === sec));
   $('settingsCrumb').textContent = settingsSectionLabel(sec);
@@ -290,30 +293,32 @@ requestAnimationFrame(() => requestAnimationFrame(() => document.body.classList.
 /* ---------- Drawers: inert while closed, focus returns to the opener ----------
    The side drawers slide off-screen with a transform, which keeps their controls in the tab order.
    The inert attribute follows the .open class, and the element that opened a drawer gets focus back. */
-(function drawerA11y() {
-  const openers = new Map();
-  for (const id of ['serversDrawer', 'sshDrawer', 'auditDrawer', 'deployDrawer', 'connectorsDrawer', 'projectsDrawer']) {
-    const el = $(id); if (!el) continue;
-    let wasOpen = el.classList.contains('open');
-    el.toggleAttribute('inert', !wasOpen);
-    new MutationObserver(() => {
-      const open = el.classList.contains('open');
-      if (open === wasOpen) return;
-      wasOpen = open;
-      if (open) {
-        el.removeAttribute('inert');
-        const a = document.activeElement; if (a && a !== document.body && !el.contains(a)) openers.set(id, { el: a, sel: a.dataset?.tool ? `#compassGrid [data-tool="${a.dataset.tool}"]` : a.dataset?.nav ? `#appNav [data-nav="${a.dataset.nav}"]` : a.id ? '#' + a.id : null });
-      } else {
-        const inside = el.contains(document.activeElement);
-        el.setAttribute('inert', '');
-        const o = openers.get(id);
-        // Home re-renders its cards, so a disconnected opener is looked up again by its selector
-        const back = o ? (o.el.isConnected ? o.el : o.sel ? document.querySelector(o.sel) : null) : null;
-        if (inside || document.activeElement === document.body) { if (back && !back.closest('[inert]')) back.focus(); else $('appNav')?.querySelector('[aria-current]')?.focus(); }
+function drawerA11y(el) {
+  let opener = null;
+  let wasOpen = el.classList.contains('open');
+  el.toggleAttribute('inert', !wasOpen);
+  return () => {
+    const open = el.classList.contains('open');
+    if (open === wasOpen) return;
+    wasOpen = open;
+    if (open) {
+      el.removeAttribute('inert');
+      const a = document.activeElement;
+      if (a && a !== document.body && !el.contains(a)) {
+        opener = { el: a, sel: a.dataset?.tool ? `#compassGrid [data-tool="${a.dataset.tool}"]` : a.dataset?.nav ? `#appNav [data-nav="${a.dataset.nav}"]` : a.id ? '#' + a.id : null };
       }
-    }).observe(el, { attributes: true, attributeFilter: ['class'] });
-  }
-})();
+    } else {
+      const inside = el.contains(document.activeElement);
+      el.setAttribute('inert', '');
+      // Home re-renders its cards, so look up a disconnected opener again.
+      const back = opener ? (opener.el.isConnected ? opener.el : opener.sel ? document.querySelector(opener.sel) : null) : null;
+      if (inside || document.activeElement === document.body) {
+        if (back && !back.closest('[inert]')) back.focus();
+        else $('appNav')?.querySelector('[aria-current]')?.focus();
+      }
+    }
+  };
+}
 
 /* ---------- AI assistant: free-floating window (drag by header, resize from corner) ---------- */
 const AI_GEOM_KEY = 'st-ai-geom';

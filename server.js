@@ -134,6 +134,10 @@ async function saveConnections() {
   await fsp.rename(tmp, CONNECTIONS_FILE);
 }
 
+function profileById(id) {
+  return connStore.profiles.find((profile) => profile.id === id) || null;
+}
+
 function activeProfile() {
   return connStore.profiles.find((p) => p.id === connStore.activeId)
     || connStore.profiles[0]

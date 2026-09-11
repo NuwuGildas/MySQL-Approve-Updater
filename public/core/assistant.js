@@ -125,7 +125,7 @@ const closeAgentDrawer = () => {
   if (typeof HTMLDialogElement === 'undefined' || HTMLDialogElement.prototype.__stModal) return;
   HTMLDialogElement.prototype.__stModal = true;
   const stack = []; let backdrop = null;
-  const inertSaved = new Map(); // body children we made inert → whether they already were
+  const inertSaved = new Map(); // elements we made inert → whether they already were
   const isFocusable = (el) => el && !el.disabled && !el.closest('[inert]') && el.getClientRects().length > 0;
   const focusInto = (d) => {
     if (d.contains(document.activeElement)) return;
@@ -136,7 +136,11 @@ const closeAgentDrawer = () => {
   const sync = () => {
     if (!backdrop) {
       backdrop = document.createElement('div'); backdrop.id = 'stBackdrop'; backdrop.hidden = true;
-      backdrop.addEventListener('pointerdown', (e) => e.preventDefault()); // swallow page clicks like a real backdrop
+      backdrop.addEventListener('pointerdown', (e) => {
+        e.preventDefault(); // do not pass the click through to the page
+        const top = stack[stack.length - 1];
+        if (top?.id === 'cmdkModal') top.close();
+      });
       document.body.appendChild(backdrop);
     }
     const top = stack[stack.length - 1];
@@ -146,12 +150,23 @@ const closeAgentDrawer = () => {
     if (top) backdrop.style.zIndex = String(1000 + (stack.length - 1) * 2);
     // only the topmost dialog and the (intentionally available) assistant window can receive interaction
     if (top) {
-      for (const el of document.body.children) {
-        const keep = el === top || el === backdrop || el.id === 'agentDrawer' || el.tagName === 'SCRIPT' || el.tagName === 'svg';
-        if (keep) { if (inertSaved.has(el) && !inertSaved.get(el)) el.removeAttribute('inert'); continue; }
-        if (!inertSaved.has(el)) inertSaved.set(el, el.hasAttribute('inert'));
-        el.setAttribute('inert', '');
-      }
+      const agent = $('agentDrawer');
+      const visit = (parent) => {
+        for (const el of parent.children) {
+          const keep = el === top || el === backdrop || el === agent || el.tagName === 'SCRIPT' || el.tagName === 'svg';
+          const ancestor = el.contains(top) || (agent && el.contains(agent));
+          if (keep || ancestor) {
+            if (inertSaved.has(el) && !inertSaved.get(el)) el.removeAttribute('inert');
+            // Module dialogs remain inside their owned mounts. Block siblings,
+            // not the ancestor that also contains the active dialog.
+            if (!keep) visit(el);
+            continue;
+          }
+          if (!inertSaved.has(el)) inertSaved.set(el, el.hasAttribute('inert'));
+          el.setAttribute('inert', '');
+        }
+      };
+      visit(document.body);
       document.documentElement.classList.add('st-scroll-lock');
       focusInto(top);
     } else {
@@ -218,7 +233,7 @@ async function openAgent() { // never closes whatever view/module is open: the w
   // assistant behaved before terminal sessions existed. It is a scope, not a missing prerequisite.
   const sessionId = agentSessionId(), epoch = agentSessionEpoch, request = ++agentLoadSeq;
   $('agentDrawer').classList.add('open');
-  document.body.classList.toggle('ssh-shared-workspace', $('sshDrawer').classList.contains('open'));
+  document.body.classList.toggle('ssh-shared-workspace', !!$('sshDrawer')?.classList.contains('open'));
   raiseAgentWindow();
   restoreAgentGeom(); // place/size the floating window from the last saved geometry
   $('agentConnect').hidden = true;

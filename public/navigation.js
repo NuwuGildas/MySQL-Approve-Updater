@@ -127,7 +127,11 @@ window.addEventListener('hashchange', () => {
 
 /** A page-like view closed by its own ✕ or Escape sends the address home. */
 function watchPageContainer(el, pageId) {
+  // Modules register after startup; use their disposable page observer for
+  // interaction and focus state as well as routing.
+  const syncDrawer = drawerA11y(el);
   const observer = new MutationObserver(() => {
+    syncDrawer();
     if (el.classList.contains('open')) return;
     const r = parseRoute(location.hash);
     if (r && r.id === pageId) navigate(ROUTE_HOME, { replace: true, focus: false }); // the view's own close restores focus to its opener

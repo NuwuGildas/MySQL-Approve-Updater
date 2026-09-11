@@ -16,12 +16,15 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const puppeteer = require('puppeteer-core');
+const { Server: SshServer, utils: sshUtils } = require('ssh2');
 
 const ROOT = path.join(__dirname, '..', '..');
 const CHROME = process.env.CHROME_PATH || 'C:/Program Files/Google/Chrome/Application/chrome.exe';
 const { createRegistryServer } = require('../../scripts/module-registry');
 
 const MODULES = ['history', 'projects', 'connectors', 'servers', 'deployments'];
+const DRAWERS = { history: 'auditDrawer', projects: 'projectsDrawer', connectors: 'connectorsDrawer', servers: 'serversDrawer', deployments: 'deployDrawer' };
+const BUTTONS = { history: 'btnAuditRefresh', projects: 'btnPjRefresh', connectors: 'btnCnRefresh', servers: 'btnServersRefresh', deployments: 'btnDpNew' };
 const PAGES = { history: '#/history', projects: '#/projects', connectors: '#/connectors', servers: '#/servers', deployments: '#/deployments' };
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -63,8 +66,18 @@ async function main() {
     page.on('pageerror', (error) => problems.push(`page error: ${error.message}`));
     page.on('console', (message) => { if (message.type() === 'error' && !/favicon|Failed to load resource/.test(message.text())) problems.push(`console: ${message.text()}`); });
 
+    await page.evaluateOnNewDocument(() => localStorage.setItem('mau-tour-seen', '1'));
     await page.goto(`${base}/#/database/updates`, { waitUntil: 'networkidle2' });
     await until(() => page.evaluate(() => document.body.classList.contains('shell')), { what: 'the shell' });
+    const checkStandaloneAssistant = async () => {
+      assert.equal(await page.$('#sshDrawer'), null, 'Servers module is absent');
+      await page.click('#btnAiAgent');
+      await until(() => page.evaluate(() => document.getElementById('agentDrawer').classList.contains('open')
+        && !document.getElementById('agentStatus').textContent.includes('Loading')), { what: 'assistant to load without the Servers module' });
+      assert.equal(await page.evaluate(() => document.body.classList.contains('ssh-shared-workspace')), false);
+      await page.click('#btnAgentClose');
+    };
+    await checkStandaloneAssistant();
     await page.evaluate(() => { window.__sentinel = 'keep-me'; document.getElementById('agentInput').value = 'draft'; });
 
     const sync = () => page.evaluate(async () => {
@@ -83,6 +96,162 @@ async function main() {
       console.log(`  installed ${id}`);
     }
 
+    /* Connect asks the real host for credentials over the worker bridge.
+       An unknown profile must reach validation, without attempting SSH. */
+    const missingServer = await fetch(`${base}/api/m/servers/http/sessions/missing-profile/connect`, { method: 'POST' });
+    const missingServerBody = await missingServer.json();
+    assert.equal(missingServer.status, 400, JSON.stringify(missingServerBody));
+    assert.equal(missingServerBody.error, 'That profile has no SSH configured');
+
+    const navigation = await page.evaluate(async () => {
+      const { scope } = await ModuleLoader.activate({ id: 'connectors' });
+      scope.navigate('#/connectors');
+      return scope.route();
+    });
+    assert.equal(navigation, '/connectors');
+
+    // Scoped module results must retain their source, including in recents.
+    // Use the real deployment action, recording its requested route locally.
+    await page.evaluate(async () => {
+      const source = HostSDK.searchSources.get('targets');
+      const { scope } = await ModuleLoader.activate({ id: 'deployments' });
+      const originalFetch = source.fetch, originalNavigate = scope.navigate;
+      source.fetch = async () => [{ id: 'palette-target', name: 'Palette deployment', type: 'local' }];
+      scope.navigate = (route) => { window.__paletteRoute = route; };
+      window.__restorePalette = () => { source.fetch = originalFetch; scope.navigate = originalNavigate; cmdk.cache.delete('targets'); };
+      cmdk.cache.delete('targets');
+      localStorage.removeItem(CMDK_RECENTS_KEY);
+    });
+    try {
+      for (const mode of ['keyboard', 'mouse', 'recent']) {
+        await page.evaluate(() => { window.__paletteRoute = null; });
+        await page.keyboard.down('Control');
+        await page.keyboard.press('KeyK');
+        await page.keyboard.up('Control');
+        if (mode !== 'recent') await page.type('#cmdkInput', 'deployments:');
+        await until(() => page.evaluate(() => [...document.querySelectorAll('#cmdkList .cmdk-row')].some((el) => el.textContent.includes('Palette deployment'))), { what: 'deployment search result' });
+        if (mode === 'mouse') await page.click('#cmdkList .cmdk-row');
+        else await page.keyboard.press('Enter');
+        await until(() => page.evaluate(() => window.__paletteRoute === '#/deployments/targets/palette-target'), { what: mode + ' selection to dispatch the deployment route' });
+        assert.equal(await page.$eval('#cmdkModal', (el) => el.open), false);
+      }
+      await page.keyboard.down('Control');
+      await page.keyboard.press('KeyK');
+      await page.keyboard.up('Control');
+      await page.waitForSelector('#cmdkModal[open]');
+      await page.mouse.click(5, 5);
+      await until(() => page.$eval('#cmdkModal', (el) => !el.open), { what: 'outside click to close search' });
+      await until(() => page.$eval('#stBackdrop', (el) => el.hidden), { what: 'search backdrop to clear' });
+    } finally { await page.evaluate(() => { window.__restorePalette(); localStorage.removeItem(CMDK_RECENTS_KEY); }); }
+
+    // Edit a fixture connector through real pointer and keyboard events. Keep
+    // provider verification local by stubbing only the connector RPC responses.
+    await page.evaluate(async () => {
+      const { scope } = await ModuleLoader.activate({ id: 'connectors' });
+      const originalGet = scope.get, originalRpc = scope.rpc;
+      const fixture = { id: 'editor-test', name: 'Editor test', kind: 'github', baseUrl: 'https://api.github.com', status: 'unverified' };
+      scope.get = async (method, params) => {
+        const data = await originalGet(method, params);
+        return method === 'list' ? { ...data, connectors: [fixture] } : data;
+      };
+      scope.rpc = async (method, params, options) => {
+        if (method !== 'save') return originalRpc(method, params, options);
+        window.__connectorSaved = params;
+        return { ...fixture, ...params, status: 'ok', account: { login: 'test' } };
+      };
+      window.__restoreConnectorRpc = () => { scope.get = originalGet; scope.rpc = originalRpc; };
+      await HostSDK.apis.get('connectors').reload();
+    });
+    try {
+      await page.click('#connectorsList [data-act="edit"]');
+      await until(() => page.$eval('#cnModal', (el) => el.open), { what: 'connector editor' });
+      assert.equal(await page.$eval('#cnName', (el) => !!el.closest('[inert]')), false, 'editor input has no inert ancestor');
+      assert.equal(await page.$eval('#connectorsDrawer', (el) => el.inert), true, 'background module view stays blocked');
+      await page.click('#cnName');
+      await page.keyboard.down('Control');
+      await page.keyboard.press('KeyA');
+      await page.keyboard.up('Control');
+      await page.type('#cnName', 'Edited connector');
+      await page.click('#btnCnSave');
+      await until(() => page.$eval('#cnModal', (el) => !el.open), { what: 'editor to save and close' });
+      assert.equal(await page.evaluate(() => window.__connectorSaved.name), 'Edited connector');
+      await page.click('#connectorsList [data-act="edit"]');
+      await page.click('#btnCnCancel');
+      await until(() => page.$eval('#cnModal', (el) => !el.open), { what: 'editor cancel' });
+      await page.click('#connectorsList [data-act="edit"]');
+      await page.keyboard.press('Escape');
+      await until(() => page.$eval('#cnModal', (el) => !el.open), { what: 'editor Escape' });
+      assert.equal(await page.$eval('#connectorsDrawer', (el) => el.inert), false, 'background interaction is restored');
+    } finally { await page.evaluate(() => window.__restoreConnectorRpc()); }
+
+    const loadingFailure = await page.evaluate(async () => {
+      const { scope } = await ModuleLoader.activate({ id: 'servers' });
+      const original = scope.http;
+      let release;
+      const gate = new Promise((resolve) => { release = resolve; });
+      scope.http = async (path, options) => {
+        if (path.startsWith('/agent/sessions')) { await gate; return { sessions: [] }; }
+        if (path === '/agent/attach') throw new Error('Test connection unavailable');
+        return original(path, options);
+      };
+      try {
+        const api = HostSDK.apis.get('servers');
+        const first = api.openTerminal('loading-test');
+        const second = api.openTerminal('loading-test');
+        const immediate = !!document.querySelector('.ssh-opening-notice[role="status"] progress');
+        release();
+        await first;
+        return { immediate, deduplicated: first === second, cleared: !document.querySelector('.ssh-opening-notice') };
+      } finally { scope.http = original; }
+    });
+    assert.deepEqual(loadingFailure, { immediate: true, deduplicated: true, cleared: true });
+
+    // Exercise serialized JSON from the browser against a disposable SSH peer.
+    // Missing Content-Type used to discard profileId and report a missing server.
+    const sshClients = new Set();
+    const sshPeer = new SshServer({ hostKeys: [sshUtils.generateKeyPairSync('rsa', { bits: 2048 }).private] }, (client) => {
+      sshClients.add(client);
+      client.on('error', () => {});
+      client.on('authentication', (ctx) => ctx.method === 'password' && ctx.username === 'test' && ctx.password === 'test' ? ctx.accept() : ctx.reject(['password']));
+      client.on('ready', () => client.on('session', (accept) => {
+        const session = accept();
+        session.on('pty', (acceptPty) => acceptPty());
+        session.on('shell', (acceptShell) => acceptShell().write('Test terminal ready\r\n'));
+      }));
+    });
+    await new Promise((resolve) => sshPeer.listen(0, '127.0.0.1', resolve));
+    try {
+      const result = await page.evaluate(async (port) => {
+        const { scope } = await ModuleLoader.activate({ id: 'servers' });
+        {
+          const profile = await scope.http('/profiles', { method: 'POST', body: JSON.stringify({
+            name: 'Terminal regression', ssh: { enabled: true, host: '127.0.0.1', port, user: 'test', password: 'test', auth: 'password' },
+          }) });
+          const messages = [];
+          const originalToast = window.toast;
+          window.toast = (message, state) => { messages.push(message); originalToast(message, state); };
+          let attached;
+          scope.navigate('#/servers');
+          try { attached = await HostSDK.apis.get('servers').openTerminal(profile.id); }
+          finally { window.toast = originalToast; }
+          if (!attached) throw new Error(messages.join('; ') || 'Terminal did not open');
+          if (scope.shell.page() !== 'terminals' || !document.body.classList.contains('page-terminals')) throw new Error('Terminal did not become the active page');
+          if (document.getElementById('serversDrawer').classList.contains('open')) throw new Error('Servers view stayed open behind the terminal');
+          if (!document.querySelector('#appNav [data-nav="terminals"][aria-current="page"]')) throw new Error('Terminal navigation entry is not selected');
+          if (document.querySelector('.ssh-opening-notice')) throw new Error('Terminal loading indicator did not clear');
+          const control = await scope.http(`/terminal/${attached.sessionId}/control`, { method: 'POST', body: JSON.stringify({ control: 'user' }) });
+          await scope.http(`/terminal/${attached.sessionId}`, { method: 'DELETE' });
+          await scope.http(`/profiles/${profile.id}`, { method: 'DELETE' });
+          return { attached: attached.attached, status: attached.terminal?.status, control: control.control };
+        }
+      }, sshPeer.address().port);
+      assert.deepEqual(result, { attached: true, status: 'open', control: 'user' });
+      console.log('  opened a real SSH terminal and selected user control through the browser SDK');
+    } finally {
+      for (const client of sshClients) client.end();
+      await new Promise((resolve) => sshPeer.close(resolve));
+    }
+
     /* ---- every page opens, and the shell knows about it ---- */
     for (const [id, route] of Object.entries(PAGES)) {
       await page.evaluate((r) => navigate(r), route);
@@ -94,8 +263,32 @@ async function main() {
         styles: !!document.querySelector(`link[data-module="${moduleId}"]`),
       }), id);
       for (const [what, ok] of Object.entries(shown)) assert.ok(ok, `${id}: ${what} missing after opening ${route}`);
-      console.log(`  opened ${route}`);
+      // Real pointer and keyboard input must reach views loaded after shell startup.
+      // element.click() would bypass inert and conceal this regression.
+      const drawer = '#' + DRAWERS[id];
+      const button = '#' + BUTTONS[id];
+      assert.equal(await page.$eval(drawer, (el) => el.inert), false, id + ': open view is inert');
+      await page.$eval(button, (el) => {
+        window.__moduleClicks = 0;
+        el.addEventListener('click', (event) => {
+          if (event.isTrusted) window.__moduleClicks++;
+          event.stopImmediatePropagation();
+        }, { capture: true });
+      });
+      await page.click(button);
+      await page.focus(button);
+      await page.keyboard.press('Enter');
+      assert.equal(await page.evaluate(() => window.__moduleClicks), 2, id + ': pointer and keyboard clicks reach the button');
+      await page.evaluate(() => navigate('#/home'));
+      await until(() => page.$eval(drawer, (el) => el.inert), { what: id + ' to become inert when closed' });
+      await page.evaluate((r) => navigate(r), route);
+      await until(() => page.$eval(drawer, (el) => !el.inert), { what: id + ' to become interactive again' });
+      console.log(`  opened and interacted with ${route}`);
     }
+
+    // Opening a terminal deliberately switches the assistant conversation.
+    // Start a fresh draft in that conversation for the removal checks below.
+    await page.evaluate(() => { document.getElementById('agentInput').value = 'draft'; });
 
     /* ---- assistant tools and search sources arrived with their modules ---- */
     const searchSources = await page.evaluate(() => HostSDK.searchSources.keys());
@@ -104,6 +297,22 @@ async function main() {
     }
     const settingsSections = await page.evaluate(() => HostSDK.settingsSections.keys());
     assert.deepEqual(settingsSections.sort(), ['deploy', 'ssh'], 'both module settings sections registered');
+
+    await page.evaluate(async () => { navigate('#/settings/ssh'); await renderSettings(); });
+    const visibleSettings = () => page.evaluate(() => [...document.querySelectorAll('#settingsModal .settings-section')]
+      .filter((el) => getComputedStyle(el).display !== 'none').map((el) => el.dataset.sec));
+    assert.deepEqual(await visibleSettings(), ['ssh'], 'a module settings route selects only that section');
+    for (const section of ['appearance', 'ai', 'deploy', 'sql', 'ssh']) {
+      await page.click(`#settingsNav [data-sec="${section}"]`);
+      await page.evaluate(() => renderSettings());
+      assert.deepEqual(await visibleSettings(), [section], 'only the selected settings section remains visible after rendering');
+    }
+    const settingsMounts = await page.evaluate(() => {
+      const mounts = [...document.querySelectorAll('#settingsModal [data-mount]')];
+      return { count: mounts.length, unique: new Set(mounts.map((el) => el.dataset.module + ':' + el.dataset.mount)).size };
+    });
+    assert.equal(settingsMounts.count, settingsMounts.unique, 'repeated settings renders reuse their moved containers');
+    await page.evaluate(() => navigate('#/home'));
 
     /* ---- a dependent module blocks removal of what it needs ---- */
     // Nothing in this set declares a hard dependency, so the guard is checked
@@ -147,6 +356,7 @@ async function main() {
     assert.equal(survived.sentinel, 'keep-me');
     assert.equal(survived.draft, 'draft');
     assert.deepEqual(survived.corePages, ['connections', 'home', 'modules', 'mysql', 'schema', 'settings', 'sql']);
+    await checkStandaloneAssistant();
 
     /* ---- what was installed comes back after a restart ---- */
     await fetch(`${base}/api/modules/history/install`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
