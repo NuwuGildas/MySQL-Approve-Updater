@@ -104,6 +104,15 @@ HostSDK.provide({
     renderContext: () => renderProjectContext(),
     body: (fields) => projectBody(fields),
     defaultId: () => DEFAULT_PROJECT_ID,
+    /* A module that MANAGES projects. Only one at a time, and it goes away with
+       the module: the header switcher appears with it and is hidden again when
+       it leaves, because with nothing able to create a project there is nothing
+       to switch between. */
+    setManager: (implementation) => {
+      HostSDK.provide({ projectManager: implementation });
+      if (implementation) { try { currentProjectId = localStorage.getItem(PROJECT_KEY) || currentProjectId; } catch {} }
+      loadProjects();
+    },
   },
 
   /* The core database tool, for modules that show or act on its state. */

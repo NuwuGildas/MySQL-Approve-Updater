@@ -220,13 +220,27 @@ body.shell #connModal[open]:not([data-st-modal]) > * { max-width: 920px; }
 /* no close and no "dock beside the workspace": the pane is the window now */
 #agentDrawer.ag-docked #btnAgentClose, #agentDrawer.ag-docked #btnAgentDock { display: none; }
 
-/* the §16 "dock beside the workspace" preference must not fight the split: while the assistant is
-   parked in a pane the pane sizes it, and the terminal page keeps the full width */
-@media (min-width: 1440px) {
-  /* Terminals is an in-flow view: the assistant pane sizes itself inside it, so the view keeps
-     its full width and needs no right offset of its own. */
-}/* ---- Assistant docked beside the workspace on wide screens (§16) ---- */
+/* ---- Assistant docked beside the workspace on wide screens (§16) ----
+   #btnAgentDock is a BASE control: the button is in index.html and the
+   preference is in navigation.js, so the rules that carry it out belong here.
+   They were in the Servers module's stylesheet, which meant the button did
+   nothing at all unless Servers happened to be installed. */
 :root { --agent-w: 400px; }
+@media (min-width: 1440px) {
+  body.shell.agent-dock-pref.agent-open #agentDrawer { top: var(--hdr-h) !important; right: 0 !important; left: auto !important; bottom: 0 !important; width: var(--agent-w) !important; height: auto !important; max-height: none; border-radius: 0; border-top: 0; border-right: 0; border-bottom: 0; box-shadow: none; resize: horizontal; }
+  body.shell.agent-dock-pref.agent-open #agentDrawer .ag-head { cursor: default; }
+  body.shell.agent-dock-pref.agent-open #compass,
+  body.shell.agent-dock-pref.agent-open main,
+  body.shell.agent-dock-pref.agent-open #pageHead { margin-right: var(--agent-w); }
+  /* Every module page, without the base naming one: a module's view is the
+     <aside> at the root of the mount the host gave it. A module that hosts the
+     assistant itself opts out with a rule of its own (Terminals does). */
+  body.shell.agent-dock-pref.agent-open #modulePages > .module-mount > aside { margin-right: var(--agent-w); }
+  body.shell.agent-dock-pref.agent-open #sqlConsole,
+  body.shell.agent-dock-pref.agent-open #schemaModal[open]:not([data-st-modal]),
+  body.shell.agent-dock-pref.agent-open #settingsModal[open]:not([data-st-modal]),
+  body.shell.agent-dock-pref.agent-open #connModal[open]:not([data-st-modal]) { right: var(--agent-w); }
+}
 /* ---- readability: larger base size; Manrope as the app font ---- */
 :root { font-size: 16px; }
 

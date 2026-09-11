@@ -70,14 +70,47 @@ async function main() {
     await page.goto(`${base}/#/database/updates`, { waitUntil: 'networkidle2' });
     await until(() => page.evaluate(() => document.body.classList.contains('shell')), { what: 'the shell' });
     const checkStandaloneAssistant = async () => {
+      /* Chrome throttles rendering in a background tab, and puppeteer decides
+         whether an element needs scrolling into view with an IntersectionObserver
+         - which never fires there, so a click waits for ever. The second tab this
+         suite opens later is enough to cause it. */
+      await page.bringToFront();
       assert.equal(await page.$('#sshDrawer'), null, 'Servers module is absent');
+      /* Wide enough for the dock preference, which only applies from 1440px. The
+         rest of the suite keeps the viewport it had. */
+      const viewport = page.viewport();
       await page.click('#btnAiAgent');
       await until(() => page.evaluate(() => document.getElementById('agentDrawer').classList.contains('open')
         && !document.getElementById('agentStatus').textContent.includes('Loading')), { what: 'assistant to load without the Servers module' });
       assert.equal(await page.evaluate(() => document.body.classList.contains('ssh-shared-workspace')), false);
+
+      /* "Dock beside the workspace" is a base control, in the assistant's own
+         options menu. Its stylesheet used to live in the Servers module, so the
+         button did nothing at all without it. */
+      await page.setViewport({ width: 1600, height: 1000 });
+      await page.click('#btnAgentMenu');
+      await page.click('#btnAgentDock');
+      await wait(400);
+      const docked = await page.evaluate(() => {
+        const px = (v) => Math.round(parseFloat(v) || 0);
+        return { right: px(getComputedStyle(document.getElementById('agentDrawer')).right), main: px(getComputedStyle(document.querySelector('main')).marginRight) };
+      });
+      assert.deepEqual(docked, { right: 0, main: 400 }, 'the assistant pins to the edge and the page makes room, with no module installed');
+      await page.click('#btnAgentMenu');
+      await page.click('#btnAgentDock');
       await page.click('#btnAgentClose');
+      await page.setViewport(viewport);
     };
     await checkStandaloneAssistant();
+
+    /* Managing projects is a module; having one is not. With nothing able to
+       create a project there is nothing to switch between, so the header
+       switcher stays hidden and everything is the default project's. */
+    assert.deepEqual(await page.evaluate(() => ({
+      hidden: document.getElementById('projSwitch').hidden,
+      active: document.getElementById('projTriggerName').textContent,
+      manager: !!HostSDK.core.projectManager,
+    })), { hidden: true, active: 'General', manager: false });
     await page.evaluate(() => { window.__sentinel = 'keep-me'; document.getElementById('agentInput').value = 'draft'; });
 
     const sync = () => page.evaluate(async () => {
@@ -95,6 +128,12 @@ async function main() {
       assert.ok(state.running.includes(id), `${id} did not activate in the browser (${state.errors.join('; ')})`);
       console.log(`  installed ${id}`);
     }
+
+    /* Projects is installed now, so the switcher it manages is there. */
+    assert.deepEqual(await page.evaluate(() => ({
+      hidden: document.getElementById('projSwitch').hidden,
+      manager: !!HostSDK.core.projectManager,
+    })), { hidden: false, manager: true }, 'the Projects module reveals the header switcher');
 
     /* Connect asks the real host for credentials over the worker bridge.
        An unknown profile must reach validation, without attempting SSH. */
@@ -344,6 +383,14 @@ async function main() {
         search: HostSDK.searchSources.keys().includes(moduleId),
       }), id);
       for (const [what, present] of Object.entries(leftovers)) assert.ok(!present, `${id} left its ${what} behind`);
+      // The switcher belongs to whoever manages projects, so it leaves with it.
+      if (id === 'projects') {
+        assert.deepEqual(await page.evaluate(() => ({
+          hidden: document.getElementById('projSwitch').hidden,
+          active: document.getElementById('projTriggerName').textContent,
+          manager: !!HostSDK.core.projectManager,
+        })), { hidden: true, active: 'General', manager: false }, 'the switcher is withdrawn with the Projects module, in the same session');
+      }
       console.log(`  removed ${id}`);
     }
 

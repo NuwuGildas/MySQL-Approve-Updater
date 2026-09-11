@@ -148,7 +148,15 @@ window.HostSDK = (() => {
          with no Servers module installed, and the Servers module points this at
          a terminal session while one is selected. */
       get session() { return core.session; },
-      get projects() { return core.projects; },
+      /* Projects, plus the one thing only a managing module may do: declare
+         itself the manager. That is what reveals the header switcher, and it is
+         withdrawn with the module - same shape as the assistant dock. */
+      get projects() {
+        return {
+          ...core.projects,
+          manage: (implementation) => { alive(); core.projects.setManager(implementation); return track(() => core.projects.setManager(null)); },
+        };
+      },
       /* ---- the core database tool, for modules that extend it ---- */
       get database() { return core.database; },
 

@@ -10,6 +10,11 @@ const setWorkspaceTab = (tab) => { try { assistantDock()?.setTab(tab); } catch {
    as projectId with every assistant call; switching reloads the chat when the assistant is open. */
 const PROJECT_KEY = 'st-project';
 const DEFAULT_PROJECT_ID = 'general';
+/* MANAGING projects - creating, renaming, linking resources - is a module.
+   HAVING a project is not: the assistant needs a conversation to belong to. So
+   with no module providing management there is exactly one project, the header
+   switcher is not shown, and everything is scoped to the default one. */
+const projectManager = () => { try { return HostSDK.core.projectManager || null; } catch { return null; } };
 let projects = [];
 let currentProjectId = (() => { try { return localStorage.getItem(PROJECT_KEY) || DEFAULT_PROJECT_ID; } catch { return DEFAULT_PROJECT_ID; } })();
 const currentProject = () => projects.find((p) => p.id === currentProjectId) || null;
@@ -21,7 +26,20 @@ function projectUrl(path, extra = {}) {
 }
 /** Body for POST assistant calls: the given fields plus the active project. */
 const projectBody = (fields = {}) => JSON.stringify({ ...fields, projectId: currentProjectId, sessionId: agentSessionId() });
+/** With management installed the user's choice stands; without it, the default project. */
+function applyProjectScope() {
+  const managed = !!projectManager();
+  const switcher = $('projSwitch');
+  if (switcher) switcher.hidden = !managed;
+  if (managed) return;
+  closeProjectMenu();
+  // The stored choice is deliberately left in localStorage: adding the module
+  // back restores the project the user was last working in.
+  const fallback = projects.some((p) => p.id === DEFAULT_PROJECT_ID) ? DEFAULT_PROJECT_ID : (projects[0]?.id || DEFAULT_PROJECT_ID);
+  if (currentProjectId !== fallback) currentProjectId = fallback;
+}
 function renderProjectContext() {
+  applyProjectScope();
   const p = currentProject();
   const name = currentProjectName();
   const color = p?.color || '';
@@ -85,8 +103,10 @@ function closeProjectMenu() { const m = $('projMenu'); if (!m) return; m.hidden 
   search?.addEventListener('input', () => renderProjectMenu(search.value));
   document.addEventListener('click', (e) => { if (!e.target.closest('#projSwitch')) closeProjectMenu(); });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !menu.hidden) { closeProjectMenu(); trigger.focus(); } });
-  $('projCreate')?.addEventListener('click', () => { closeProjectMenu(); if (typeof navigate === 'function') navigate('#/projects'); setTimeout(() => $('btnPjAdd')?.click(), 80); });
-  $('projManage')?.addEventListener('click', () => { closeProjectMenu(); if (typeof navigate === 'function') navigate('#/projects'); });
+  /* Both of these are the manager's job. The base does not know the module's
+     route or the id of a button inside it. */
+  $('projCreate')?.addEventListener('click', () => { closeProjectMenu(); projectManager()?.create(); });
+  $('projManage')?.addEventListener('click', () => { closeProjectMenu(); projectManager()?.open(); });
 })();
 // Project context is loaded by startApplication after all libraries register.
 // loadSshAgent() runs once the terminal workspace is wired (end of this file): it paints the
