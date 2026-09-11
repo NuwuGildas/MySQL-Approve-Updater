@@ -1,0 +1,16 @@
+<div class="settings-group">
+          <div class="sg-head">Server access (SSH) <span class="hint" style="margin:0">only for the server you attach from <b>Servers → Connect with AI chat</b></span></div>
+          <p class="sg-hint">The assistant works on one attached server at a time. Every command is classified before it runs: read, write or destructive. Anything interactive (editors, <code>top</code>, nested <code>ssh</code>) is always refused, and every command is written to History.</p>
+          <label class="chk"><input type="checkbox" id="setAiSshRead" data-assist="sshRead"> Read-only commands</label>
+          <p class="sg-hint">Lets it look around by itself: <code>ls</code>, <code>cat</code>, <code>df</code>, <code>systemctl status</code>, <code>journalctl</code>, <code>docker ps</code>, <code>git log</code>… These run immediately and change nothing.</p>
+          <label class="chk"><input type="checkbox" id="setAiSshWrite" data-assist="sshWrite"> Write commands <span class="hint">(approval required)</span></label>
+          <p class="sg-hint">Editing files, restarting services, installing packages, <code>git pull</code>. Each command appears in the chat as a card showing exactly what would run; nothing happens until you press <b>Run it</b>.</p>
+          <label class="chk"><input type="checkbox" id="setAiSshDestructive" data-assist="sshDestructive"> Destructive commands <span class="hint">(approval always required)</span></label>
+          <p class="sg-hint">Deleting, formatting, rebooting, dropping databases, <code>git reset --hard</code>. These are never run automatically, even in auto mode.</p>
+          <label class="chk"><input type="checkbox" id="setAiSshSudo" data-assist="sshSudo"> Allow <code>sudo</code></label>
+          <p class="sg-hint">Without this, any command using sudo is refused whatever its class.</p>
+          <label class="chk"><input type="checkbox" id="setAiSshAuto" data-assist="sshAuto"> Auto mode</label>
+          <p class="sg-hint">Write commands you allowed above run without asking each time, so the assistant can finish a task in one go. Destructive commands still stop for approval. Read-only commands never needed it.</p>
+          <label class="chk"><input type="checkbox" id="setAiSshMemory" data-assist="sshMemory"> Remember each server's conversation</label>
+          <p class="sg-hint">What you discussed and which commands ran are kept per server in <code>ssh-agent-memory.json</code>, and given back as context the next time you connect. The assistant can search it (<code>ssh_recall</code>) and add notes (<code>ssh_remember</code>).</p>
+        </div>

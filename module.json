@@ -1,0 +1,38 @@
+{
+  "packageFormat": 1,
+  "id": "servers",
+  "name": "Servers & Terminals",
+  "description": "SSH server profiles with live VM stats, shared terminals you and the assistant work in together, and approval-gated assistant commands.",
+  "version": "1.0.0",
+  "publisher": "Server Tools",
+  "hostSdk": "^1.0.0",
+  "frontend": "frontend/index.js",
+  "backend": "backend/index.js",
+  "dependencies": {},
+  "sharedDependencies": [
+    "ssh2",
+    "express"
+  ],
+  "bundledDependencies": [
+    "ws"
+  ],
+  "capabilities": [
+    "ui:pages",
+    "ui:commands",
+    "ui:settings",
+    "assistant:tools",
+    "assistant:proposals",
+    "storage:module",
+    "events:subscribe",
+    "audit:write",
+    "connections:read",
+    "connections:write",
+    "connections:secrets",
+    "sockets",
+    "net:outbound"
+  ],
+  "pages": [
+    "servers",
+    "terminals"
+  ]
+}

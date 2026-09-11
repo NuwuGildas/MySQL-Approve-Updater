@@ -1,0 +1,51 @@
+<aside id="serversDrawer" aria-label="SSH servers" inert>
+  <div class="view-head">
+    <h2 style="margin:0;font-size:.85rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)">SSH servers <span class="sec-hint" id="serversCount"></span></h2>
+    <span class="spacer"></span>
+    <button id="btnAddServer" class="primary">+ Add server</button>
+    <button id="btnServersRefresh" title="Reload the list">Refresh</button>
+    <button class="btn-dock" title="Drawer orientation: vertical (right) or horizontal (bottom); applies to all drawers">Vertical</button>
+    <button id="btnServersClose" title="Close (Esc)">✕</button>
+  </div>
+  <div class="hint" style="margin:.2rem 0 .5rem">Connect to any SSH-enabled connection profile independently of the active database, and see live VM stats.</div>
+  <form id="addServerForm" hidden>
+    <input id="asName" required placeholder="Name (e.g. web-01)">
+    <div class="row">
+      <div style="flex:2"><label for="asHost">SSH host</label><input id="asHost" required placeholder="1.2.3.4 or host.example.com"></div>
+      <div><label for="asPort">Port</label><input id="asPort" type="number" placeholder="22"></div>
+    </div>
+    <div class="row">
+      <div><label for="asUser">User</label><input id="asUser" required placeholder="root"></div>
+    </div>
+    <div class="auth-head"><span class="auth-title">Authentication <span class="hint" style="margin:0" title="How this app proves who it is to the server">?</span></span><span class="spacer"></span><a class="auth-guide" href="https://www.ssh.com/academy/ssh/public-key-authentication" target="_blank" rel="noopener">Full SSH guide →</a></div>
+    <div class="auth-choice" id="asAuthChoice" role="radiogroup" aria-label="Authentication">
+      <button type="button" role="radio" aria-checked="true" class="on" data-auth="app-key"><b>Server Tools key</b><span>Recommended. No key handling</span></button>
+      <button type="button" role="radio" aria-checked="false" data-auth="own-key"><b>My own key</b><span>Paste a private key</span></button>
+      <button type="button" role="radio" aria-checked="false" data-auth="password"><b>Password</b><span>Plain SSH password</span></button>
+    </div>
+    <div class="auth-panel" id="asAuthApp">
+      <p><b>1.</b> Run this once on the server (as the SSH user above), or paste the key into your provider's <i>SSH keys</i> panel:</p>
+      <div class="auth-cmd"><code id="asAppKeyCmd">loading the key…</code><button type="button" id="btnAsCopyKey">Copy</button></div>
+      <p><b>2.</b> The same key works for every server you add. Server Tools keeps the private half on this machine only (owner-readable file) and never shows it. <span class="hint" style="margin:0" id="asAppKeyFp"></span></p>
+    </div>
+    <div class="auth-panel" id="asAuthOwn" hidden>
+      <label for="asKeyInline">Private key</label>
+      <textarea id="asKeyInline" rows="5" spellcheck="false" autocomplete="off" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
+      <div class="row">
+        <div><label for="asPhrase">Passphrase (if the key has one)</label><input id="asPhrase" type="password" autocomplete="new-password"></div>
+        <div><label for="asKey">…or a key file on this machine</label><input id="asKey" placeholder="C:\Users\you\.ssh\id_ed25519"></div>
+      </div>
+      <p class="hint">Pasted keys are stored owner-only under <code>deploy-keys/</code>; they are never sent back to the browser.</p>
+    </div>
+    <div class="auth-panel" id="asAuthPass" hidden>
+      <label for="asPass">Password</label><input id="asPass" type="password" autocomplete="new-password">
+    </div>
+    <label class="chk" style="margin-top:.6rem"><input type="checkbox" id="asBootstrapClaude"> Auto-install Claude CLI</label>
+    <p class="hint" style="margin:.1rem 0 0 1.5rem">Bootstrap the agent right after connecting. You'll log in to Claude from the server (run <code>claude</code> in its terminal).</p>
+    <div style="display:flex;gap:.5rem;margin-top:.6rem">
+      <button type="submit" class="primary">Save server</button>
+      <button type="button" id="btnAddServerCancel">Cancel</button>
+    </div>
+  </form>
+  <div id="serversList"></div>
+</aside>

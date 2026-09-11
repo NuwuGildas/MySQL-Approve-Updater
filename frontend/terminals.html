@@ -1,0 +1,52 @@
+<!-- Terminals: a first-class view in the shell flow (layout-guide.md §12a), not a drawer.
+     No slide-in, no dock orientation, no resize handle, no pop-out: the shell places it. -->
+<aside id="sshDrawer" aria-label="Terminals" inert>
+  <div class="view-head">
+    <h2 style="margin:0;font-size:.85rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)">Terminals <span class="sec-hint" id="sshHostInfo"></span></h2>
+    <span class="spacer"></span>
+  </div>
+  <div id="sshTabs" hidden></div>
+  <!-- the ONE announcer for terminal ownership: both panes mirror the badge, only this speaks -->
+  <p id="wsOwnerLive" class="sr-only" role="status" aria-live="polite"></p>
+  <!-- below 1100px the two panes become Terminal/Chat tabs; at or above it they sit side by side -->
+  <div class="ws-tabs" id="wsTabs" role="tablist" aria-label="Terminal workspace" hidden>
+    <button type="button" class="ws-tab" id="wsTabTerminal" role="tab" aria-controls="wsPaneTerminal" aria-selected="true">Terminal</button>
+    <button type="button" class="ws-tab" id="wsTabChat" role="tab" aria-controls="wsPaneChat" aria-selected="false" tabindex="-1">Chat</button>
+  </div>
+  <div class="ws-split" id="wsSplit">
+    <div class="ws-pane ws-pane-term" id="wsPaneTerminal">
+      <!-- the ONE session bar: which server and session, the picker over every live session,
+           new/end, who is driving and the control action -->
+      <div class="ws-ident" id="wsIdent" hidden>
+        <span class="ws-server" id="wsServer"></span>
+        <span class="ws-sep" aria-hidden="true">·</span>
+        <label class="sr-only" for="wsSessionPick">Terminal session</label>
+        <select id="wsSessionPick" class="ws-session-pick"></select>
+        <button type="button" id="btnWsClear">Clear</button>
+        <button type="button" id="btnWsNewSession">New session</button>
+        <button type="button" id="btnWsEndSession" class="danger">End session</button>
+        <span class="ws-owner" id="wsOwner" data-owner="user"><span class="ws-owner-dot" aria-hidden="true"></span><span class="ws-owner-text"></span></span>
+        <span class="spacer"></span>
+        <button type="button" id="btnWsControl" class="ws-control"></button>
+      </div>
+      <div id="sshConsoleHost"></div>
+      <!-- no console open: the view still explains itself and points at the servers page -->
+      <div class="ws-empty" id="wsEmpty" hidden>
+        <h3>No terminal is open</h3>
+        <p class="hint">A terminal session keeps running on its server even when this view is closed. Open one from a server, or resume a live session below.</p>
+        <div class="ws-empty-list" id="wsEmptyList"></div>
+        <button type="button" class="primary" id="btnWsGoServers">Go to Servers</button>
+      </div>
+    </div>
+    <div class="ws-pane ws-pane-chat" id="wsPaneChat" hidden>
+      <div class="ws-chat-bar">
+        <span class="ws-chat-ident" id="wsChatIdent"></span>
+        <!-- the ownership state is mirrored here (aria-hidden: #wsOwnerLive is the single announcer)
+             and the control action is repeated because approval cards are read on this side -->
+        <span class="ws-owner" id="wsChatOwner" data-owner="user" aria-hidden="true"><span class="ws-owner-dot"></span><span class="ws-owner-text"></span></span>
+        <button type="button" id="btnWsControlChat" class="ws-control"></button>
+      </div>
+      <div class="ws-chat-host" id="wsChatHost"></div>
+    </div>
+  </div>
+</aside>
