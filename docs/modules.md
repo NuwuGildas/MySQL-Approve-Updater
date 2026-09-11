@@ -441,13 +441,39 @@ with one method, a test, a README and a CI workflow. From there:
 
 ```bash
 npm ci
-npm run modules:keys -- --key-id dev      # once
-npm run modules:build                     # packages + catalog into dist/modules
-npm run modules:registry                  # serves them on http://127.0.0.1:8788
-MODULE_REGISTRIES=http://127.0.0.1:8788/catalog.json npm start
+npm run modules:local     # sign the packages and put a catalog where the app looks
+npm start
 ```
 
 Open <http://localhost:3000>, then **+ Add module** in the sidebar.
+
+`modules:local` does three things, which are the three things a marketplace
+needs:
+
+1. finds the publisher key in `keys/` — generating a development one if there is
+   none — and checks its public half is in `config/trusted-publishers.json`,
+   because the installer refuses a package no trusted key signed;
+2. builds and signs every package from `modules/<id>` into `dist/modules`;
+3. writes `<dataDir>/registry/catalog.json`, whose package URLs are `file:` URLs
+   into `dist/modules`.
+
+That last path is what `server.js` reads when `MODULE_REGISTRIES` is not set, so
+there is no environment variable to remember and no registry process to keep
+running. It is still a real download → verify signature → stage → activate
+install; only the transport is local. Catalogs are written for `npm start` (the
+repository root) and, when `dist/server-tools.exe` exists, for the packaged
+executable, which keeps its data beside itself.
+
+Re-run it after changing a module. Installed code and module-owned data live
+under `<dataDir>/module-data/` and are never committed.
+
+To exercise the HTTP path instead:
+
+```bash
+npm run modules:build
+npm run modules:registry                  # serves them on http://127.0.0.1:8788
+MODULE_REGISTRIES=http://127.0.0.1:8788/catalog.json npm start
+```
 
 Tests:
 

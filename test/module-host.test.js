@@ -21,6 +21,7 @@ const archive = require('../lib/host/archive');
 const { createVerifier, signedPayload } = require('../lib/host/verify');
 const { createRegistry } = require('../lib/host/registry');
 const { createCatalogClient } = require('../lib/host/catalog');
+const { toUrl } = require('../lib/host/download');
 const { createInstaller } = require('../lib/host/installer');
 const { createServices } = require('../lib/host/services');
 const { createRegistryServer } = require('../scripts/module-registry');
@@ -169,6 +170,33 @@ test('a catalog is validated before use, including its digests', () => {
   assert.throws(() => validateCatalog({ ...good, catalogVersion: 2 }), /catalogVersion/);
   assert.throws(() => validateCatalog({ catalogVersion: 1, modules: [{ ...good.modules[0], versions: [{ ...good.modules[0].versions[0], package: { url: 'http://x/y.tgz', size: 10, sha256: 'short' } }] }] }), /sha256/);
   assert.throws(() => validateCatalog({ catalogVersion: 1, modules: [{ ...good.modules[0], versions: [{ ...good.modules[0].versions[0], package: { url: 'javascript:alert(1)', size: 10, sha256: 'a'.repeat(64) } }] }] }), /http, https or file/);
+});
+
+test('a registry configured as a local path is read as a path, drive letter and all', async (t) => {
+  /* "C:\registry\catalog.json" parses as the one-character scheme "c:", so a
+     Windows path used to be handed to fetch() untouched and every local or
+     offline catalog failed with "fetch failed". */
+  assert.equal(toUrl('C:\\registry\\catalog.json'), 'file:///C:/registry/catalog.json');
+  assert.equal(toUrl('D:/modules/catalog.json'), 'file:///D:/modules/catalog.json');
+  assert.equal(toUrl('http://127.0.0.1:8788/catalog.json'), 'http://127.0.0.1:8788/catalog.json');
+  assert.equal(toUrl('file:///C:/registry/catalog.json'), 'file:///C:/registry/catalog.json');
+  assert.match(toUrl('./registry/catalog.json'), /^file:\/\/\/.+\/registry\/catalog\.json$/);
+
+  /* And the client actually loads one, with no server anywhere. */
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'st-local-catalog-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'catalog.json');
+  fs.writeFileSync(file, JSON.stringify({
+    catalogVersion: 1, modules: [{
+      id: 'demo', name: 'Demo', description: 'x', publisher: 'Test',
+      versions: [{ version: '1.0.0', hostSdk: `^${HOST_SDK_VERSION.split('.')[0]}.0.0`, package: { url: 'http://x/y.tgz', size: 10, sha256: 'a'.repeat(64) } }],
+    }],
+  }));
+
+  const client = createCatalogClient({ registries: [{ name: 'Local', url: file }], hostSdkVersion: HOST_SDK_VERSION });
+  const catalog = await client.load();
+  assert.deepEqual(catalog.failures, [], 'a local catalog is readable without a network');
+  assert.equal(catalog.modules[0].id, 'demo');
 });
 
 /* ---------------- archives ---------------- */

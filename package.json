@@ -18,6 +18,7 @@
     "verify:base": "node scripts/verify-base.js",
     "modules:keys": "node scripts/module-keys.js init",
     "modules:build": "node scripts/build-modules.js",
+    "modules:local": "node scripts/modules-local.js",
     "modules:catalog": "node scripts/build-catalog.js",
     "modules:registry": "node scripts/module-registry.js",
     "modules:branches": "node scripts/publish-module-branch.js --all",

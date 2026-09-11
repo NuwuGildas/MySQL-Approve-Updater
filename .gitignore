@@ -51,3 +51,6 @@ ssh-agent-memory.json
 # tooling artifacts
 /.claude/
 /.ui-audit/
+
+# a local module catalog (scripts/modules-local.js); package archives live in dist/
+/registry/
