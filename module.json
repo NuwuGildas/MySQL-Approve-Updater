@@ -22,6 +22,7 @@
     "ui:settings",
     "assistant:tools",
     "assistant:proposals",
+    "projects:read",
     "storage:module",
     "events:subscribe",
     "audit:write",

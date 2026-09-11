@@ -163,6 +163,10 @@ export async function activate(host) {
     }
     if (serversDrawer.classList.contains('open')) ui.loadServers();
   });
+  /* Switching project, or attaching a server to one, changes which servers
+     this project can see. The list comes from the backend, which scopes it. */
+  host.on(document, 'st:project', () => ui.loadServers());
+  host.on(document, 'st:project-resources', () => ui.loadServers());
   host.events.on('log', (entry) => { if (/terminal/i.test(entry?.msg || '')) ui.refreshLiveTerminals(); });
   host.events.on('theme:change', () => {
     for (const console_ of ui.consoles.values()) { try { if (console_.term) console_.term.options.theme = host.ui.terminalTheme(); } catch {} }

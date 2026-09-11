@@ -61,9 +61,18 @@ async function activate(host) {
     return profile;
   };
 
-  /* ---- server profiles (SSH-only) ---- */
+  /* ---- server profiles (SSH-only) ----
+     A server attached to a project exists only inside it. The host says which
+     project the caller is in (X-Project) and owns the rule; this only asks. */
+  const scopeTo = async (req, kind, items, id = (x) => x.id) => {
+    const projectId = req.get('x-project');
+    if (!projectId) return items;
+    const visible = new Set(await host.call('projects.visible', { projectId, kind, ids: items.map(id) }));
+    return items.filter((item) => visible.has(id(item)));
+  };
+
   app.get('/sessions', wrap(async (req, res) => {
-    const list = await profiles();
+    const list = await scopeTo(req, 'servers', await profiles());
     res.json({ sessions: list.map((p) => ssh.view(p)) });
   }));
 
