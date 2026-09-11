@@ -15,6 +15,16 @@
 window.HostSDK = (() => {
   const SDK_VERSION = '1.0.0';
 
+  /* Every call a module makes to its own backend says which project it is being
+     made in, so the backend can scope its lists the way the base does without
+     each module having to thread a parameter through every call site. A header
+     rather than a parameter: a module already has its own "projectId" fields
+     and they must not collide. */
+  const projectHeader = () => {
+    try { const active = core.projects?.activeId?.(); return active ? { 'X-Project': String(active) } : {}; }
+    catch { return {}; }
+  };
+
   /* ---------------- small registry with ordered entries and disposal ---------------- */
   function createRegistry(kind) {
     const entries = new Map();
@@ -170,8 +180,8 @@ window.HostSDK = (() => {
       async rpc(method, params, options = {}) {
         alive();
         const init = options.method === 'GET'
-          ? undefined
-          : { method: options.method || 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(params || {}) };
+          ? { headers: projectHeader() }
+          : { method: options.method || 'POST', headers: { 'Content-Type': 'application/json', ...projectHeader() }, body: JSON.stringify(params || {}) };
         const url = options.method === 'GET'
           ? `/api/m/${id}/${method}?${new URLSearchParams(params || {})}`
           : `/api/m/${id}/${method}`;
@@ -187,11 +197,13 @@ window.HostSDK = (() => {
          forgets them entirely when the module is removed. */
       async http(path, init) {
         alive();
+        const headers = new Headers(init?.headers);
+        for (const [name, value] of Object.entries(projectHeader())) headers.set(name, value);
         if (init && init.body !== undefined) {
-          const headers = new Headers(init.headers);
           if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
-          init = { ...init, headers, body: typeof init.body === 'string' ? init.body : JSON.stringify(init.body) };
+          init = { ...init, body: typeof init.body === 'string' ? init.body : JSON.stringify(init.body) };
         }
+        init = { ...init, headers };
         const response = await fetch(`/api/m/${id}/http${path.startsWith('/') ? path : '/' + path}`, init);
         const body = await response.json().catch(() => ({}));
         if (!response.ok) throw Object.assign(new Error(body.error || response.statusText), { code: body.code, status: response.status });

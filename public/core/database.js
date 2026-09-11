@@ -1155,8 +1155,32 @@ async function refreshHeader() {
   $('dbInfo').textContent = `profile: ${st.config.profile} · db: ${st.config.database || '(unset)'}${st.config.sshTunnel ? ' · via SSH tunnel' : ''}`;
 }
 
+/* Entering a project: the active connection is what the SQL console and the
+   update queue run against, so it can never be one this project cannot see. The
+   server decides and reports what it switched to. */
+async function scopeConnectionsToProject() {
+  let result;
+  try { result = await api('/api/connections/scope', { method: 'POST', body: JSON.stringify({ projectId: currentProjectId }) }); }
+  catch (e) { toast('Could not scope connections to this project: ' + e.message, 'warning'); return; }
+  if (result.switched) {
+    // Everything derived from the old connection is now wrong, exactly as when
+    // a connection is activated by hand.
+    state.schema = null;
+    $('tableList').innerHTML = '';
+    $('colList').innerHTML = '';
+    updateSqlHints();
+    toast(result.active
+      ? `"${result.active.name}" is this project's connection`
+      : 'No connection belongs to this project yet', result.active ? undefined : 'warning');
+  }
+  await Promise.all([refreshHeader(), loadConns()]);
+}
+document.addEventListener('st:project', () => scopeConnectionsToProject());
+// Attaching or detaching a connection changes what the current project can see.
+document.addEventListener('st:project-resources', () => scopeConnectionsToProject());
+
 async function loadConns() {
-  conns = await api('/api/connections');
+  conns = await api(projectUrl('/api/connections'));
   const list = $('connList');
   list.innerHTML = conns.profiles.length ? '' : '<div class="empty">No saved connections - create one below.</div>';
   for (const p of conns.profiles) {

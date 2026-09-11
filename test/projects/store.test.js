@@ -193,3 +193,70 @@ test('a failed write surfaces to the caller and does not poison later saves', as
   await store.link(p.id, 'repos', 'r2');
   assert.deepEqual(readJson(dir).projects.find((x) => x.id === p.id).resources.repos, ['r1', 'r2'], 'in-memory state was kept and is on disk after the next successful save');
 });
+
+test('scope: attaching a resource takes it out of the shared pool', async () => {
+  const { store } = mk();
+  const site = await store.create({ name: 'Website' });
+  const api = await store.create({ name: 'API' });
+  await store.link(site.id, 'servers', 'srv-web');
+  await store.link(api.id, 'servers', 'srv-api');
+  await store.link(site.id, 'connections', 'db-site');
+  // srv-shared and db-shared are attached to nothing.
+
+  const inSite = store.scopeFor(site.id);
+  const inApi = store.scopeFor(api.id);
+  const inGeneral = store.scopeFor(DEFAULT_PROJECT.id);
+
+  assert.equal(inSite.visible('servers', 'srv-web'), true);
+  assert.equal(inSite.visible('servers', 'srv-api'), false, 'another project claims it');
+  assert.equal(inApi.visible('servers', 'srv-api'), true);
+  assert.equal(inApi.visible('servers', 'srv-web'), false);
+
+  /* Unassigned resources stay shared: attaching is a deliberate act, not a
+     prerequisite for using anything. */
+  for (const scope of [inSite, inApi, inGeneral]) {
+    assert.equal(scope.visible('servers', 'srv-shared'), true);
+    assert.equal(scope.visible('connections', 'db-shared'), true);
+  }
+  assert.equal(inGeneral.visible('servers', 'srv-web'), false, 'General is a project like any other');
+
+  /* Kinds do not leak into each other. */
+  assert.equal(inApi.visible('connections', 'db-site'), false);
+  assert.equal(inApi.visible('repos', 'db-site'), true, 'a different kind with the same id is untouched');
+
+  /* filter() is the same rule over a list, on ids or on records. */
+  const profiles = [{ id: 'srv-web' }, { id: 'srv-api' }, { id: 'srv-shared' }];
+  assert.deepEqual(inSite.filter('servers', profiles, (p) => p.id).map((p) => p.id), ['srv-web', 'srv-shared']);
+  assert.deepEqual(inApi.filter('servers', ['srv-web', 'srv-api', 'srv-shared']), ['srv-api', 'srv-shared']);
+
+  /* Why something is missing, in words the caller can show. */
+  assert.deepEqual(inApi.ownersOf('servers', 'srv-web'), [{ id: site.id, name: 'Website' }]);
+  assert.deepEqual(inApi.ownersOf('servers', 'srv-shared'), []);
+
+  /* Detaching puts it back in the pool for everyone. */
+  await store.unlink(site.id, 'servers', 'srv-web');
+  assert.equal(store.scopeFor(api.id).visible('servers', 'srv-web'), true);
+  assert.equal(store.visibleIn(DEFAULT_PROJECT.id, 'servers', 'srv-web'), true);
+
+  /* A resource attached to two projects belongs to both. */
+  await store.link(site.id, 'connections', 'db-both');
+  await store.link(api.id, 'connections', 'db-both');
+  assert.equal(store.visibleIn(site.id, 'connections', 'db-both'), true);
+  assert.equal(store.visibleIn(api.id, 'connections', 'db-both'), true);
+  assert.equal(store.visibleIn(DEFAULT_PROJECT.id, 'connections', 'db-both'), false);
+
+  assert.throws(() => store.scopeFor(site.id).visible('nonsense', 'x'), /kind must be one of/);
+});
+
+test('scope: a deployment target is claimed by the project that owns it', async () => {
+  const { store } = mk();
+  const site = await store.create({ name: 'Website' });
+  const api = await store.create({ name: 'API' });
+  // Targets carry their own single-project ownership; the scope has to honour it.
+  store.bindDeployments({ targets: () => [{ id: 't-site', projectId: site.id }], runs: () => [], pending: () => false });
+
+  assert.equal(store.visibleIn(site.id, 'targets', 't-site'), true);
+  assert.equal(store.visibleIn(api.id, 'targets', 't-site'), false);
+  assert.equal(store.visibleIn(api.id, 'targets', 't-unowned'), true);
+  assert.deepEqual(store.scopeFor(api.id).filter('targets', ['t-site', 't-unowned']), ['t-unowned']);
+});

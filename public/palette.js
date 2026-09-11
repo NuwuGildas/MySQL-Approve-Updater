@@ -28,7 +28,7 @@ const CMDK_CORE_SOURCES = [
   {
     key: 'connections', prefixes: ['connections', 'connection', 'db'], label: 'Database connections', icon: 'db',
     tip: 'Search database connection profiles',
-    fetch: () => api('/api/connections').then((d) => (d.profiles || []).map((p) => ({ ...p, _active: p.id === d.activeId }))),
+    fetch: () => api(projectUrl('/api/connections')).then((d) => (d.profiles || []).map((p) => ({ ...p, _active: p.id === d.activeId }))),
     map: (p) => ({ title: p.name, sub: `${p.db?.user || ''}@${p.db?.host || ''}${p.db?.database ? ' · ' + p.db.database : ''}${p._active ? ' · active' : ''}`, action: { k: 'route', to: '#/connections' } }),
   },
   {

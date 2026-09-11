@@ -1280,9 +1280,34 @@ function assertNoPendingSession(what) {
 }
 
 app.get('/api/connections', (req, res) => {
-  // the Connections modal manages DB connections; SSH-only servers live in the SSH servers view
-  res.json({ activeId: activeProfile().id, profiles: connStore.profiles.filter((p) => !p.sshOnly).map(maskProfile) });
+  // the Connections modal manages DB connections; SSH-only servers live in the SSH servers view.
+  // A connection attached to a project exists only inside it: see scopeFor() in lib/projects/store.
+  const scope = scopeOf(String(req.query.projectId || chatStore.DEFAULT_PROJECT_ID));
+  const mine = scope.filter('connections', connStore.profiles.filter((p) => !p.sshOnly), (p) => p.id);
+  res.json({ activeId: activeProfile().id, projectId: scope.projectId, profiles: mine.map(maskProfile) });
 });
+
+/* Entering a project. The active connection is what the SQL console and the update
+   queue run against, so it must never be one this project cannot see: if it is out
+   of scope the first connection the project CAN see takes over, and if there is
+   none then nothing is active and the console says so. */
+app.post('/api/connections/scope', wrap(async (req, res) => {
+  const scope = scopeOf(String(req.body?.projectId || chatStore.DEFAULT_PROJECT_ID));
+  const visible = scope.filter('connections', connStore.profiles.filter((p) => !p.sshOnly), (p) => p.id);
+  const active = connStore.profiles.find((p) => p.id === connStore.activeId) || null;
+  if (active && !active.sshOnly && scope.visible('connections', active.id)) {
+    return res.json({ activeId: connStore.activeId, switched: false, projectId: scope.projectId });
+  }
+  const next = visible[0] || null;
+  const from = active ? active.name : null;
+  connStore.activeId = next ? next.id : null;
+  await saveConnections();
+  audit({ action: 'connection-scope-switch', project: scope.projectId, from, to: next ? next.name : null });
+  logEvent('info', next
+    ? `projects: "${from || 'no connection'}" is not in this project; the active connection is now "${next.name}"`
+    : 'projects: no connection belongs to this project, so none is active');
+  res.json({ activeId: connStore.activeId, switched: true, projectId: scope.projectId, active: next ? maskProfile(next) : null });
+}));
 
 app.post('/api/connections', wrap(async (req, res) => {
   const p = sanitizeProfile(req.body, null);
@@ -1669,6 +1694,20 @@ const convoPush = (id, message) => (isProjectConvo(id) ? chatStore.push(projectO
 const PROJECT_CONVO = 'project:';
 const isProjectConvo = (id) => typeof id === 'string' && id.startsWith(PROJECT_CONVO);
 const projectOfConvo = (id) => id.slice(PROJECT_CONVO.length) || chatStore.DEFAULT_PROJECT_ID;
+/* Which project a conversation is working in (lib/shared/conversation-project):
+   a project conversation says so in its id, a terminal session inherits the
+   project it was opened from. This is what scopes the assistant's tools - it
+   may only see what the project it is in can see. */
+const { projectOfConversation: resolveConversationProject } = require('./lib/shared/conversation-project');
+const projectOfConversation = (convoId) => resolveConversationProject(convoId, {
+  sessionProject: (sessionId) => { const s = conversations.status(sessionId); return s?.missing ? null : s?.projectId || null; },
+  defaultProjectId: chatStore.DEFAULT_PROJECT_ID,
+});
+/** The resources one conversation - or one request - is allowed to see. */
+const scopeOf = (projectId) => projectStore.scopeFor(projectStore.get(projectId) ? projectId : chatStore.DEFAULT_PROJECT_ID);
+const scopeOfConversation = (meta) => scopeOf(projectOfConversation(meta?.sessionId));
+/** A connection profile is a 'server' when it is SSH-only, a 'connection' otherwise. */
+const kindOfProfile = (profile) => (profile.sshOnly ? 'servers' : 'connections');
 function conversationId(req, { readOnly = false } = {}) {
   const id = req.body?.sessionId !== undefined ? req.body.sessionId : req.query?.sessionId;
   if (typeof id === 'string' && id) {
@@ -1927,11 +1966,18 @@ const AGENT_TOOLS = {
     },
   },
   list_servers: {
-    desc: 'The configured connection profiles / SSH servers, with secrets masked and the active one flagged. Use for questions about the SSH Servers or Connections modules. Input: none.',
-    run: async () => ({
-      activeId: activeProfile().id,
-      servers: connStore.profiles.map((p) => ({ ...maskProfile(p), sshOnly: !!p.sshOnly, active: p.id === activeProfile().id })),
-    }),
+    desc: 'The configured connection profiles / SSH servers, with secrets masked and the active one flagged. Only the ones this project can see. Use for questions about the SSH Servers or Connections modules. Input: none.',
+    // The assistant works inside a project and sees exactly what that project sees:
+    // a profile attached to another project is not listed and cannot be acted on.
+    run: async (input, meta) => {
+      const scope = scopeOfConversation(meta);
+      const mine = connStore.profiles.filter((p) => scope.visible(kindOfProfile(p), p.id));
+      return {
+        activeId: activeProfile().id,
+        projectId: scope.projectId,
+        servers: mine.map((p) => ({ ...maskProfile(p), sshOnly: !!p.sshOnly, active: p.id === activeProfile().id })),
+      };
+    },
   },
   propose_rule: {
     desc: 'Propose creating or updating a RULE (requires explicit user approval in the UI before it is saved; nothing happens without it). ' +
@@ -2533,6 +2579,7 @@ const moduleHost = createModuleHost({
       list: () => projectStore.list().map(projectView),
       get: (id) => { const p = projectStore.get(id); return p ? projectView(p) : null; },
       projectsFor: (kind, resourceId) => projectStore.projectsFor(kind, resourceId).map((p) => ({ id: p.id, name: p.name, color: p.color || null })),
+      visible: (projectId, kind, ids) => scopeOf(String(projectId || chatStore.DEFAULT_PROJECT_ID)).filter(kind, ids),
       create: async (body) => { const p = await projectStore.create(body || {}); audit({ action: 'project-create', project: p.name }); return projectView(p); },
       update: async (id, body) => { const p = await projectStore.update(id, body || {}); audit({ action: 'project-update', project: p.name }); return projectView(p); },
       remove: async (id) => { const removed = await projectStore.remove(id); audit({ action: 'project-delete', project: removed.name }); return true; },

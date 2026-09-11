@@ -156,7 +156,7 @@ async function renderSettings() {
     $('setDbName').textContent = state.config?.database || 'the database';
   } catch (e) { toast('Settings load failed: ' + e.message, 'error'); }
   try {
-    const d = await api('/api/connections');
+    const d = await api(projectUrl('/api/connections'));
     $('setConnCount').textContent = `${d.profiles.length}`;
     $('setConnList').innerHTML = d.profiles.length ? d.profiles.map((p) => `
       <div class="settings-row">
@@ -371,6 +371,10 @@ function restoreAgentGeom() { // called when the window opens
 async function startApplication() {
   registerCoreTools();
   await loadProjects();
+  /* The active connection is stored on the server and the active project in this
+     browser, so a session can start with a connection the project cannot see.
+     Settle that before anything reads the connection. */
+  await scopeConnectionsToProject().catch(() => {});
   setView('compass'); // safe default until the startup preference is applied
   try {
     const st = await api('/api/state');
