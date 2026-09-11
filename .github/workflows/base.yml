@@ -1,8 +1,10 @@
-# The base application: tests, and the check that it ships nothing optional.
+# The base application: its tests, and the check that it ships nothing optional.
 #
-# Module packages are built by their own branches' workflows (modules/<id>), not
-# here. What this job guarantees is the other half of the contract: that the
-# base application is complete on its own and carries no optional module code.
+# Module packages are built by their own branches' workflows (modules/<id>). What
+# this job guarantees is the other half of the contract: that the base
+# application is complete on its own and carries no optional module code. The
+# second job then builds every module branch that exists, so a change to the host
+# SDK is caught against real packages before anything is released.
 name: base
 
 on:
@@ -22,8 +24,10 @@ jobs:
           node-version: '22'
           cache: npm
 
-      - run: npm ci --omit=optional
+      - run: npm ci
 
+      # This runs on a checkout with no modules/ directory at all, which is the
+      # point: the base application must pass on its own.
       - name: Base application tests
         run: npm test
 
@@ -31,8 +35,6 @@ jobs:
         run: npm run verify:base
 
   packages:
-    # Builds every module branch that exists, so a change to the host SDK is
-    # caught against real packages before it is released.
     runs-on: ubuntu-latest
     needs: test
     steps:
@@ -40,23 +42,27 @@ jobs:
         with: { fetch-depth: 0 }
       - uses: actions/setup-node@v4
         with: { node-version: '22', cache: npm }
-      - run: npm ci --omit=optional
+      - run: npm ci
 
+      # Every module branch, extracted where the host expects to find it. No
+      # worktrees and no symlinks: just the tree at that ref.
       - name: Check every module branch out
         run: |
-          mkdir -p modules
+          found=0
           for ref in $(git for-each-ref --format='%(refname:short)' refs/remotes/origin/modules); do
             id="${ref##*/}"
-            git worktree add ".worktrees/$id" "$ref"
-            ln -s "../.worktrees/$id" "modules/$id" || cp -r ".worktrees/$id" "modules/$id"
-            echo "checked out $id"
+            mkdir -p "modules/$id"
+            git archive "$ref" | tar -x -C "modules/$id"
+            echo "checked out $id from $ref"
+            found=$((found + 1))
           done
-
-      - name: Build every package (unsigned in CI without a key)
-        run: npm run modules:build
+          if [ "$found" -eq 0 ]; then echo "::warning::no modules/* branches found"; fi
 
       - name: Module test suites
         run: npm run test:modules
+
+      - name: Build every package (unsigned without a signing key)
+        run: npm run modules:build
 
       - uses: actions/upload-artifact@v4
         with:

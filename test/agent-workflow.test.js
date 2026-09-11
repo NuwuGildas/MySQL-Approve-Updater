@@ -4,9 +4,10 @@
    words out of another viewer's stream. No real model and no real SSH: the shared shell is a
    fake, the model is a script.
 
-   It now exercises the split the module architecture introduced: the CONVERSATION store is the
-   host's (lib/shared/session-conversations, which keeps working with no module installed) and the
-   terminal half is the Servers module's agent, reached the way a worker reaches the host. */
+   It exercises the split the module architecture introduced: the CONVERSATION store is the host's
+   (lib/shared/session-conversations, which keeps working with no module installed) and the session
+   half is a stand-in module defined below. Nothing here requires a real module: the base
+   application has to hold up against any of them. */
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -15,7 +16,6 @@ const os = require('os');
 const path = require('path');
 const http = require('http');
 const { WebSocketServer, WebSocket } = require('ws');
-const { createSshAgent } = require('../modules/servers/backend/agent');
 const { createSessionConversations } = require('../lib/shared/session-conversations');
 const { createAgentWorkflow, agentEventForViewer, auditEntryForViewer, redactAuditEntry } = require('../lib/agent-workflow');
 
@@ -51,6 +51,95 @@ function fakeTerminals(state) {
     close(id) { const s = live.get(id); s.status = 'closed'; s.revision++; return { ...s }; },
     sessions: live,
   };
+}
+
+/* A stand-in for a module that owns sessions: exactly the contract the host
+   offers one - a tool that PROPOSES, and a proposal kind that runs what the user
+   approved. Nothing here is specific to SSH; the Servers module simply happens to
+   be the first thing shaped like this, and its own suite tests its own half.
+
+   The base application must hold up against ANY such module, which is why this
+   file depends on none of them. */
+function createSessionModule({ host, terminals, agent }) {
+  const seals = new Map();
+  const seal = (p) => JSON.stringify([p.id, p.sessionId, p.cmd, p.revision]);
+  const live = (id) => { try { return terminals.snapshot(id); } catch { return null; } };
+  let counter = 0;
+
+  const status = async (sessionId) => {
+    if (!sessionId) return { attached: false, sessionId: null };
+    const stored = await host.call('conversation.status', { sessionId });
+    return { ...stored, attached: live(sessionId)?.status === 'open' && !stored.missing };
+  };
+
+  /** What the module tells the host about the sessions it owns. */
+  const publish = () => {
+    const view = {};
+    for (const terminal of terminals.sessions.values()) {
+      view[terminal.sessionId] = {
+        terminal: { sessionId: terminal.sessionId, profileId: terminal.profileId, status: terminal.status, control: terminal.control, revision: terminal.revision },
+        unusable: terminal.status !== 'open' ? 'This terminal session has ended. Open a new terminal on that server to continue.' : null,
+      };
+    }
+    return host.call('sessions.publish', { sessions: view });
+  };
+
+  async function attach(profileId) {
+    const terminal = await terminals.open(profileId);
+    await host.call('conversation.create', {
+      sessionId: terminal.sessionId,
+      fields: { profileId, name: 'STAGING', host: 'staging.local', user: 'dev', port: 22 },
+    });
+    await host.call('conversation.push', {
+      sessionId: terminal.sessionId,
+      message: { role: 'note', kind: 'ssh-attach', text: 'Connected to STAGING. Every assistant command needs your approval.' },
+    });
+    await publish();
+    return status(terminal.sessionId);
+  }
+
+  async function propose(sessionId, cmd) {
+    const terminal = terminals.snapshot(sessionId);
+    if (terminal.control !== 'assistant') throw httpError(409, 'Hand terminal control to the assistant before running a command.');
+    const proposal = await host.call('assistant.propose', {
+      id: `p${++counter}`, kind: 'ssh-command', sessionId, profileId: terminal.profileId,
+      serverName: 'STAGING', cmd, cls: 'read', revision: terminal.revision, ts: new Date().toISOString(),
+    });
+    seals.set(proposal.id, { signature: seal(proposal), started: false });
+    return { proposalId: proposal.id, sessionId, status: 'pending_user_approval', class: 'read' };
+  }
+
+  /** Every guarantee the host relies on is re-checked here, as a real module does. */
+  async function approve(proposal) {
+    const guard = seals.get(proposal.id);
+    if (!guard || guard.started || guard.signature !== seal(proposal)) throw httpError(409, 'This approval is no longer pending or its command changed.');
+    const terminal = terminals.snapshot(proposal.sessionId);
+    if (terminal.revision !== proposal.revision) throw httpError(409, 'The terminal changed since this command was proposed. Request a new proposal.');
+    guard.started = true;   // synchronous claim: a second simultaneous approval cannot execute
+    const outcome = await terminals.sendCommand(proposal.sessionId, proposal.cmd, { expectedRevision: proposal.revision });
+    const result = {
+      cmd: proposal.cmd, class: proposal.cls, sessionId: proposal.sessionId,
+      exitCode: outcome.code, stdout: outcome.stdout, stderr: outcome.stderr, revision: outcome.revision,
+    };
+    proposal.result = result;
+    await host.call('conversation.push', {
+      sessionId: proposal.sessionId,
+      message: { role: 'note', kind: 'ssh-result', text: `Ran on "STAGING": ${proposal.cmd}\n${result.stdout}` },
+    });
+    await publish();
+    return result;
+  }
+
+  agent.kinds['ssh-command'] = { label: (p) => p.cmd, approve };
+  agent.tools.ssh_exec = {
+    description: 'Propose one command in this session. It does not run until the user approves it.',
+    enabled: (sessionId) => live(sessionId)?.status === 'open',
+    run: async (input, meta) => {
+      if (!meta?.sessionId) throw httpError(400, 'Open a server terminal session and use its assistant first.');
+      return propose(meta.sessionId, String(input?.cmd || '').trim());
+    },
+  };
+  return { attach, status, approve, publish };
 }
 
 /* A scripted model. Each entry is the raw text of one model step, in order. */
@@ -114,9 +203,7 @@ function setup(t, { script = [], settings: extraSettings = {}, connected = true 
     audit: async (entry) => { audits.push(entry); },
     log() {}, emit() {},
   };
-  const sshAgent = createSshAgent({ host: fakeHost, terminals, settings: () => settings });
-  agent.kinds['ssh-command'] = { label: (p) => p.cmd, approve: (proposal) => sshAgent.approve(proposal) };
-  for (const [name, tool] of Object.entries(sshAgent.tools)) agent.tools[name] = tool;
+  const sshAgent = createSessionModule({ host: fakeHost, terminals, agent });
 
   /* The workflow only ever sees the host's conversation contract. */
   const api = {

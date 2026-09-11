@@ -1,0 +1,98 @@
+'use strict';
+/* The per-module CI workflow, written into each module package by
+   scripts/scaffold-module.js. Exported separately so the template stays
+   readable: it is YAML with one substitution. */
+
+module.exports = (id) => `# Build, test and publish the ${id} module.
+#
+# This branch holds one standalone package. The package is checked out INTO a
+# checkout of the application's default branch, at modules/${id}, which is
+# exactly where the documented local workflow puts it: the host supplies the
+# build tooling, the host SDK to validate against, and the shared libraries a
+# module resolves at runtime. Nothing here is installed from a moving branch -
+# CI produces a versioned, signed archive and a release points at it.
+name: ${id}
+
+on:
+  push:
+    branches: [modules/${id}]
+    tags: ['${id}-v*']
+  pull_request:
+    branches: [modules/${id}]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # The host first: it owns the tooling and the SDK this package targets.
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          path: host
+
+      # Then this package, in the place the host expects to find it.
+      - uses: actions/checkout@v4
+        with:
+          path: host/modules/${id}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: host/package-lock.json
+
+      - name: Install host tooling
+        working-directory: host
+        run: npm ci
+
+      - name: Check the manifest against this host SDK
+        working-directory: host
+        run: |
+          node -e "
+            const { validateManifest } = require('./lib/host/manifest');
+            const { HOST_SDK_VERSION } = require('./lib/host/sdk');
+            const m = validateManifest(require('./modules/${id}/module.json'));
+            if (!m.compatible) throw new Error(m.name + ' declares hostSdk ' + m.hostSdk + ', which host SDK ' + HOST_SDK_VERSION + ' does not satisfy');
+            console.log(m.id, m.version, 'is compatible with host SDK', HOST_SDK_VERSION);
+          "
+
+      - name: Test
+        working-directory: host
+        run: node scripts/test-modules.js ${id}
+
+      - name: Build the package
+        working-directory: host
+        env:
+          SIGNING_KEY: \${{ secrets.MODULE_SIGNING_KEY }}
+          SIGNING_KEY_ID: \${{ vars.MODULE_SIGNING_KEY_ID }}
+        run: |
+          mkdir -p keys
+          if [ -n "$SIGNING_KEY" ]; then
+            printf '%s' "$SIGNING_KEY" > keys/ci.private.pem
+            SIGN="--sign keys/ci.private.pem --key-id \${SIGNING_KEY_ID:-ci}"
+          else
+            echo "::warning::MODULE_SIGNING_KEY is not set; building an UNSIGNED package that the host will refuse to install"
+            SIGN=""
+          fi
+          node scripts/build-module.js ${id} \\
+            --out ../artifacts \\
+            --commit "\${{ github.sha }}" \\
+            --branch "modules/${id}" \\
+            --repository "\${{ github.server_url }}/\${{ github.repository }}" \\
+            $SIGN
+          rm -f keys/ci.private.pem
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${id}-package
+          path: artifacts/*
+
+      # A tag is what publishes: the archive becomes a release asset, and the
+      # catalog entry that points at it is updated from the same artifact file.
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/${id}-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+`;
