@@ -106,7 +106,8 @@ export function createServersUI({ host, mount, Terminal, FitAddon }) {
    * never in the way: the terminal opens regardless, and a refusal is remembered
    * for the rest of the session.
    */
-  const agentOffered = new Set();
+  const agentOffered = new Set();     // asked to install, and declined
+  const agentAnnounced = new Set();   // told the user what is already there
   async function ensureServerAgent(profileId, serverName) {
     let found;
     try { found = await refreshServerAgents(profileId, { quiet: false }); }
@@ -121,7 +122,19 @@ export function createServersUI({ host, mount, Terminal, FitAddon }) {
       toast(`Could not read the coding agents on ${serverName}. Open its Terminal menu to install one.`, 'warning');
       return null;
     }
-    if (Object.values(found).some((agent) => agent.installed)) { await loadServers().catch(() => {}); return found; }
+    /* An agent IS there. This used to be the silent case, which from the outside
+       is indistinguishable from the feature not working: say what is on the
+       server and what it means, once per server per session. */
+    const present = Object.entries(found).filter(([, agent]) => agent.installed);
+    if (present.length) {
+      if (!agentAnnounced.has(profileId)) {
+        agentAnnounced.add(profileId);
+        const names = present.map(([id, agent]) => `${AGENT_LABELS[id] || id}${agent.version ? ' ' + agent.version : ''}`).join(' and ');
+        toast(`${names} on ${serverName}. Ask the assistant to look into something and it will use it instead of proposing commands one at a time.`, 'success');
+      }
+      await loadServers().catch(() => {});
+      return found;
+    }
     if (agentOffered.has(profileId)) return found;
     agentOffered.add(profileId);
 

@@ -49,8 +49,15 @@ async function activate(host) {
   const agents = createRemoteAgents({ exec: (client, command, options) => ssh.execCapture(client, command, options), log });
   const remoteAgents = {
     detect: async (profileId) => {
-      const { session } = await ssh.connect(profileId);
-      return agents.detect(session.client);
+      const { profile, session } = await ssh.connect(profileId);
+      const found = await agents.detect(session.client);
+      /* Recorded so "nothing happened" is answerable from the activity history
+         rather than from a browser console: this is the check that decides
+         whether the user is offered an agent at all. */
+      const installed = Object.entries(found).filter(([, agent]) => agent.installed).map(([id, agent]) => `${id} ${agent.version || ''}`.trim());
+      await host.audit({ action: 'ssh-agent-detect', profile: profile.name, sshHost: profile.ssh.host, found: installed.join(', ') || 'none' });
+      log('info', `coding agents on "${profile.name}": ${installed.join(', ') || 'none'}`);
+      return found;
     },
     install: async (profileId, agentId) => {
       const { profile, session } = await ssh.connect(profileId);
