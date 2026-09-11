@@ -175,12 +175,20 @@ test('a catalog is validated before use, including its digests', () => {
 test('a registry configured as a local path is read as a path, drive letter and all', async (t) => {
   /* "C:\registry\catalog.json" parses as the one-character scheme "c:", so a
      Windows path used to be handed to fetch() untouched and every local or
-     offline catalog failed with "fetch failed". */
-  assert.equal(toUrl('C:\\registry\\catalog.json'), 'file:///C:/registry/catalog.json');
-  assert.equal(toUrl('D:/modules/catalog.json'), 'file:///D:/modules/catalog.json');
+     offline catalog failed with "fetch failed". The decision - path, not URL -
+     is the same everywhere; only the href a path turns into is per-platform,
+     so that is asserted where those paths are real. */
+  assert.match(toUrl('C:\\registry\\catalog.json'), /^file:/);
+  assert.match(toUrl('D:/modules/catalog.json'), /^file:/);
   assert.equal(toUrl('http://127.0.0.1:8788/catalog.json'), 'http://127.0.0.1:8788/catalog.json');
   assert.equal(toUrl('file:///C:/registry/catalog.json'), 'file:///C:/registry/catalog.json');
   assert.match(toUrl('./registry/catalog.json'), /^file:\/\/\/.+\/registry\/catalog\.json$/);
+  if (process.platform === 'win32') {
+    assert.equal(toUrl('C:\\registry\\catalog.json'), 'file:///C:/registry/catalog.json');
+    assert.equal(toUrl('D:/modules/catalog.json'), 'file:///D:/modules/catalog.json');
+  } else {
+    assert.equal(toUrl('/srv/registry/catalog.json'), 'file:///srv/registry/catalog.json');
+  }
 
   /* And the client actually loads one, with no server anywhere. */
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'st-local-catalog-'));
