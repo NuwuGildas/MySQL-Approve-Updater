@@ -169,7 +169,9 @@ function registerCorePages() {
     enter: () => { $('connForm').hidden = true; loadConns().catch((e) => toast(e.message, 'error')); const d = $('connModal'); if (!d.open) d.show(); },
     focus: () => $('connModal').querySelector('h2') });
   add({ id: 'modules', segment: 'modules', foot: true, label: '+ Add module', icon: NAV_ICON.modules, title: 'Modules', desc: 'Add optional tools to your workspace.',
-    enter: () => { showCompass(); openModuleMarketplace(); } });
+    enter: () => showModuleMarketplace(),
+    leave: () => { const view = $('moduleMarketplace'); if (view) view.hidden = true; },
+    focus: () => $('moduleMarketplaceTitle') });
   add({ id: 'settings', segment: 'settings', foot: true, label: 'Settings', icon: CC_ICON.settings, title: 'Settings', desc: 'Preferences, tool limits, AI assistant and module options.',
     enter: (parts) => { const sec = parts[0] || lastSettingsSection; lastSettingsSection = sec; renderSettings(); const d = $('settingsModal'); if (!d.open) d.show(); showSettingsSection(sec); },
     focus: () => $('settingsModal').querySelector('.settings-titlebar b') });
@@ -333,3 +335,50 @@ pageRegistry.onChange(() => {
   currentPageId = null;
   navigate(ROUTE_HOME, { replace: true, focus: false });
 });
+
+/* ---------- header overflow menu ----------
+   One button for the actions that do not earn permanent space. Nothing is
+   reimplemented here: each row forwards its click to the real control, so
+   whatever is wired to Settings, the theme toggle or a module's project buttons
+   keeps working untouched. A row whose control is hidden hides with it. */
+(function headerMoreMenu() {
+  const trigger = $('btnHdrMore');
+  const menu = $('hdrMoreMenu');
+  if (!trigger || !menu) return;
+
+  const rows = [...menu.querySelectorAll('[data-forward]')];
+  /** Show only the rows whose control exists and is available right now. */
+  const sync = () => {
+    for (const row of rows) {
+      const target = document.getElementById(row.dataset.forward);
+      // A row that mirrors an optional control (a module's) follows it exactly.
+      const follows = row.dataset.follows ? document.getElementById(row.dataset.follows) : null;
+      row.hidden = !target || (follows ? follows.hidden : false);
+    }
+    trigger.hidden = rows.every((row) => row.hidden);
+  };
+
+  const open = (on) => {
+    if (on) sync();
+    menu.hidden = !on;
+    trigger.setAttribute('aria-expanded', String(!!on));
+    if (on) menu.querySelector('[data-forward]:not([hidden])')?.focus();
+  };
+
+  trigger.addEventListener('click', (event) => { event.stopPropagation(); open(menu.hidden); });
+  menu.addEventListener('click', (event) => {
+    const row = event.target.closest('[data-forward]');
+    if (!row) return;
+    open(false);
+    document.getElementById(row.dataset.forward)?.click();
+  });
+  document.addEventListener('click', (event) => { if (!event.target.closest('.hdr-more')) open(false); });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !menu.hidden) { open(false); trigger.focus(); }
+  });
+
+  /* A module revealing its project buttons changes what belongs in here. */
+  new MutationObserver(() => { if (!menu.hidden) sync(); })
+    .observe(document.querySelector('.proj-switch') || document.body, { attributes: true, subtree: true, attributeFilter: ['hidden'] });
+  sync();
+})();

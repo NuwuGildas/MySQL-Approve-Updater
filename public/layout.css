@@ -1,22 +1,42 @@
 /* Application shell (layout-guide.md §3–§5): persistent left navigation, one active page,
    page header, session bar. Loaded after style.css; overrides are deliberate. */
 :root { --nav-w: 232px; --hdr-h: 58px; --nav-compact-w: 60px; }
-#moduleMarketplace { width: min(900px, calc(100vw - 2rem)); max-height: calc(100dvh - 3rem); padding: 1.5rem; overflow-y: auto; color: var(--text); background: var(--panel); border: 1px solid var(--border); border-radius: 16px; }
-#moduleMarketplace::backdrop { background: #0009; }
+#moduleMarketplace { margin-left: var(--nav-w); padding: 2rem clamp(1rem, 3vw, 3rem); color: var(--text); }
+#moduleMarketplace[hidden] { display: none; }
+#moduleMarketplace > * { max-width: 1120px; margin-left: auto; margin-right: auto; }
+#moduleMarketplace > input { display: block; width: 100%; box-sizing: border-box; }
+.module-market-head h1 { margin: 0; font-size: 1.6rem; letter-spacing: -.03em; }
+.module-market-head { margin-bottom: 1rem; }
 .module-market-head, .module-card-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
 .module-market-head h2, .module-card h3 { margin: 0; }
 .module-market-head p, .module-market-foot { color: var(--muted); font-size: .82rem; }
-#moduleSearch { width: 100%; margin: .5rem 0; }
+#moduleSearch { margin-top: .5rem; margin-bottom: 1.25rem; padding: .75rem 1rem; }
 #moduleMarketStatus { color: var(--amber); font-size: .82rem; }
 #moduleMarketStatus:empty { display: none; }
-.module-catalog { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 1rem; }
-.module-card { display: flex; flex-direction: column; gap: .65rem; padding: 1rem; border: 1px solid var(--border); border-radius: 12px; background: var(--panel2); min-width: 0; }
+.module-catalog { display: grid; grid-template-columns: minmax(0, 1fr); gap: .75rem; }
+.module-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: .85rem 1.25rem; padding: 1.1rem 1.2rem; border: 1px solid var(--border); border-radius: 12px; background: var(--panel2); min-width: 0; }
+.module-card-info { display: grid; gap: .4rem; min-width: 0; }
+.module-card-title { justify-content: flex-start; align-items: center; flex-wrap: wrap; gap: .5rem .75rem; }
 .module-card h3 { font-size: .95rem; }
-.module-card p { margin: 0; color: var(--muted); font-size: .82rem; line-height: 1.5; flex: 1; }
+.module-card p { margin: 0; color: var(--muted); font-size: .82rem; line-height: 1.5; }
 .module-card small { color: var(--muted); font-size: .7rem; }
 .module-card button { align-self: flex-start; min-height: 36px; }
 .module-card .badge { flex: none; font-size: .65rem; }
-body.shell.page-modules #compass { display: block !important; }
+.module-card > .module-actions { justify-content: flex-end; align-items: center; }
+.module-card > .module-caps, .module-card > .module-error, .module-card > .module-progress { grid-column: 1 / -1; }
+.module-card > .module-error { color: var(--red); }
+.module-caps { border-top: 1px solid var(--border); padding-top: .65rem; min-width: 0; }
+.module-caps summary { width: fit-content; border-radius: 4px; }
+.module-caps summary span { margin-left: .6rem; opacity: .75; font-size: .7rem; }
+.module-card .module-caps ul { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .35rem 1.8rem; margin: .8rem 0; line-height: 1.5; }
+.module-package-info { display: flex; flex-wrap: wrap; gap: .4rem 1rem; overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+  #moduleMarketplace { padding: 1rem; }
+  .module-card { grid-template-columns: minmax(0, 1fr); padding: 1rem; }
+  .module-card > .module-actions { justify-content: flex-start; }
+  .module-card .module-caps ul { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 767px) { #moduleMarketplace { margin-left: 0; } }
 #settingsModal .nav-item[hidden] { display: none; }
 body.shell.nav-collapsed { --nav-w: var(--nav-compact-w); }
 /* header: identity, navigation toggle, assistant, theme, settings */
@@ -274,3 +294,42 @@ button, input:not(.mono), select { font-family: inherit; }
 /* a view header shared by module pages: a title row with actions */
 .view-head { display: flex; align-items: center; gap: .5rem; flex: none; }
 .view-head button { padding: .2rem .55rem; font-size: .75rem; }
+
+/* ---- header overflow menu ----
+   The header had grown past one row: navigation, title, link state, the project
+   switcher, search, the assistant, theme and settings, plus whatever a module
+   reveals. At anything narrower than a wide desktop it wrapped onto two lines,
+   with search stranded on the left of the second row. The secondary actions now
+   sit behind one button; the originals keep their ids and their listeners and
+   the menu simply clicks them. */
+header { flex-wrap: nowrap; }
+header h1 { white-space: nowrap; }
+header .tool-crumb, header .sse-link { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hdr-more { position: relative; flex: none; }
+.hdr-more-menu {
+  position: absolute; z-index: 80; top: calc(100% + .4rem); right: 0; min-width: 15rem;
+  display: flex; flex-direction: column; gap: .1rem; padding: .35rem;
+  border: 1px solid var(--border); border-radius: 12px; background: var(--panel);
+  box-shadow: 0 1px 2px rgba(0,0,0,.18), 0 16px 40px rgba(0,0,0,.34);
+}
+.hdr-more-menu[hidden] { display: none; }
+.hdr-more-menu button {
+  display: flex; align-items: center; justify-content: flex-start; gap: .55rem; width: 100%;
+  padding: .5rem .6rem; border: 0; border-radius: 8px; background: transparent; color: var(--text);
+  font: inherit; font-size: .85rem; text-align: left; min-height: 36px;
+}
+.hdr-more-menu button:hover, .hdr-more-menu button:focus-visible { background: var(--panel2); outline: none; }
+.hdr-more-menu button svg { width: 16px; height: 16px; flex: none; color: var(--muted); }
+.hdr-more-menu button kbd { margin-left: auto; }
+.hdr-more-menu button[hidden] { display: none; }
+
+/* Below the widest layouts the header keeps only what is used constantly; the
+   rest is one click away in the menu. */
+@media (max-width: 1100px) {
+  header .hdr-search span, header .hdr-search kbd { display: none; }
+  header .sse-link { display: none; }
+}
+@media (max-width: 860px) {
+  header .hdr-search { display: none; }   /* it is in the menu, with its shortcut */
+  header #btnSettings, header .theme-toggle { display: none !important; }
+}
