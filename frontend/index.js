@@ -40,9 +40,13 @@ export async function activate(host) {
     intro: 'A project groups the connections, servers, connectors, repositories and deployments that belong together, and the assistant keeps one conversation per project. Create, rename, colour and delete projects here; <b>Set active</b> (or the header switcher) chooses the one the assistant works in.',
   });
 
+  /* Open the page and start a new project on it: the command, the launcher and
+     the header switcher's "New project" all mean this. */
+  const newProject = () => { host.navigate('#/projects'); setTimeout(() => mount.querySelector('#btnPjAdd')?.click(), 320); };
+
   host.registerCommand({
     id: 'new-project', title: 'New project', sub: 'Group resources and give the assistant its own conversation',
-    run: () => { host.navigate('#/projects'); setTimeout(() => mount.querySelector('#btnPjAdd')?.click(), 320); },
+    run: () => newProject(),
   });
 
   host.registerSearchSource({
@@ -67,6 +71,14 @@ export async function activate(host) {
     host.on(assign, 'click', () => resources.open());
     host.onDeactivate(() => { assign.hidden = true; });
   }
+
+  /* Managing projects IS this module. Declaring it is what reveals the header
+     switcher; the host withdraws it when this module is removed, and everything
+     is scoped back to the default project. */
+  host.projects.manage({
+    open: () => host.navigate('#/projects'),
+    create: () => newProject(),
+  });
 
   host.observe(host.shell.watchPage(drawer, 'projects'));
 
