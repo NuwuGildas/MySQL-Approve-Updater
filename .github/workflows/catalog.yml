@@ -16,14 +16,15 @@
 # still verifies both against its local trust anchor before it runs a byte.
 name: catalog
 
-# Deliberately NOT `on: release`. A release created by a workflow is created by
-# GITHUB_TOKEN, and events raised by GITHUB_TOKEN never start another workflow -
-# so waiting for the release event means waiting for ever. Pushing the tag is a
-# person's action, and that does trigger. The job below waits for the release
-# that tag is about to produce before it reads anything.
+# Rebuilding the catalog BY HAND. The catalog is normally published by the
+# module workflow that cut the release (scripts/module-workflow.js), because a
+# tag push only runs workflows present in the tagged commit and these tags point
+# into a module branch - and because a release created with GITHUB_TOKEN raises
+# no event that could start a workflow here.
+#
+# This exists for the times that is not enough: a release deleted or edited by
+# hand, a catalog asset lost, or a signing key rotated.
 on:
-  push:
-    tags: ['*-v*']
   workflow_dispatch:
 
 permissions:
@@ -42,25 +43,6 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: '22', cache: npm }
       - run: npm ci
-
-      # This run and the module's own build started from the same tag push, so
-      # the release may not exist yet. Wait for the one this tag is producing;
-      # a manual run has no tag of its own and catalogues what is already there.
-      - name: Wait for this tag's release
-        if: startsWith(github.ref, 'refs/tags/')
-        env: { GH_TOKEN: '${{ github.token }}' }
-        run: |
-          tag="${GITHUB_REF#refs/tags/}"
-          for attempt in $(seq 1 60); do
-            if gh release view "$tag" --json assets --jq '.assets[].name' | grep -q '\.json$'; then
-              echo "$tag is released"
-              exit 0
-            fi
-            echo "waiting for $tag ($attempt/60)"
-            sleep 15
-          done
-          echo "::error::$tag was never released; its module build must have failed"
-          exit 1
 
       # Every module release's description file. `<id>-v<version>` is the tag
       # shape the module workflows publish under; anything else (this catalog
