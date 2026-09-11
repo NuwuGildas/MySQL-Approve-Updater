@@ -47,10 +47,15 @@ async function activate(host) {
      proposing rather than changing. Connecting is this module's job, so the
      agent tool asks by profile id and never handles a client itself. */
   const agents = createRemoteAgents({ exec: (client, command, options) => ssh.execCapture(client, command, options), log });
+  /* The last detection per server. The assistant's prompt is rebuilt every turn
+     and must not cost an SSH round trip each time, so it reads this. */
+  const agentsByProfile = new Map();
   const remoteAgents = {
+    known: (profileId) => agentsByProfile.get(profileId) || null,
     detect: async (profileId) => {
       const { profile, session } = await ssh.connect(profileId);
       const found = await agents.detect(session.client);
+      agentsByProfile.set(profileId, found);
       /* Recorded so "nothing happened" is answerable from the activity history
          rather than from a browser console: this is the check that decides
          whether the user is offered an agent at all. */
@@ -70,6 +75,7 @@ async function activate(host) {
     run: async (profileId, { agent: wanted, task, serverName, timeoutSec }) => {
       const { session } = await ssh.connect(profileId);
       const found = await agents.detect(session.client);
+      agentsByProfile.set(profileId, found);
       const chosen = wanted && agents.ids().includes(wanted) ? wanted : agents.ids().find((id) => found[id].installed);
       if (!chosen) {
         throw Object.assign(new Error(`No coding agent is installed on "${serverName}". Install Claude Code or Codex from the server's card first.`), { status: 409 });

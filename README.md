@@ -10,7 +10,7 @@ publisher signature and activates it in place.
 | | |
 |---|---|
 | Module id | `servers` |
-| Version | 1.1.4 |
+| Version | 1.2.1 |
 | Host SDK | `^1.0.0` |
 | Branch | `modules/servers` |
 
@@ -21,6 +21,7 @@ publisher signature and activates it in place.
 - `ui:settings`
 - `assistant:tools`
 - `assistant:proposals`
+- `assistant:credential`
 - `projects:read`
 - `storage:module`
 - `events:subscribe`

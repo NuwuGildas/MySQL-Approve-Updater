@@ -34,6 +34,7 @@ function setup(t, { aiAssist = {}, agentAnswer = null, agentError = null } = {})
 
   const asked = [];
   const remoteAgents = {
+    known: () => ({ claude: { id: 'claude', label: 'Claude Code', installed: true, version: '1' }, codex: { id: 'codex', label: 'Codex CLI', installed: false } }),
     detect: async () => ({ claude: { id: 'claude', installed: true, version: '1' }, codex: { id: 'codex', installed: false } }),
     install: async () => ({ ok: true }),
     run: async (profileId, options) => {
@@ -46,7 +47,7 @@ function setup(t, { aiAssist = {}, agentAnswer = null, agentError = null } = {})
   const settings = { aiAssist: { sshRead: true, sshWrite: true, sshDestructive: false, sshMemory: true, ...aiAssist } };
   const fixture = createTestHost({ terminals, settings, profiles, remoteAgents });
   t.after(async () => { await fixture.flush(); });
-  return { ...fixture, terminals, live, ran, asked, settings };
+  return { ...fixture, terminals, live, ran, asked, settings, remoteAgents };
 }
 
 const answer = (commands, extra = {}) => ({
@@ -180,4 +181,39 @@ test('investigating needs no terminal handover; turning findings into cards does
   assert.equal(again.proposed[0].status, 'pending_user_approval');
   assert.equal(ctx.proposals.length, 1);
   assert.deepEqual(ctx.ran, [], 'still nothing has run');
+});
+
+test('the prompt names the agent that is there, and says to use it rather than offer it', async (t) => {
+  /* What this exists to stop: "here are five commands I could run, and there is
+     also an agent - which would you prefer?" A question about the server is
+     answered by calling the agent, not by handing the user a menu. */
+  const ctx = setup(t, { agentAnswer: answer([]) });
+  const session = await ctx.agent.attach('p1');
+  const prompt = await ctx.agent.promptFragment(session.sessionId);
+
+  assert.match(prompt, /ANSWER THE QUESTION/);
+  assert.match(prompt, /not an answer, it is a menu/);
+  assert.match(prompt, /Claude Code 1 IS INSTALLED ON THIS SERVER/, 'the agent is named, not hedged as "may be installed"');
+  assert.match(prompt, /without asking permission and without handing over the terminal/);
+  assert.match(prompt, /Do not offer it as a choice/);
+
+  /* Handover is mentioned, but only as something needed to CHANGE things. */
+  assert.match(prompt, /ONLY when something actually needs running/);
+});
+
+test('with the terminal already handed over, the prompt does not talk about handover at all', async (t) => {
+  const ctx = setup(t, { agentAnswer: answer([]) });
+  const session = await ctx.agent.attach('p1');
+  await ctx.terminals.setControl(session.sessionId, 'assistant');
+  const prompt = await ctx.agent.promptFragment(session.sessionId);
+  assert.equal(/Ask for terminal control/.test(prompt), false);
+});
+
+test('with no agent on the server, the prompt says to fall back rather than naming one', async (t) => {
+  const ctx = setup(t, { agentAnswer: answer([]) });
+  ctx.remoteAgents.known = () => ({ claude: { installed: false }, codex: { installed: false } });
+  const session = await ctx.agent.attach('p1');
+  const prompt = await ctx.agent.promptFragment(session.sessionId);
+  assert.equal(/IS INSTALLED ON THIS SERVER/.test(prompt), false);
+  assert.match(prompt, /prefer ssh_server_agent/);
 });

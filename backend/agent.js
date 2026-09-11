@@ -116,6 +116,16 @@ function createSshAgent({ host, terminals, settings, modelLimits = {}, remoteAge
   }
 
   /* ---- the prompt fragment the host puts in front of the model ---- */
+  /* What the last detection found on a server, so the prompt can name it.
+     Detection costs an SSH round trip and the prompt is built on every turn, so
+     this reads the cache the module fills when it looks - never the wire. */
+  const knownAgent = (profileId) => {
+    const found = remoteAgents?.known?.(profileId);
+    if (!found) return null;
+    const present = Object.values(found).filter((agent) => agent.installed);
+    return present.length ? present.map((agent) => `${agent.label}${agent.version ? ' ' + agent.version : ''}`).join(' and ') : null;
+  };
+
   async function promptFragment(sessionId) {
     if (!sessionId) return '\n- No server terminal session is selected. SSH tools are unavailable.';
     const state = await status(sessionId);
@@ -124,16 +134,28 @@ function createSshAgent({ host, terminals, settings, modelLimits = {}, remoteAge
     const terminal = terminalSnapshot(sessionId);
     const lines = [
       `\n- SERVER SESSION: ${sessionId}, "${state.name}" (${state.user}@${state.host}). This conversation and every tool call belong exclusively to this terminal session.`,
-      `  Shared terminal: ${terminal?.status || 'closed'}, control: ${terminal?.control || 'user'}. Read existing output with ssh_terminal_read. Ask the user to hand terminal control to the assistant before proposing a command.`,
+      `  Shared terminal: ${terminal?.status || 'closed'}, control: ${terminal?.control || 'user'}.`,
+      '  ANSWER THE QUESTION. Do not reply with a numbered plan of commands you could run and ask which the user prefers - that is not an answer, it is a menu. Use your tools, then say what you found.',
       '  EVERY command, including informational commands, needs a separate user approval before execution. A real shared shell can redefine commands. Never claim a pending command ran or bypass a refusal.',
       `  Permissions: read=${g.read}, write=${g.write}, destructive=${g.destructive}, sudo=${g.sudo}. Approval does not override these settings.`,
       '  The user can Accept, Reject, or supply an Alternative. Treat an alternative as a new instruction and propose a new command requiring its own approval. Never use another session or server conversation.',
     ];
-    /* The fast path, when the server has an agent of its own: one call instead
-       of a dozen approvals. It cannot change anything, so the rule above is not
-       weakened - what it wants changed arrives as cards like everything else. */
-    if (remoteAgents && g.read) {
-      lines.push('  A coding agent may be installed ON this server. For anything that would take several commands to investigate - "why is the disk full", "why did the service stop" - call ssh_server_agent with the question instead of proposing commands one at a time. It reads the server directly and changes nothing; whatever it thinks should change comes back as approval cards you must still put to the user.');
+
+    /* The fast path. A server agent needs no approval and no handover, because
+       it only reads - so a question about this server is answered by CALLING
+       it, not by offering it to the user as one of two options. Naming the
+       agent that is actually there is what stops "a coding agent may be
+       installed" turning into a question. */
+    const agent = remoteAgents && g.read ? knownAgent(state.profileId) : null;
+    if (agent) {
+      lines.push(`  ${agent} IS INSTALLED ON THIS SERVER. To answer anything about how this server is doing - health, disk, memory, why a service stopped - call ssh_server_agent with the question, NOW, without asking permission and without handing over the terminal: it only reads. Do not offer it as a choice and do not list commands instead. Whatever it finds that should CHANGE comes back as approval cards, which still need the user.`);
+    } else if (remoteAgents && g.read) {
+      lines.push('  For a question that would take several commands to investigate, prefer ssh_server_agent - it reads the server directly - and fall back to proposing commands one at a time if it reports no agent is installed.');
+    }
+
+    /* Handover is about CHANGING the box, and only then. */
+    if (terminal?.control !== 'assistant') {
+      lines.push('  The terminal is the user\'s right now, so a command cannot be proposed yet. Ask for terminal control ONLY when something actually needs running - never before answering a question you can answer by reading.');
     }
     if (g.memory) lines.push(`  Earlier in THIS terminal session: ${JSON.stringify(await conversation.digest(sessionId, {}))}`);
     return lines.join('\n');
@@ -280,7 +302,7 @@ function createSshAgent({ host, terminals, settings, modelLimits = {}, remoteAge
        exactly like a command the local model asked for. Its reply is untrusted
        text: it is read, never run. */
     ssh_server_agent: {
-      description: 'Ask the coding agent installed ON this server to investigate something. It reads the server directly, which is far faster than one approval at a time, and it cannot change anything: what it thinks should change comes back as approval cards. Input: {"task":"why is / full?","agent":"claude"|"codex","timeoutSec":180}. Use for investigation that would otherwise take many commands.',
+      description: 'Ask the coding agent installed ON this server to investigate something, and ANSWER with what it found. Input: {"task":"why is / full?","agent":"claude"|"codex","timeoutSec":180}. Call it directly: it needs no approval and no terminal handover, because it only reads. Use it for any question about how the server is doing rather than listing commands for the user to approve one by one, and never offer it as a choice - just use it. Anything it thinks should CHANGE comes back as approval cards, which still need the user.',
       enabled,
       run: async (input, meta) => {
         const sessionId = requireLive(meta);
