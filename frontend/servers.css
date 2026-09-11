@@ -180,14 +180,13 @@ body.ws-page .ws-server { max-width: 100%; }
 }
 /* the §16 "dock beside the workspace" preference must not fight the split: while the assistant is
    parked in a pane the pane sizes it, and the terminal page keeps the full width */
-@media (min-width: 1440px) {body.shell.agent-dock-pref.agent-open #agentDrawer.ag-docked { top: auto !important; right: auto !important; bottom: auto !important; left: auto !important; width: auto !important; height: auto !important; }
+@media (min-width: 1440px) {
+  body.shell.agent-dock-pref.agent-open #agentDrawer.ag-docked { top: auto !important; right: auto !important; bottom: auto !important; left: auto !important; width: auto !important; height: auto !important; }
+  /* Terminals hosts the assistant in its own pane, so this view keeps the full
+     width: it opts out of the margin the host gives every module page. */
+  body.shell.agent-dock-pref.agent-open #modulePages > .module-mount > #sshDrawer { margin-right: 0; }
 }
-@media (min-width: 1440px) {body.shell.agent-dock-pref.agent-open #agentDrawer { top: var(--hdr-h) !important; right: 0 !important; left: auto !important; bottom: 0 !important; width: var(--agent-w) !important; height: auto !important; max-height: none; border-radius: 0; border-top: 0; border-right: 0; border-bottom: 0; box-shadow: none; resize: horizontal; }
-body.shell.agent-dock-pref.agent-open #agentDrawer .ag-head { cursor: default; }
-body.shell.agent-dock-pref.agent-open #compass, body.shell.agent-dock-pref.agent-open main, body.shell.agent-dock-pref.agent-open #pageHead { margin-right: var(--agent-w); }
-body.shell.agent-dock-pref.agent-open #deployDrawer, body.shell.agent-dock-pref.agent-open #serversDrawer, body.shell.agent-dock-pref.agent-open #connectorsDrawer, body.shell.agent-dock-pref.agent-open #projectsDrawer { margin-right: var(--agent-w); }
-body.shell.agent-dock-pref.agent-open #sqlConsole, body.shell.agent-dock-pref.agent-open #schemaModal[open]:not([data-st-modal]), body.shell.agent-dock-pref.agent-open #settingsModal[open]:not([data-st-modal]), body.shell.agent-dock-pref.agent-open #connModal[open]:not([data-st-modal]) { right: var(--agent-w); }
-}.xterm, .xterm * { font-family: ui-monospace, Consolas, "Cascadia Mono", monospace; }
+.xterm, .xterm * { font-family: ui-monospace, Consolas, "Cascadia Mono", monospace; }
 #serverFormModal { width: min(640px, 94vw); }
 #serverFormModal #addServerForm[hidden] { display: none; }
 

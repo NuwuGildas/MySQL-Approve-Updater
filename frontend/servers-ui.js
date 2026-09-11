@@ -512,7 +512,40 @@ export function createServersUI({ host, mount, Terminal, FitAddon }) {
     c.resizeListener = c.term.onResize(({ cols, rows }) => { if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'resize', cols, rows })); });
   }
 
-  async function openSsh(profileId, opts = {}) {
+  const openingTerminals = new Map();
+  const openingNotices = document.createElement('div');
+  openingNotices.className = 'ssh-opening-notices';
+  mount.appendChild(openingNotices);
+  host.styles.add(`
+    .ssh-opening-notices { position: fixed; top: 80px; right: 24px; z-index: 10000; display: grid; gap: 8px; max-width: min(420px, calc(100vw - 48px)); }
+    .ssh-opening-notice { display: flex; align-items: center; gap: 12px; padding: 14px 18px; border: 1px solid var(--accent); border-radius: 8px; background: var(--panel, #18202d); color: var(--text, #fff); box-shadow: 0 4px 18px #0004; }
+    .ssh-opening-notice progress { width: 48px; flex-shrink: 0; }
+  `);
+
+  function openSsh(profileId, opts = {}) {
+    if (!profileId) return openSshSession(profileId, opts);
+    if (openingTerminals.has(profileId)) return openingTerminals.get(profileId);
+    const notice = document.createElement('div');
+    notice.className = 'ssh-opening-notice';
+    notice.setAttribute('role', 'status');
+    notice.setAttribute('aria-live', 'polite');
+    const progress = document.createElement('progress');
+    progress.setAttribute('aria-label', 'Opening terminal');
+    const label = document.createElement('span');
+    label.textContent = opts.label ? `Opening terminal for ${opts.label}?` : 'Opening terminal?';
+    notice.append(progress, label);
+    openingNotices.appendChild(notice);
+    const pending = openSshSession(profileId, opts).catch((error) => {
+      toast(error.message, 'error');
+    }).finally(() => {
+      notice.remove();
+      openingTerminals.delete(profileId);
+    });
+    openingTerminals.set(profileId, pending);
+    return pending;
+  }
+
+  async function openSshSession(profileId, opts = {}) {
     const pid = (typeof profileId === 'string') ? profileId : null;
     if (!pid) { await openServers(); toast('Choose a server to open its shared terminal session.'); return; }
     if (typeof Terminal === 'undefined') { toast('Terminal library not loaded'); return; }
@@ -534,7 +567,7 @@ export function createServersUI({ host, mount, Terminal, FitAddon }) {
         selected ||= resumable.find((s) => (s.sessionId || s.id) === remembered)?.sessionId || resumable[0]?.sessionId || resumable[0]?.id || null;
       } catch (e) { toast('Could not list earlier sessions: ' + e.message, 'warning'); }
     }
-    try { attached = await http('/agent/attach', { method: 'POST', body: JSON.stringify({ profileId: pid, ...(selected ? { sessionId: selected } : {}), projectId: currentProjectId }) }); }
+    try { attached = await http('/agent/attach', { method: 'POST', body: JSON.stringify({ profileId: pid, ...(selected ? { sessionId: selected } : {}), projectId: host.projects.activeId() }) }); }
     catch (e) { toast(e.message, 'error'); return; }
     if (requestEpoch !== sshOpenEpoch) return;
     if (!attached.sessionId) { toast('The server did not return a shared terminal session.', 'error'); return; }
@@ -552,7 +585,7 @@ export function createServersUI({ host, mount, Terminal, FitAddon }) {
     consoles.set(id, c);
     $('sshConsoleHost').appendChild(buildConsoleEl(c));
     c.term = new Terminal({ cursorBlink: true, fontSize: 13, fontFamily: 'ui-monospace, Consolas, monospace', theme: host.ui.terminalTheme() });
-    c.fit = new FitAddon.FitAddon(); c.term.loadAddon(c.fit);
+    c.fit = new FitAddon(); c.term.loadAddon(c.fit);
     c.term.open(c.termHost);
     c.sessions = sessions;
     updateTerminalSession(c, { ...attached.terminal, sessionId: attached.sessionId });
@@ -652,9 +685,10 @@ export function createServersUI({ host, mount, Terminal, FitAddon }) {
   /** Keep the address on the session being watched, without a new history entry. */
   function syncTerminalRoute(sessionId) {
     if (!sessionId) return;
-    if (host.shell.parseRoute(location.hash)?.id !== 'terminals') return;
     const r = '#/terminals/' + sessionId;
-    if (location.hash !== r) history.replaceState(null, '', r);
+    if (host.shell.parseRoute(location.hash)?.id !== 'terminals') {
+      host.navigate(r);
+    } else if (location.hash !== r) host.shell.replaceRoute(r);
   }
 
   /** The Terminals route: reopen a named session, else the most recently used live one. */
