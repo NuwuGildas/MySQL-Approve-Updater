@@ -3,7 +3,7 @@
   "id": "servers",
   "name": "Servers & Terminals",
   "description": "SSH server profiles with live VM stats, shared terminals you and the assistant work in together, and approval-gated assistant commands.",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "publisher": "Server Tools",
   "hostSdk": "^1.0.0",
   "frontend": "frontend/index.js",

@@ -98,11 +98,16 @@ body.drawers-h #serversDrawer.open { transform: translateY(0); }
 .ws-empty-list { display: flex; flex-wrap: wrap; gap: .5rem; }
 .ws-resume { display: flex; flex-direction: column; align-items: flex-start; gap: .1rem; padding: .45rem .7rem; text-align: left; }
 .ws-resume span { font-size: .7rem; color: var(--muted); font-family: ui-monospace, Consolas, monospace; }
-.ws-tabs { display: flex; gap: .25rem; flex: none; margin: .45rem 0 .5rem; border-bottom: 1px solid var(--border); }
+.ws-tabs { display: flex; gap: .25rem; flex: none; margin: .45rem 0 0; border-bottom: 1px solid var(--border); }
 .ws-tabs[hidden] { display: none; }
-.ws-tab { appearance: none; border: 1px solid transparent; border-bottom: 0; background: transparent; color: var(--muted); font: inherit; font-size: .8rem; font-weight: 600; padding: .4rem .9rem; border-radius: 9px 9px 0 0; cursor: pointer; min-height: 36px; }
-.ws-tab:hover { color: var(--text); }
-.ws-tab[aria-selected="true"] { color: var(--text); background: var(--panel2); border-color: var(--border); box-shadow: inset 0 -2px 0 var(--accent); }
+/* A tab in a strip: the accent underline says which one is on, the same way
+   the sidebar and the settings list do. It used to be drawn as a folder tab -
+   squared bottom corners, no bottom border, a filled box - which only reads as
+   joined if it TOUCHES the panel, and the strip margin plus the split padding
+   left an 18px gap below it. */
+.ws-tab { appearance: none; border: 0; background: transparent; color: var(--muted); font: inherit; font-size: .8rem; font-weight: 600; padding: .4rem .9rem; border-radius: 8px 8px 0 0; cursor: pointer; min-height: 36px; }
+.ws-tab:hover:not([aria-selected="true"]) { color: var(--text); background: var(--panel2); }
+.ws-tab[aria-selected="true"] { color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
 .ws-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .ws-split { flex: 1; min-height: 0; display: flex; gap: .6rem; border: 1px solid var(--border); padding-inline: .4rem;}
 .ws-pane { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
@@ -158,7 +163,7 @@ body.shell #serversDrawer .btn-dock, body.shell #btnServersClose { display: none
 @media (max-width: 767px) {body.shell #serversDrawer { margin-left: 0; }
 }body.ws-wide .ws-pane-chat { flex: 0 0 clamp(360px, 32%, 480px); }
 body.ws-page .ws-split { border: 0; padding: .65rem 0 0; gap: 1rem; }
-body.ws-page .ws-pane-term { border: 1px solid var(--border); border-radius: 12px;border-top-left-radius: 0; background: var(--panel); overflow: hidden; }
+body.ws-page .ws-pane-term { border: 1px solid var(--border); border-radius: 12px; background: var(--panel); overflow: hidden; }
 body.ws-page .ws-ident { gap: .5rem; margin: 0; padding: .65rem .75rem; background: var(--panel2); border-bottom: 1px solid var(--border); }
 body.ws-page .ssh-console { padding-bottom: 0; }
 body.ws-page .ssh-console-term { border: 0; border-radius: 0; padding: .75rem; }
@@ -179,7 +184,10 @@ body.ws-page #sshTabs { margin-top: .1rem; }
 
 @media (max-width: 767px) {body.ws-page .ws-ident { row-gap: .3rem; }
 body.ws-page .ws-server { max-width: 100%; }
-.ws-tab { flex: 1; }
+/* Tabs size to their label. Stretching them to half the strip each put the
+   selected underline under half a screen of empty space, which reads as a
+   filled panel rather than a tab. */
+.ws-tab { flex: none; }
 }
 /* the §16 "dock beside the workspace" preference must not fight the split: while the assistant is
    parked in a pane the pane sizes it, and the terminal page keeps the full width */

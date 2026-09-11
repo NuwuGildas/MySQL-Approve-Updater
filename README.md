@@ -10,7 +10,7 @@ publisher signature and activates it in place.
 | | |
 |---|---|
 | Module id | `servers` |
-| Version | 1.2.1 |
+| Version | 1.2.2 |
 | Host SDK | `^1.0.0` |
 | Branch | `modules/servers` |
 
