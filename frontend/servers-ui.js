@@ -99,6 +99,37 @@ export function createServersUI({ host, mount, Terminal, FitAddon }) {
     return `<div class="term-dd-sep"></div>${rows.join('')}`;
   }
 
+  /**
+   * "Terminal + AI" promises the assistant working ON this server, so opening it
+   * makes sure there is a coding agent there to work with. Installing one runs
+   * an installer on the user's SERVER, so it is ASKED - once per server, and
+   * never in the way: the terminal opens regardless, and a refusal is remembered
+   * for the rest of the session.
+   */
+  const agentOffered = new Set();
+  async function ensureServerAgent(profileId, serverName) {
+    const found = await refreshServerAgents(profileId);
+    if (!found) return null;                                   // unreachable: leave it alone
+    if (Object.values(found).some((agent) => agent.installed)) { await loadServers().catch(() => {}); return found; }
+    if (agentOffered.has(profileId)) return found;
+    agentOffered.add(profileId);
+
+    const ok = await confirm({
+      title: 'Install a coding agent on this server?',
+      message: `<b>${esc(serverName)}</b> has no coding agent. One lets the assistant investigate the server directly instead of asking you to approve every single command.`
+        + '<br><br>It can change nothing by itself: whatever it thinks should change still comes back as an approval card here.'
+        + '<br><br>Installing runs the official installer on the server, and you sign in to it once from the server\'s own terminal.',
+      okLabel: 'Install Claude Code',
+      cancelLabel: 'Not now',
+    });
+    if (!ok) {
+      toast(`No coding agent on ${serverName}: the assistant will work one approved command at a time. Install one later from the Terminal menu.`);
+      return found;
+    }
+    await installServerAgent(profileId, 'claude', serverName);
+    return refreshServerAgents(profileId);
+  }
+
   /** Which agents a connected server has. Cached per server for the card. */
   const serverAgents = new Map();
   async function refreshServerAgents(profileId) {
@@ -582,6 +613,8 @@ export function createServersUI({ host, mount, Terminal, FitAddon }) {
     if (existing) {
       showSshDrawer(); activateConsole(existing.id); selectAgentSession(existing.session);
       if (opts.ai || agentIsDocked()) await host.assistantUi.open();
+      // The terminal is already up; finding or installing the agent follows it.
+      if (opts.ai) ensureServerAgent(pid, opts.label || existing.label).catch(() => {});
       return existing.session;
     }
     if (consoles.size >= MAX_CONSOLES) { toast(`You can view ${MAX_CONSOLES} SSH consoles at once. Close a view first; its session will keep running.`); return; }
@@ -622,6 +655,7 @@ export function createServersUI({ host, mount, Terminal, FitAddon }) {
     refreshLiveTerminals(); // a new session belongs on the sidebar straight away
     setTimeout(() => { refitConsole(c); connectConsole(c); c.term.focus(); }, 30);
     if (opts.ai || agentIsDocked()) await host.assistantUi.open();
+    if (opts.ai) ensureServerAgent(pid, label).catch(() => {});
     return attached;
   }
   let sshOpenEpoch = 0;
