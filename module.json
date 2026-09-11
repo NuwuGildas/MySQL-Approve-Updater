@@ -1,0 +1,20 @@
+{
+  "packageFormat": 1,
+  "id": "history",
+  "name": "Activity History",
+  "description": "A searchable timeline of every decision, edit, session, deployment and assistant action recorded by this application.",
+  "version": "1.0.0",
+  "publisher": "Server Tools",
+  "hostSdk": "^1.0.0",
+  "frontend": "frontend/index.js",
+  "backend": "backend/index.js",
+  "dependencies": {},
+  "capabilities": [
+    "ui:pages",
+    "ui:commands",
+    "audit:read",
+    "events:subscribe",
+    "storage:module"
+  ],
+  "pages": ["history"]
+}

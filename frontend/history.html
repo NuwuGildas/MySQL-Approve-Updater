@@ -1,0 +1,19 @@
+<aside id="auditDrawer" aria-label="Activity history" inert>
+  <div class="audit-head">
+    <h2 style="margin:0;font-size:.85rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)">History <span class="sec-hint" id="auditCount"></span></h2>
+    <span class="spacer"></span>
+    <button id="btnAuditResume" class="aireview glossy" title="Open the AI chat and continue the conversation">Resume AI chat</button>
+    <button id="btnAuditRefresh" title="Reload">Refresh</button>
+    <button id="btnAuditDownload" title="Download the raw JSON-lines file">Download</button>
+    <button id="btnAuditDock" class="btn-dock" title="Drawer orientation: vertical (right) or horizontal (bottom); applies to all drawers">Vertical</button>
+    <button id="btnAuditClose" title="Close (Esc)">✕</button>
+  </div>
+  <div class="audit-filters">
+    <input id="auditSearch" type="search" placeholder="Search events…" aria-label="Search history" autocomplete="off">
+    <select id="auditTime" aria-label="Time range"><option value="all">All time</option><option value="today">Last 24 hours</option><option value="7d">Last 7 days</option><option value="30d">Last 30 days</option></select>
+    <select id="auditOutcome" aria-label="Outcome"><option value="all">Any outcome</option><option value="succeeded">Succeeded / approved</option><option value="failed">Failed / rejected</option></select>
+    <button id="btnAuditClear" type="button" hidden>Clear filters</button>
+  </div>
+  <div id="auditChips"></div>
+  <div id="auditBody"></div>
+</aside>

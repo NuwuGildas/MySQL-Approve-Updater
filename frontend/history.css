@@ -1,0 +1,77 @@
+/* history: styles moved out of the base application's style.css.
+   Scoped to this module's own views; removing the module removes them. */
+#auditDrawer:not(.open) { visibility: hidden; transition: transform .25s ease, visibility 0s linear .25s; }
+body:not(.drawers-ready) #auditDrawer { transition: none !important; }
+body.drawers-h #auditDrawer {
+  top: auto; left: 0; right: 0; bottom: 0;
+  width: auto; min-width: 0; max-width: none;
+  height: 55vh; max-height: 92vh;
+  border-left: 0; border-top: 1px solid var(--border);
+  box-shadow: 0 -12px 32px rgba(0, 0, 0, .45);
+  transform: translateY(103%);
+}
+body.drawers-h #auditDrawer.open { transform: translateY(0); }
+#auditDrawer {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 19;
+  width: min(720px, 96vw);
+  display: flex; flex-direction: column; overflow: hidden;
+  background: var(--panel); border-left: 1px solid var(--border);
+  box-shadow: -12px 0 32px rgba(0, 0, 0, .45); padding: .8rem 1rem;
+  transform: translateX(103%); transition: transform .25s ease;
+}
+#auditDrawer.open { transform: translateX(0); }
+.audit-head { display: flex; align-items: center; gap: .5rem; margin-bottom: .5rem; flex: none; flex-wrap: nowrap; }
+.audit-head button { padding: .2rem .55rem; font-size: .75rem; }
+#auditChips { display: flex; gap: .35rem; flex-wrap: wrap; margin-bottom: .5rem; flex: none; }
+.chip-btn { padding: .18rem .6rem; font-size: .74rem; border: 1px solid var(--border); border-radius: 99px; background: var(--panel2); color: var(--muted); cursor: pointer; }
+.chip-btn.on { color: #fff; background: #1c3a5e; border-color: #2d5f9e; }
+.chip-btn .chip-n { opacity: .6; font-size: .68rem; }
+#auditBody { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding-right: .2rem; }
+.tl-day { position: sticky; top: 0; background: var(--panel); color: var(--muted); font-size: .66rem; text-transform: uppercase; letter-spacing: .08em; padding: .35rem .1rem .25rem; z-index: 1; }
+.tl-item { display: flex; gap: .55rem; align-items: flex-start; padding: .4rem .2rem; border-bottom: 1px solid rgba(255,255,255,.04); }
+.tl-ic { flex: none; width: 22px; height: 22px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: .72rem; background: var(--panel2); border: 1px solid var(--border); color: var(--muted); }
+.tl-ic.approve { color: var(--green); border-color: #2f5d43; }
+.tl-ic.rules { color: var(--amber); border-color: #7a5c17; }
+.tl-ic.ai { color: var(--accent); border-color: #2d5f9e; }
+.tl-ic.ssh { color: var(--accent); border-color: #2d5f9e; font-family: ui-monospace, Consolas, monospace; }
+.tl-body { flex: 1; min-width: 0; }
+.tl-desc { font-size: .82rem; overflow-wrap: anywhere; }
+.tl-desc b { color: var(--text); }
+.tl-time { flex: none; color: #55677a; font-size: .68rem; font-family: ui-monospace, Consolas, monospace; margin-top: .1rem; }
+.tl-raw { margin-top: .15rem; }
+.tl-raw summary { cursor: pointer; color: var(--muted); font-size: .68rem; }
+.tl-raw pre { margin: .2rem 0 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted); font-size: .68rem; background: var(--code-bg, #0b0f13); border: 1px solid var(--border); border-radius: 6px; padding: .4rem; max-height: 220px; overflow: auto; }
+.tl-chat { margin: .35rem 0; max-width: 88%; cursor: pointer; }
+.tl-chat.me { margin-left: auto; }
+.tl-chat .tl-who { font-size: .62rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: .12rem; }
+.tl-chat .tl-bubble { font-size: .82rem; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; padding: .4rem .55rem; }
+.tl-chat.me .tl-bubble { background: #1c3a5e; border-color: #2d5f9e; }
+.tl-chat:hover .tl-bubble { border-color: var(--accent); }
+.tl-tools { font-size: .64rem; color: var(--muted); margin-top: .15rem; font-family: ui-monospace, Consolas, monospace; }
+.audit-filters { display: flex; gap: .4rem; flex-wrap: wrap; align-items: center; margin: .2rem 0 .5rem; }
+.audit-filters input[type=search] { flex: 1 1 180px; min-width: 0; }
+.audit-filters select { flex: 0 1 170px; width: auto; }
+.tl-ic.deploy { color: var(--green); border-color: #2f5d43; }
+:root[data-theme="light"] .chip-btn.on { background: #dfeafb; border-color: #1e6fd9; color: #123f80; }
+:root[data-theme="light"] .tl-ic.approve { border-color: #9ad2b0; }
+:root[data-theme="light"] .tl-ic.rules { border-color: #e2c48c; }
+:root[data-theme="light"] .tl-ic.ai, :root[data-theme="light"] .tl-ic.ssh { border-color: #9dc0f0; }
+:root[data-theme="light"] .tl-ic.deploy { border-color: #9ad2b0; }
+
+/* history: styles moved out of the base application's layout.css.
+   Scoped to this module's own views; removing the module removes them. */
+body.shell #auditDrawer, body.shell.drawers-h #auditDrawer {
+  position: relative; inset: auto; top: auto; left: auto; right: auto; bottom: auto; z-index: auto;
+  margin-left: var(--nav-w); width: auto; min-width: 0; max-width: none;
+  height: calc(100dvh - var(--hdr-h)); max-height: none;
+  transform: none !important; transition: none !important; visibility: visible;
+  border: 0; box-shadow: none; display: none; flex-direction: column;
+}
+body.shell #auditDrawer.open { display: flex; }
+body.shell #auditDrawer { padding: .9rem clamp(1rem, 2.5vw, 1.6rem); }
+body.shell #auditDrawer .btn-dock, body.shell #btnAuditClose { display: none; }
+
+@media (max-width: 767px) {body.shell #auditDrawer { margin-left: 0; }
+}
+@media (min-width: 1440px) {body.shell.agent-dock-pref.agent-open #auditDrawer { margin-right: var(--agent-w); }
+}
