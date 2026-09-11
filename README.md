@@ -21,6 +21,7 @@ publisher signature and activates it in place.
 - `ui:settings`
 - `assistant:tools`
 - `assistant:proposals`
+- `projects:read`
 - `storage:module`
 - `events:subscribe`
 - `audit:write`
