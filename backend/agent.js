@@ -22,7 +22,7 @@ const MAX_TIMEOUT_MS = 120000;
 const fail = (status, message) => Object.assign(new Error(message), { status });
 const now = () => new Date().toISOString();
 
-function createSshAgent({ host, terminals, settings, modelLimits = {}, log = () => {} }) {
+function createSshAgent({ host, terminals, settings, modelLimits = {}, remoteAgents = null, log = () => {} }) {
   /* How much of a terminal the MODEL may be given, independent of the viewer's
      own replay budget (backend/terminal.js outputMax). */
   const limits = { ...MODEL_LIMITS };
@@ -129,6 +129,12 @@ function createSshAgent({ host, terminals, settings, modelLimits = {}, log = () 
       `  Permissions: read=${g.read}, write=${g.write}, destructive=${g.destructive}, sudo=${g.sudo}. Approval does not override these settings.`,
       '  The user can Accept, Reject, or supply an Alternative. Treat an alternative as a new instruction and propose a new command requiring its own approval. Never use another session or server conversation.',
     ];
+    /* The fast path, when the server has an agent of its own: one call instead
+       of a dozen approvals. It cannot change anything, so the rule above is not
+       weakened - what it wants changed arrives as cards like everything else. */
+    if (remoteAgents && g.read) {
+      lines.push('  A coding agent may be installed ON this server. For anything that would take several commands to investigate - "why is the disk full", "why did the service stop" - call ssh_server_agent with the question instead of proposing commands one at a time. It reads the server directly and changes nothing; whatever it thinks should change comes back as approval cards you must still put to the user.');
+    }
     if (g.memory) lines.push(`  Earlier in THIS terminal session: ${JSON.stringify(await conversation.digest(sessionId, {}))}`);
     return lines.join('\n');
   }
@@ -265,6 +271,63 @@ function createSshAgent({ host, terminals, settings, modelLimits = {}, log = () 
         const from = Math.min(1000000, Math.max(1, Math.floor(Number(input?.from) || 1)));
         const lines = Math.min(400, Math.max(1, Math.floor(Number(input?.lines) || 200)));
         return propose(sessionId, { cmd: `head -n ${from + lines - 1} -- '${filename}' | tail -n ${lines}`, why: `Read ${filename}`, timeoutMs: DEFAULT_TIMEOUT_MS });
+      },
+    },
+    /* The agent installed on the server. It reads the box at its own speed -
+       which is the point, a dozen approvals to answer one question is not
+       working - and everything it wants CHANGED comes back through propose(),
+       so it is classified, gated by Settings and approved in this terminal
+       exactly like a command the local model asked for. Its reply is untrusted
+       text: it is read, never run. */
+    ssh_server_agent: {
+      description: 'Ask the coding agent installed ON this server to investigate something. It reads the server directly, which is far faster than one approval at a time, and it cannot change anything: what it thinks should change comes back as approval cards. Input: {"task":"why is / full?","agent":"claude"|"codex","timeoutSec":180}. Use for investigation that would otherwise take many commands.',
+      enabled,
+      run: async (input, meta) => {
+        const sessionId = requireLive(meta);
+        if (!remoteAgents) return { refused: true, reason: 'Server-side agents are unavailable in this build.' };
+        if (!guard().read) return { refused: true, reason: 'Reading this server is disabled in Settings → AI assistant → Server access.' };
+        const state = await status(sessionId);
+        if (state.missing) throw fail(404, 'Server terminal session not found.');
+
+        const answer = await remoteAgents.run(state.profileId, {
+          agent: input?.agent,
+          task: String(input?.task || '').trim(),
+          serverName: state.name,
+          timeoutSec: input?.timeoutSec,
+        });
+
+        /* Each command it wants run becomes a card, classified and gated on its
+           own. A card is sealed to the terminal's control and revision, so one
+           can only be raised once the user has handed control over - the
+           investigation itself never needed the terminal, so a session that is
+           still the user's returns findings and suggestions rather than failing. */
+        const raised = [];
+        for (const command of answer.commands) {
+          try {
+            const proposal = await propose(sessionId, { cmd: command.cmd, why: `${answer.label}: ${command.why}`, timeoutMs: DEFAULT_TIMEOUT_MS });
+            raised.push(proposal.refused
+              ? { cmd: command.cmd, refused: true, reason: proposal.reason }
+              : { cmd: command.cmd, proposalId: proposal.proposalId, class: proposal.class, status: proposal.status });
+          } catch (error) {
+            raised.push({ cmd: command.cmd, why: command.why, suggested: true, reason: error.message });
+          }
+        }
+        const cards = raised.filter((entry) => entry.proposalId).length;
+        const suggestions = raised.filter((entry) => entry.suggested).length;
+        await host.audit({ action: 'ai-ssh-server-agent', sessionId, profileId: state.profileId, agent: answer.agent, proposed: raised.length });
+
+        return {
+          agent: answer.agent, label: answer.label,
+          findings: boundText(answer.reply, { max: limits.terminalRead }).text,
+          summary: answer.summary,
+          proposed: raised,
+          note: !raised.length ? 'The agent proposed no changes.'
+            : suggestions && !cards ? 'Nothing has run, and nothing can yet: hand terminal control to the assistant to turn these into approval cards.'
+              : 'Nothing has run. Each command above is an approval card in this terminal session.',
+          ...(answer.timedOut ? { timedOut: true } : {}),
+          ...(answer.truncated ? { truncated: true } : {}),
+          ...(answer.stderr ? { stderr: answer.stderr } : {}),
+        };
       },
     },
     ssh_recall: {

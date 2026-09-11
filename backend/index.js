@@ -15,6 +15,7 @@ const { createSshSessions } = require('./ssh');
 const { createTerminalSessions } = require('./terminal');
 const { createTerminalViewer } = require('./terminal-ws');
 const { createSshAgent } = require('./agent');
+const { createRemoteAgents } = require('./remote-agent');
 
 const fail = (status, message) => Object.assign(new Error(message), { status });
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -42,7 +43,38 @@ async function activate(host) {
     audit: (entry) => host.audit(entry).catch(() => {}),
   });
 
-  const agent = createSshAgent({ host, terminals, settings: () => settings, log });
+  /* The coding agent installed ON a server: Claude Code or Codex, run read-only,
+     proposing rather than changing. Connecting is this module's job, so the
+     agent tool asks by profile id and never handles a client itself. */
+  const agents = createRemoteAgents({ exec: (client, command, options) => ssh.execCapture(client, command, options), log });
+  const remoteAgents = {
+    detect: async (profileId) => {
+      const { session } = await ssh.connect(profileId);
+      return agents.detect(session.client);
+    },
+    install: async (profileId, agentId) => {
+      const { profile, session } = await ssh.connect(profileId);
+      const result = await agents.install(session.client, agentId);
+      await host.audit({ action: 'ssh-agent-install', profile: profile.name, sshHost: profile.ssh.host, agent: agentId, ok: result.ok });
+      log(result.ok ? 'info' : 'warn', `${agentId} on "${profile.name}": ${result.alreadyInstalled ? 'already installed' : result.ok ? 'installed' : 'did not install'}`);
+      return result;
+    },
+    /** Pick the agent to use: the one asked for, else whichever is installed. */
+    run: async (profileId, { agent: wanted, task, serverName, timeoutSec }) => {
+      const { session } = await ssh.connect(profileId);
+      const found = await agents.detect(session.client);
+      const chosen = wanted && agents.ids().includes(wanted) ? wanted : agents.ids().find((id) => found[id].installed);
+      if (!chosen) {
+        throw Object.assign(new Error(`No coding agent is installed on "${serverName}". Install Claude Code or Codex from the server's card first.`), { status: 409 });
+      }
+      return agents.ask(session.client, {
+        agent: chosen, task, serverName, known: found,
+        timeoutMs: Math.min(600000, Math.max(10000, (Number(timeoutSec) || 180) * 1000)),
+      });
+    },
+  };
+
+  const agent = createSshAgent({ host, terminals, settings: () => settings, remoteAgents, log });
 
   /* The host's read model of which sessions are live, and what the assistant may
      do in each. Republished whenever a terminal changes, and on a slow tick so a
@@ -117,21 +149,32 @@ async function activate(host) {
     res.json({ ok: true, terminalsClosed: killed, cleaned: [] });
   }));
 
-  /* Bootstrap the Claude CLI on a server (opt-in when adding it): installs with
-     the official script when missing; the user logs in from the terminal. The
-     output is returned, never a token. */
+  /* ---- the coding agent on the server ----
+     Which agents a server has, installing one, and asking it something. The
+     answer is a report plus approval cards; nothing it proposes runs here. */
+  app.get('/sessions/:id/agents', wrap(async (req, res) => {
+    res.json({ agents: await remoteAgents.detect(req.params.id) });
+  }));
+
+  app.post('/sessions/:id/agents/:agent/install', wrap(async (req, res) => {
+    res.json(await remoteAgents.install(req.params.id, req.params.agent));
+  }));
+
+  /* Ask this session's server agent something. Deliberately the SAME call the
+     assistant makes, so the guards are not written twice: it needs a live
+     session, it obeys Settings, and whatever comes back is proposals. */
+  app.post('/agent/ask', wrap(async (req, res) => {
+    res.json(await agent.tools.ssh_server_agent.run(
+      { task: req.body?.task, agent: req.body?.agent, timeoutSec: req.body?.timeoutSec },
+      { sessionId: String(req.body?.sessionId || '') },
+    ));
+  }));
+
+  /* Kept for the "Auto-install Claude CLI" box on the add-server form, which is
+     older than the choice of agent. */
   app.post('/sessions/:id/bootstrap-claude', wrap(async (req, res) => {
-    const { profile, session } = await ssh.connect(req.params.id);
-    const command = 'if command -v claude >/dev/null 2>&1; then echo "ALREADY $(claude --version 2>/dev/null | head -1)"; '
-      + 'elif command -v curl >/dev/null 2>&1; then curl -fsSL https://claude.ai/install.sh | bash 2>&1 | tail -n 8; echo "PATH_HINT $HOME/.local/bin"; '
-      + 'elif command -v wget >/dev/null 2>&1; then wget -qO- https://claude.ai/install.sh | bash 2>&1 | tail -n 8; echo "PATH_HINT $HOME/.local/bin"; '
-      + 'else echo "NOTOOL"; fi; command -v claude >/dev/null 2>&1 && echo "OK $(command -v claude)" || ([ -x "$HOME/.local/bin/claude" ] && echo "OK $HOME/.local/bin/claude") || echo "MISSING"';
-    const out = await ssh.exec(session.client, command, 180000);
-    const already = /^ALREADY /m.test(out);
-    const ok = /^OK /m.test(out);
-    await host.audit({ action: 'ssh-bootstrap-claude', profile: profile.name, sshHost: profile.ssh.host, ok: ok || already });
-    log(ok || already ? 'info' : 'warn', `Claude CLI bootstrap on "${profile.name}": ${already ? 'already installed' : ok ? 'installed' : 'failed'}`);
-    res.json({ ok: ok || already, alreadyInstalled: already, output: out.trim().slice(-1500), next: 'Open the server terminal and run "claude" once to log in; the CLI stores its own credentials on the server.' });
+    const result = await remoteAgents.install(req.params.id, 'claude');
+    res.json({ ...result, output: result.output || '' });
   }));
 
   /* ---- one-shot console (command per exec, cwd-aware) ---- */

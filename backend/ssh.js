@@ -68,6 +68,45 @@ function createSshSessions({ host, SSHClient, log = () => {} }) {
     });
   }
 
+  /**
+   * Run one command and collect everything it produced.
+   *
+   * Unlike exec() this keeps stderr and the exit code, caps how much it will
+   * hold, feeds stdin, and can be cancelled - which is what running a coding
+   * agent on the server needs: it is slow, it is chatty, and the user must be
+   * able to stop it. It never rejects on a non-zero exit: a CLI that failed has
+   * something to say, and the caller decides what that means.
+   */
+  function execCapture(client, command, { timeoutMs = 60000, maxBytes = 256 * 1024, stdin = null, signal } = {}) {
+    return new Promise((resolve, reject) => {
+      client.exec(command, (error, stream) => {
+        if (error) return reject(error);
+        let stdout = '', stderr = '', truncated = false, timedOut = false, done = false;
+        const keep = (text, into) => (into.length >= maxBytes ? (truncated = true, into) : into + text);
+        const finish = (extra = {}) => {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          signal?.removeEventListener('abort', onAbort);
+          resolve({ stdout, stderr, truncated, timedOut, ...extra });
+        };
+        const stop = () => { try { stream.close(); } catch {} };
+        const timer = setTimeout(() => { timedOut = true; stop(); finish(); }, timeoutMs);
+        const onAbort = () => { stop(); finish({ cancelled: true }); };
+        if (signal) {
+          if (signal.aborted) { stop(); return finish({ cancelled: true }); }
+          signal.addEventListener('abort', onAbort, { once: true });
+        }
+        stream.on('data', (chunk) => { stdout = keep(chunk.toString('utf8'), stdout); if (truncated) stop(); });
+        stream.stderr.on('data', (chunk) => { stderr = keep(chunk.toString('utf8'), stderr); });
+        stream.on('close', (code, sig) => finish({ code: code ?? null, signal: sig ?? null }));
+        stream.on('error', (e) => { if (!done) { done = true; clearTimeout(timer); signal?.removeEventListener('abort', onAbort); reject(e); } });
+        if (stdin !== null && stdin !== undefined) { try { stream.write(String(stdin)); } catch {} }
+        try { stream.end(); } catch {}
+      });
+    });
+  }
+
   function exec(client, command, timeoutMs = 20000) {
     return new Promise((resolve, reject) => {
       client.exec(command, (error, stream) => {
@@ -129,7 +168,7 @@ function createSshSessions({ host, SSHClient, log = () => {} }) {
     };
   };
 
-  return { sessions, connect, disconnect, exec, pullMeta, view, credentials, clientFor, connectOptions };
+  return { sessions, connect, disconnect, exec, execCapture, pullMeta, view, credentials, clientFor, connectOptions };
 }
 
 module.exports = { createSshSessions, connectOptions, VM_META_CMD };

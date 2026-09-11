@@ -62,6 +62,53 @@ export function createServersUI({ host, mount, Terminal, FitAddon }) {
     renderWorkspaceIdentity();
     return host.session.current();
   }
+  /* ---- the coding agent installed ON a server ----
+     It investigates for the assistant and proposes; it changes nothing. */
+  const AGENT_LABELS = { claude: 'Claude Code', codex: 'Codex CLI' };
+
+  async function installServerAgent(profileId, agentId, serverName) {
+    const label = AGENT_LABELS[agentId] || agentId;
+    toast(`Installing ${label} on ${serverName}…`, 'loading');
+    try {
+      const result = await http(`/sessions/${profileId}/agents/${agentId}/install`, { method: 'POST' });
+      toast(result.ok
+        ? `${label} ${result.alreadyInstalled ? 'is already on' : 'installed on'} ${serverName}. ${result.next}`
+        : `${label} did not install on ${serverName}. ${result.next}`, result.ok ? 'success' : 'warning');
+      await loadServers();
+      return result;
+    } catch (error) {
+      toast(`${label} install failed: ${error.message}`, 'error');
+      return { ok: false, error: error.message };
+    }
+  }
+
+  /**
+   * The bottom of the terminal menu: which coding agents this server has, and an
+   * offer to install one it does not. Only shown for a connected server, because
+   * finding out means asking it.
+   */
+  function serverAgentMenu(s) {
+    const found = serverAgents.get(s.id);
+    if (!found) return '<div class="term-dd-note">Open a terminal to see which coding agents are on this server.</div>';
+    const rows = Object.values(AGENT_LABELS).length ? Object.keys(AGENT_LABELS).map((id) => {
+      const agent = found[id];
+      return agent?.installed
+        ? `<div class="term-dd-note">${esc(AGENT_LABELS[id])} ${esc(agent.version || '')} is on this server</div>`
+        : `<button data-act="agent-install" data-agent="${id}">Install ${esc(AGENT_LABELS[id])}</button>`;
+    }) : [];
+    return `<div class="term-dd-sep"></div>${rows.join('')}`;
+  }
+
+  /** Which agents a connected server has. Cached per server for the card. */
+  const serverAgents = new Map();
+  async function refreshServerAgents(profileId) {
+    try {
+      const { agents } = await http(`/sessions/${profileId}/agents`);
+      serverAgents.set(profileId, agents);
+      return agents;
+    } catch { serverAgents.delete(profileId); return null; }
+  }
+
   /* Swap the bound session ATOMICALLY. Everything that identifies the old conversation - its
      messages, its approval cards, the composer target and the turn in flight - is dropped
      synchronously, before any await, so a reply still travelling for the old session has nowhere
@@ -109,18 +156,6 @@ export function createServersUI({ host, mount, Terminal, FitAddon }) {
   async function viewEndedSession(seed) {
     await switchAgentSession({ ...seed, terminal: { sessionId: seed.sessionId, status: 'closed' } });
     if (seed.sessionId === host.session.id()) showSshDrawer();
-  }
-
-  /** The composer belongs to the conversation on screen: an ENDED session can be read, never
-      continued. No session at all is the project conversation, which is always writable. */
-  async function sshAgentAttach(profileId) {
-    return openSsh(profileId, { ai: true });
-  }
-  /** Leave the server session: the window stays, on the project conversation it had before. */
-  async function sshAgentDetach() {
-    selectAgentSession({ attached: false, sessionId: null });
-    if (agentIsDocked() || $('agentDrawer').classList.contains('open')) await host.assistantUi.open();
-    toast('Assistant back on the project conversation. The terminal session is still there to resume.');
   }
 
   /* The Terminal menu's two ACTIONS always come first and are always what Enter starts. Earlier
@@ -263,11 +298,8 @@ export function createServersUI({ host, mount, Terminal, FitAddon }) {
       </div>
       ${body}
       <div class="srv-actions">
-        ${host.session.current().attached && host.session.current().profileId === s.id
-          ? '<button data-act="ai-detach" class="aireview glossy on" title="The AI chat is connected to this server: click to disconnect"><img class="ai-mini" src="/assets/robot-logo-animated_1.svg" alt="" aria-hidden="true"><span>AI connected</span></button>'
-          : '<button data-act="ai-attach" class="aireview glossy" title="Connect with AI chat: let the assistant work on this server over SSH (read-only unless you allow more in Settings)"><img class="ai-mini" src="/assets/robot-logo-animated_1.svg" alt="" aria-hidden="true"><span>AI chat</span></button>'}
         ${s.connected
-          ? `<button data-act="refresh">Refresh</button><div class="term-dd"><button data-act="terminal-menu" class="primary">${live.length ? 'Resume' : 'Terminal'} <svg class="caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button><div class="term-dd-menu" hidden><button data-act="terminal">${live.length ? 'Resume terminal' : 'Terminal'}</button><button data-act="terminal-ai" class="aireview glossy" title="Open a terminal and work in it with the assistant">${AI_LOGO_REST}<span>${live.length ? 'Resume with AI' : 'Terminal + AI'}</span></button><button data-act="terminal-new">New terminal</button></div></div><span class="spacer"></span><button data-act="disconnect" class="warn">Disconnect</button>`
+          ? `<button data-act="refresh">Refresh</button><div class="term-dd"><button data-act="terminal-menu" class="primary">${live.length ? 'Resume' : 'Terminal'} <svg class="caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button><div class="term-dd-menu" hidden><button data-act="terminal">${live.length ? 'Resume terminal' : 'Terminal'}</button><button data-act="terminal-ai" class="aireview glossy" title="Open a terminal and work in it with the assistant">${AI_LOGO_REST}<span>${live.length ? 'Resume with AI' : 'Terminal + AI'}</span></button><button data-act="terminal-new">New terminal</button>${serverAgentMenu(s)}</div></div><span class="spacer"></span><button data-act="disconnect" class="warn">Disconnect</button>`
           : `<button data-act="connect" class="primary">Connect</button><span class="spacer"></span>${s.sshOnly ? '<button data-act="remove" class="iconbtn danger" title="Remove this SSH server">' + RULE_ICONS.trash + '</button>' : ''}`}
       </div>`;
     el.querySelector('[data-act="terminal-menu"]')?.setAttribute('aria-expanded', 'false');
@@ -289,16 +321,18 @@ export function createServersUI({ host, mount, Terminal, FitAddon }) {
         }
         return;
       }
-      if (act === 'ai-attach' || act === 'ai-detach') {
-        b.disabled = true;
-        try { if (act === 'ai-attach') await sshAgentAttach(s.id); else await sshAgentDetach(); await loadServers(); }
-        catch (e) { toast(e.message, 'error'); b.disabled = false; }
-        return;
-      }
       // "terminal" resumes this server's most recent live session when there is one (openSsh
       // prefers a live session over minting a shell); "terminal-new" always mints one
       if (act === 'terminal') { closeTermMenu(); openSsh(s.id, { label: s.name }); return; }
       if (act === 'terminal-ai') { closeTermMenu(); openSsh(s.id, { ai: true, label: s.name }); return; }
+      if (act === 'agent-install') {
+        closeTermMenu();
+        const which = b.dataset.agent;
+        await installServerAgent(s.id, which, s.name);
+        await refreshServerAgents(s.id);
+        await loadServers();
+        return;
+      }
       if (act === 'terminal-new') { closeTermMenu(); openSsh(s.id, { ai: true, newSession: true, label: s.name }); return; }
       if (act === 'remove') {
         const ok = await confirm({ title: 'Remove SSH server', message: `Remove the SSH server <b>${esc(s.name)}</b>? Its stored credentials are deleted from connections.json.`, okLabel: 'Remove', okClass: 'reject' });
@@ -312,7 +346,9 @@ export function createServersUI({ host, mount, Terminal, FitAddon }) {
       if (act === 'refresh') b.textContent = 'Refreshing…';
       try {
         await http(`/sessions/${s.id}/${act}`, { method: 'POST' });
-        if (act === 'disconnect') closeConsolesForProfile(s.id); // tear down this server's open consoles too
+        if (act === 'disconnect') { closeConsolesForProfile(s.id); serverAgents.delete(s.id); } // tear down this server's open consoles too
+        // Now that it is reachable, find out which coding agents it has.
+        if (act === 'connect' || act === 'refresh') await refreshServerAgents(s.id);
         await loadServers();
       } catch (e) { toast(e.message); b.disabled = false; b.textContent = orig; }
     }));
@@ -360,14 +396,7 @@ export function createServersUI({ host, mount, Terminal, FitAddon }) {
       $('addServerForm').hidden = true; $('addServerForm').reset(); setAsAuth('app-key');
       await loadServers();
       toast(`SSH server "${body.name}" added`, 'success');
-      if (bootstrap) {
-        toast(`Installing the Claude CLI on ${body.name}…`, 'loading');
-        try {
-          const r = await http(`/sessions/${saved.id}/bootstrap-claude`, { method: 'POST' });
-          toast(r.ok ? `Claude CLI ${r.alreadyInstalled ? 'already present' : 'installed'} on ${body.name}. ${r.next}` : `Claude CLI install did not complete on ${body.name}: open its terminal to finish (see History for the output)`, r.ok ? 'success' : 'warning');
-          await loadServers();
-        } catch (e) { toast(`Claude CLI bootstrap failed: ${e.message}`, 'error'); }
-      }
+      if (bootstrap) await installServerAgent(saved.id, $('asBootstrapAgent')?.value || 'claude', body.name);
     } catch (err) { toast(err.message, 'error'); }
   });
   host.on($('btnServersClose'), 'click', closeServers);

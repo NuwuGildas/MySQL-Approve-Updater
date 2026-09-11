@@ -84,7 +84,7 @@ function conversationStore() {
  *          the conversations the host would have stored, what was audited, and
  *          what the module published about its sessions.
  */
-function createTestHost({ terminals, settings, profiles, modelLimits = {} }) {
+function createTestHost({ terminals, settings, profiles, modelLimits = {}, remoteAgents = null }) {
   const audits = [];
   const proposals = [];
   const conversations = conversationStore();
@@ -118,7 +118,7 @@ function createTestHost({ terminals, settings, profiles, modelLimits = {} }) {
     log() {}, emit() {},
   };
 
-  const agent = createSshAgent({ host, terminals, settings: () => settings, modelLimits });
+  const agent = createSshAgent({ host, terminals, settings: () => settings, modelLimits, remoteAgents });
 
   return {
     host, agent, conversations, audits, proposals,

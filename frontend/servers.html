@@ -40,8 +40,12 @@
     <div class="auth-panel" id="asAuthPass" hidden>
       <label for="asPass">Password</label><input id="asPass" type="password" autocomplete="new-password">
     </div>
-    <label class="chk" style="margin-top:.6rem"><input type="checkbox" id="asBootstrapClaude"> Auto-install Claude CLI</label>
-    <p class="hint" style="margin:.1rem 0 0 1.5rem">Bootstrap the agent right after connecting. You'll log in to Claude from the server (run <code>claude</code> in its terminal).</p>
+    <label class="chk" style="margin-top:.6rem"><input type="checkbox" id="asBootstrapClaude"> Install a coding agent on this server</label>
+    <select id="asBootstrapAgent" class="mono" style="margin:.3rem 0 0 1.5rem">
+      <option value="claude">Claude Code</option>
+      <option value="codex">Codex CLI</option>
+    </select>
+    <p class="hint" style="margin:.1rem 0 0 1.5rem">It investigates the server for the assistant at full speed, and can change nothing: what it thinks should change comes back as approval cards. You sign in to it from the server's own terminal.</p>
     <div style="display:flex;gap:.5rem;margin-top:.6rem">
       <button type="submit" class="primary">Save server</button>
       <button type="button" id="btnAddServerCancel">Cancel</button>

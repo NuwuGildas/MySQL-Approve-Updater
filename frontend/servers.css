@@ -118,6 +118,9 @@ body.drawers-h #serversDrawer.open { transform: translateY(0); }
 .term-dd .caret { width: 13px; height: 13px; opacity: .85; }
 .term-dd-menu { position: fixed; inset: auto; z-index: 60; display: flex; flex-direction: column; gap: .25rem; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 24px rgba(0, 0, 0, .5); padding: .4rem; width: min(21rem, calc(100vw - 24px)); min-width: 0; overflow-y: auto; }
 .term-dd-menu[hidden] { display: none; }
+/* what the server already has, and what can be installed on it */
+.term-dd-sep { height: 1px; background: var(--border); margin: .25rem 0; }
+.term-dd-note { color: var(--muted); font-size: .74rem; padding: .2rem .45rem; line-height: 1.4; }
 .term-dd-menu button { flex-shrink: 0; min-height: 36px; width: 100%; justify-content: flex-start; text-align: left; padding: .45rem .6rem; }
 .term-dd-sessions { display: flex; flex-direction: column; flex: 0 1 auto; min-height: 0; gap: .25rem; max-height: 14rem; overflow-y: auto; overscroll-behavior: contain; border-top: 1px solid var(--border); margin-top: .15rem; padding-top: .25rem; }
 .term-dd-sessions button { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; text-align: left; }
