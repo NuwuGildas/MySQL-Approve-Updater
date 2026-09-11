@@ -68,6 +68,12 @@ const settings = {
     sshSudo: false,        // permit sudo in those commands
     sshAuto: false,        // auto mode: allowed classes run without asking (never destructive)
     sshMemory: false,      // keep each server's conversation and command history for the next session
+    /* Let an agent the assistant runs ELSEWHERE authenticate as you. The token
+       is handed over per run and travels on stdin, so it is never in a command
+       line and never written to that machine - but while it runs it is readable
+       by that user and by root there. Off, and worth leaving off for a server
+       whose root you do not trust. */
+    shareCredentialWithAgents: false,
   },
 };
 const AI_ASSIST_KEYS = Object.keys(settings.aiAssist);
@@ -2628,6 +2634,25 @@ moduleHost.services.extend({
   }],
   'assistant.proposals': ['assistant:proposals', (module, { sessionId } = {}) => agentProposals.filter((p) => (!sessionId || p.sessionId === sessionId))],
   'assistant.setPromptFragment': ['assistant:tools', (module, { text }) => { modulePromptFragments.set(module.id, String(text || '')); return true; }],
+
+  /* The assistant's own credential, for a module that runs an agent somewhere
+     else on the user's behalf. Three things guard it and all three must hold:
+     the module declared assistant:credential and the user saw that before
+     installing; the user turned it on in Settings; and the app actually holds a
+     token - a CLI sign-in belongs to the CLI and is never read out of it.
+     It is returned one call at a time, never cached by the host, never logged,
+     never audited, and never sent to the browser. */
+  'assistant.credential': ['assistant:credential', (module) => {
+    if (!settings.aiAssist?.shareCredentialWithAgents) {
+      throw httpError(403, 'Sharing your AI sign-in with agents elsewhere is off. Turn it on in Settings → AI assistant if you want it.');
+    }
+    const token = agentConfig?.apiKey;
+    if (!token) {
+      throw httpError(409, 'This application holds no AI token to share: it signs in through the Claude Code CLI, which keeps its own credential. Connect with "Claude (API key or sign-in token)" - `claude setup-token` makes one for exactly this - to share one.');
+    }
+    audit({ action: 'assistant-credential-shared', module: module.id });   // that it happened, never what
+    return { token, kind: String(token).startsWith('sk-ant-oat') ? 'oauth' : 'api-key' };
+  }],
   'conversation.create': ['storage:module', (module, { sessionId, fields }) => conversations.create(sessionId, { ...fields, module: module.id })],
   'conversation.push': ['storage:module', (module, { sessionId, message }) => conversations.push(sessionId, message)],
   'conversation.history': ['storage:module', (module, { sessionId }) => conversations.history(sessionId)],

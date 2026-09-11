@@ -509,3 +509,53 @@ test('where a catalog comes from is asked again, not decided once at startup', a
   const fixed = createCatalogClient({ registries: [{ name: 'published', url: published }], hostSdkVersion: HOST_SDK_VERSION, ttlMs: 0 });
   assert.deepEqual((await fixed.load()).modules.map((m) => m.id), ['from-published']);
 });
+
+test('the assistant\'s own sign-in is its own capability, its own setting, and never cached', async () => {
+  /* Lending the assistant's credential to an agent a module runs elsewhere is a
+     serious privilege: it is the key to the user's AI account. Three gates, and
+     every one of them must hold on its own. */
+  const shared = [];
+  let allowed = false;
+  let token = 'sk-ant-oat-secret';
+  const services = createServices({
+    audit: { record: (entry) => { shared.push(entry); return true; }, read: () => ({ entries: [] }) },
+  });
+  services.extend({
+    'assistant.credential': ['assistant:credential', (module) => {
+      if (!allowed) throw Object.assign(new Error('sharing is off'), { status: 403 });
+      if (!token) throw Object.assign(new Error('no token to share'), { status: 409 });
+      shared.push({ action: 'assistant-credential-shared', module: module.id });
+      return { token, kind: 'oauth' };
+    }],
+  });
+  const record = (capabilities) => ({ id: 'demo', manifest: { name: 'Demo', capabilities } });
+
+  /* 1. Declaring assistant:tools does not get you the credential. */
+  await assert.rejects(
+    services.call('demo', 'assistant.credential', {}, record(['assistant:tools'])),
+    /did not request the "assistant:credential"/,
+  );
+
+  /* 2. With the capability, it is still off until the user turns it on. */
+  await assert.rejects(
+    services.call('demo', 'assistant.credential', {}, record(['assistant:credential'])),
+    (error) => error.status === 403,
+  );
+
+  /* 3. On, but nothing to share - a CLI sign-in belongs to the CLI. */
+  allowed = true;
+  token = null;
+  await assert.rejects(
+    services.call('demo', 'assistant.credential', {}, record(['assistant:credential'])),
+    (error) => error.status === 409,
+  );
+
+  /* All three satisfied: handed over one call at a time, and the fact recorded
+     without the secret. */
+  token = 'sk-ant-oat-secret';
+  const got = await services.call('demo', 'assistant.credential', {}, record(['assistant:credential']));
+  assert.deepEqual(got, { token: 'sk-ant-oat-secret', kind: 'oauth' });
+  const entry = shared.find((e) => e.action === 'assistant-credential-shared');
+  assert.equal(entry.module, 'demo');
+  assert.equal(JSON.stringify(shared).includes('sk-ant-oat-secret'), false, 'the audit trail records that it happened, never what');
+});
