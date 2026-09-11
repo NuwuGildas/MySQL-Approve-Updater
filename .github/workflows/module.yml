@@ -16,6 +16,14 @@ on:
     branches: [modules/deployments]
   workflow_dispatch:
 
+# Tagging publishes: the job attaches this package to a GitHub release, which
+# needs write access to the repository's contents. The repository's default
+# token is read-only, so the permission is requested here rather than relying on
+# a setting - without it the release step fails with "Resource not accessible by
+# integration" after a build that otherwise succeeded.
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
