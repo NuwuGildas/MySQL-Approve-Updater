@@ -1,9 +1,11 @@
 # Build, test and publish the projects module.
 #
-# This branch holds one standalone package. CI builds it into a versioned,
-# signed archive and attaches that archive to a release; the marketplace catalog
-# then points at the release. Nothing is ever installed from a moving branch:
-# a catalog entry names an immutable commit and a digest.
+# This branch holds one standalone package. The package is checked out INTO a
+# checkout of the application's default branch, at modules/projects, which is
+# exactly where the documented local workflow puts it: the host supplies the
+# build tooling, the host SDK to validate against, and the shared libraries a
+# module resolves at runtime. Nothing here is installed from a moving branch -
+# CI produces a versioned, signed archive and a release points at it.
 name: projects
 
 on:
@@ -18,28 +20,41 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      # The host first: it owns the tooling and the SDK this package targets.
       - uses: actions/checkout@v4
-        with: { path: module }
+        with:
+          ref: master
+          path: host
 
-      # The host SDK lives on the default branch; the build tooling comes from there.
+      # Then this package, in the place the host expects to find it.
       - uses: actions/checkout@v4
-        with: { ref: master, path: host }
+        with:
+          path: host/modules/projects
 
       - uses: actions/setup-node@v4
-        with: { node-version: '22' }
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: host/package-lock.json
 
       - name: Install host tooling
         working-directory: host
-        run: npm ci --omit=optional
+        run: npm ci
 
       - name: Check the manifest against this host SDK
         working-directory: host
-        run: node -e "const {validateManifest}=require('./lib/host/manifest');const m=validateManifest(require('../module/module.json'));if(!m.compatible)throw new Error(m.name+' is not compatible with host SDK '+require('./lib/host/sdk').HOST_SDK_VERSION);console.log(m.id,m.version,'ok')"
+        run: |
+          node -e "
+            const { validateManifest } = require('./lib/host/manifest');
+            const { HOST_SDK_VERSION } = require('./lib/host/sdk');
+            const m = validateManifest(require('./modules/projects/module.json'));
+            if (!m.compatible) throw new Error(m.name + ' declares hostSdk ' + m.hostSdk + ', which host SDK ' + HOST_SDK_VERSION + ' does not satisfy');
+            console.log(m.id, m.version, 'is compatible with host SDK', HOST_SDK_VERSION);
+          "
 
       - name: Test
-        working-directory: module
-        run: |
-          if [ -d test ]; then node --test "test/**/*.test.js"; else echo "no tests in this package"; fi
+        working-directory: host
+        run: node scripts/test-modules.js projects
 
       - name: Build the package
         working-directory: host
@@ -48,14 +63,19 @@ jobs:
           SIGNING_KEY_ID: ${{ vars.MODULE_SIGNING_KEY_ID }}
         run: |
           mkdir -p keys
-          if [ -n "$SIGNING_KEY" ]; then printf '%s' "$SIGNING_KEY" > keys/ci.private.pem; fi
+          if [ -n "$SIGNING_KEY" ]; then
+            printf '%s' "$SIGNING_KEY" > keys/ci.private.pem
+            SIGN="--sign keys/ci.private.pem --key-id ${SIGNING_KEY_ID:-ci}"
+          else
+            echo "::warning::MODULE_SIGNING_KEY is not set; building an UNSIGNED package that the host will refuse to install"
+            SIGN=""
+          fi
           node scripts/build-module.js projects \
-            --source ../module \
             --out ../artifacts \
             --commit "${{ github.sha }}" \
             --branch "modules/projects" \
             --repository "${{ github.server_url }}/${{ github.repository }}" \
-            ${SIGNING_KEY:+--sign keys/ci.private.pem --key-id "${SIGNING_KEY_ID:-ci}"}
+            $SIGN
           rm -f keys/ci.private.pem
 
       - uses: actions/upload-artifact@v4
@@ -64,7 +84,7 @@ jobs:
           path: artifacts/*
 
       # A tag is what publishes: the archive becomes a release asset, and the
-      # catalog entry that points at it is updated from these same files.
+      # catalog entry that points at it is updated from the same artifact file.
       - name: Release
         if: startsWith(github.ref, 'refs/tags/projects-v')
         uses: softprops/action-gh-release@v2
