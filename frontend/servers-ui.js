@@ -108,8 +108,19 @@ export function createServersUI({ host, mount, Terminal, FitAddon }) {
    */
   const agentOffered = new Set();
   async function ensureServerAgent(profileId, serverName) {
-    const found = await refreshServerAgents(profileId);
-    if (!found) return null;                                   // unreachable: leave it alone
+    let found;
+    try { found = await refreshServerAgents(profileId, { quiet: false }); }
+    catch (error) {
+      // Saying nothing is the one thing this must not do: the user pressed a
+      // button called "Terminal + AI" and is entitled to know why half of it
+      // did not happen.
+      toast(`Could not check which coding agents are on ${serverName}: ${error.message}`, 'warning');
+      return null;
+    }
+    if (!found || !Object.keys(found).length) {
+      toast(`Could not read the coding agents on ${serverName}. Open its Terminal menu to install one.`, 'warning');
+      return null;
+    }
     if (Object.values(found).some((agent) => agent.installed)) { await loadServers().catch(() => {}); return found; }
     if (agentOffered.has(profileId)) return found;
     agentOffered.add(profileId);
@@ -130,14 +141,26 @@ export function createServersUI({ host, mount, Terminal, FitAddon }) {
     return refreshServerAgents(profileId);
   }
 
-  /** Which agents a connected server has. Cached per server for the card. */
+  /**
+   * Which agents a connected server has. Cached per server for the card.
+   *
+   * `quiet` is for the places that only want to decorate the card - connecting,
+   * refreshing - where a failure is not worth a message. Anywhere the answer
+   * changes what the user gets, ask loudly and let the error out.
+   */
   const serverAgents = new Map();
-  async function refreshServerAgents(profileId) {
+  async function refreshServerAgents(profileId, { quiet = true } = {}) {
     try {
-      const { agents } = await http(`/sessions/${profileId}/agents`);
+      const answer = await http(`/sessions/${profileId}/agents`);
+      const agents = answer?.agents;
+      if (!agents || typeof agents !== 'object') throw new Error('the server did not report its coding agents');
       serverAgents.set(profileId, agents);
       return agents;
-    } catch { serverAgents.delete(profileId); return null; }
+    } catch (error) {
+      serverAgents.delete(profileId);
+      if (quiet) return null;
+      throw error;
+    }
   }
 
   /* Swap the bound session ATOMICALLY. Everything that identifies the old conversation - its
@@ -614,7 +637,7 @@ export function createServersUI({ host, mount, Terminal, FitAddon }) {
       showSshDrawer(); activateConsole(existing.id); selectAgentSession(existing.session);
       if (opts.ai || agentIsDocked()) await host.assistantUi.open();
       // The terminal is already up; finding or installing the agent follows it.
-      if (opts.ai) ensureServerAgent(pid, opts.label || existing.label).catch(() => {});
+      if (opts.ai) ensureServerAgent(pid, opts.label || existing.label).catch((error) => toast(error.message, 'warning'));
       return existing.session;
     }
     if (consoles.size >= MAX_CONSOLES) { toast(`You can view ${MAX_CONSOLES} SSH consoles at once. Close a view first; its session will keep running.`); return; }
@@ -655,7 +678,7 @@ export function createServersUI({ host, mount, Terminal, FitAddon }) {
     refreshLiveTerminals(); // a new session belongs on the sidebar straight away
     setTimeout(() => { refitConsole(c); connectConsole(c); c.term.focus(); }, 30);
     if (opts.ai || agentIsDocked()) await host.assistantUi.open();
-    if (opts.ai) ensureServerAgent(pid, label).catch(() => {});
+    if (opts.ai) ensureServerAgent(pid, label).catch((error) => toast(error.message, 'warning'));
     return attached;
   }
   let sshOpenEpoch = 0;
