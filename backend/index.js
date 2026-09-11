@@ -131,10 +131,18 @@ async function activate(host) {
     };
   }
 
+  /* A connector attached to a project exists only inside it. The host says which
+     project the caller is in and owns the rule; this only asks. */
+  async function scopeTo(meta, connectors) {
+    if (!meta?.projectId) return connectors;
+    const visible = new Set(await host.call('projects.visible', { projectId: meta.projectId, kind: 'connectors', ids: connectors.map((c) => c.id) }));
+    return connectors.filter((c) => visible.has(c.id));
+  }
+
   return {
     methods: {
-      list: async () => ({
-        connectors: list().map(mask),
+      list: async (params, meta) => ({
+        connectors: (await scopeTo(meta, list())).map(mask),
         providers: Object.values(PROVIDERS).map((p) => ({ id: p.id, label: p.label, defaultBase: p.defaultBase, web: p.web, tokenHint: p.tokenHint })),
       }),
       /** Vault secret names, so the form can offer a token that is already stored. */

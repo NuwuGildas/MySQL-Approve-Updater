@@ -12,6 +12,7 @@
   "capabilities": [
     "ui:pages",
     "ui:commands",
+    "projects:read",
     "storage:module",
     "events:subscribe",
     "audit:write",
@@ -19,5 +20,7 @@
     "vault:write",
     "net:outbound"
   ],
-  "pages": ["connectors"]
+  "pages": [
+    "connectors"
+  ]
 }

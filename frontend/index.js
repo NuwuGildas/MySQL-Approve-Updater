@@ -49,6 +49,11 @@ export async function activate(host) {
   const provider = (kind) => state.providers.find((p) => p.id === kind) || { label: kind };
   const deployments = () => host.consume('deployments');
 
+  /* Switching project, or attaching a connector to one, changes which
+     connectors this project can see. */
+  host.on(document, 'st:project', () => load());
+  host.on(document, 'st:project-resources', () => load());
+
   const showMain = () => { $('cnMain').hidden = false; $('cnReposView').hidden = true; state.reposFor = null; };
 
   async function load() {
