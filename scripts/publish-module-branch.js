@@ -104,7 +104,9 @@ function main() {
   const all = has('all');
   const ids = all
     ? fs.readdirSync(path.join(ROOT, 'modules'), { withFileTypes: true }).filter((e) => e.isDirectory() && fs.existsSync(path.join(ROOT, 'modules', e.name, 'module.json'))).map((e) => e.name).sort()
-    : process.argv.slice(2).filter((a) => !a.startsWith('--'));
+    /* Positional ids only: a flag's VALUE is not one, so `publish servers
+       --message "..."` must not try to publish a module called "...". */
+    : process.argv.slice(2).filter((value, index, all) => !value.startsWith('--') && !String(all[index - 1] || '').startsWith('--'));
   if (!ids.length) {
     console.log('usage: node scripts/publish-module-branch.js <id...>|--all [--message "..."] [--dry-run]');
     process.exit(1);
