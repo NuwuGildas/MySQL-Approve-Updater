@@ -1,0 +1,23 @@
+{
+  "packageFormat": 1,
+  "id": "connectors",
+  "name": "Git Connectors",
+  "description": "Connect GitHub and GitLab accounts once with a personal access token, verify them, and browse the repositories they can see.",
+  "version": "1.0.0",
+  "publisher": "Server Tools",
+  "hostSdk": "^1.0.0",
+  "frontend": "frontend/index.js",
+  "backend": "backend/index.js",
+  "dependencies": {},
+  "capabilities": [
+    "ui:pages",
+    "ui:commands",
+    "storage:module",
+    "events:subscribe",
+    "audit:write",
+    "vault:read",
+    "vault:write",
+    "net:outbound"
+  ],
+  "pages": ["connectors"]
+}

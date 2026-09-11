@@ -1,0 +1,24 @@
+<aside id="connectorsDrawer" aria-label="Connectors" inert>
+  <div id="cnMain">
+  <div class="view-head">
+    <h2 style="margin:0;font-size:.85rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)">Connectors <span class="sec-hint" id="connectorsCount"></span></h2>
+    <span class="spacer"></span>
+    <button id="btnCnAdd" class="primary">+ Connect an account</button>
+    <button id="btnCnRefresh" title="Reload">Refresh</button>
+    <button id="btnCnClose" title="Close (Esc)">✕</button>
+  </div>
+  <p class="hint" style="margin:.2rem 0 .8rem">GitHub and GitLab accounts, each backed by a personal access token kept in the encrypted vault. Browse a connector's repositories to connect one for deployment.</p>
+  <div id="connectorsList" class="cn-list"></div>
+  </div>
+  <section id="cnReposView" aria-labelledby="cnReposTitle" hidden>
+    <div class="view-head cn-repos-head">
+      <button type="button" id="btnCnReposBack" class="cn-back" title="Back to connectors"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg> Connectors</button>
+      <h2 id="cnReposTitle" style="margin:0;font-size:.85rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)">Repositories <span class="sec-hint" id="cnReposCount"></span></h2>
+      <span class="spacer"></span>
+      <button type="button" id="btnCnReposRefresh" title="Reload the list from the provider">Refresh</button>
+    </div>
+    <p class="hint" id="cnReposHint" style="margin:.2rem 0 .8rem"></p>
+    <input id="cnReposFilter" type="search" placeholder="Filter by name or description…" autocomplete="off" aria-label="Filter repositories">
+    <div id="cnReposList" class="cn-repos"></div>
+  </section>
+</aside>

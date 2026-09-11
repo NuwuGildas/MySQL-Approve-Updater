@@ -1,0 +1,17 @@
+<dialog id="cnModal" aria-label="Connector">
+  <form id="cnForm" method="dialog" novalidate>
+    <h3 id="cnModalTitle" style="margin:0 0 .6rem;font-size:1rem">Connect an account</h3>
+    <div class="auth-choice" id="cnKindChoice" role="radiogroup" aria-label="Provider">
+      <button type="button" role="radio" aria-checked="true" class="on" data-kind="github"><b>GitHub</b><span>github.com or GitHub Enterprise</span></button>
+      <button type="button" role="radio" aria-checked="false" data-kind="gitlab"><b>GitLab</b><span>gitlab.com or self-managed</span></button>
+    </div>
+    <div class="tf-grid" style="margin-top:.7rem">
+      <div class="tf-field"><label for="cnName">Name</label><input id="cnName" required maxlength="60" placeholder="GitHub" autocomplete="off"></div>
+      <div class="tf-field" id="cnBaseWrap"><label for="cnBase">Base URL <span class="hint">(optional)</span></label><input id="cnBase" autocomplete="off"></div>
+      <div class="tf-field tf-span"><label for="cnToken">Personal access token</label><input id="cnToken" type="password" autocomplete="off" placeholder="paste the token: it is stored in the vault, never shown again"><p class="tf-help" id="cnScopeHint"></p><p class="tf-help" id="cnTokenHelp"></p></div>
+      <div class="tf-field tf-span"><label for="cnTokenRef">…or a vault secret that already holds the token</label><select id="cnTokenRef"></select></div>
+    </div>
+    <p class="tf-err" id="cnErr" hidden></p>
+    <div class="modal-foot"><button type="button" id="btnCnCancel">Cancel</button><span class="spacer"></span><button type="submit" class="primary" id="btnCnSave">Save &amp; verify</button></div>
+  </form>
+</dialog>
