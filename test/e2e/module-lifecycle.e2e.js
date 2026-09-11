@@ -107,10 +107,12 @@ async function main() {
        create a project there is nothing to switch between, so the header
        switcher stays hidden and everything is the default project's. */
     assert.deepEqual(await page.evaluate(() => ({
-      hidden: document.getElementById('projSwitch').hidden,
+      // What is on SCREEN, not just the attribute: an author `display` rule
+      // beats the UA's [hidden], so .hidden alone can change nothing.
+      shown: document.getElementById('projSwitch').getClientRects().length > 0,
       active: document.getElementById('projTriggerName').textContent,
       manager: !!HostSDK.core.projectManager,
-    })), { hidden: true, active: 'General', manager: false });
+    })), { shown: false, active: 'General', manager: false });
     await page.evaluate(() => { window.__sentinel = 'keep-me'; document.getElementById('agentInput').value = 'draft'; });
 
     const sync = () => page.evaluate(async () => {
@@ -131,9 +133,11 @@ async function main() {
 
     /* Projects is installed now, so the switcher it manages is there. */
     assert.deepEqual(await page.evaluate(() => ({
-      hidden: document.getElementById('projSwitch').hidden,
+      // What is on SCREEN, not just the attribute: an author `display` rule
+      // beats the UA's [hidden], so .hidden alone can change nothing.
+      shown: document.getElementById('projSwitch').getClientRects().length > 0,
       manager: !!HostSDK.core.projectManager,
-    })), { hidden: false, manager: true }, 'the Projects module reveals the header switcher');
+    })), { shown: true, manager: true }, 'the Projects module reveals the header switcher');
 
     /* Connect asks the real host for credentials over the worker bridge.
        An unknown profile must reach validation, without attempting SSH. */
@@ -386,10 +390,12 @@ async function main() {
       // The switcher belongs to whoever manages projects, so it leaves with it.
       if (id === 'projects') {
         assert.deepEqual(await page.evaluate(() => ({
-          hidden: document.getElementById('projSwitch').hidden,
+          // What is on SCREEN, not just the attribute: an author `display` rule
+      // beats the UA's [hidden], so .hidden alone can change nothing.
+      shown: document.getElementById('projSwitch').getClientRects().length > 0,
           active: document.getElementById('projTriggerName').textContent,
           manager: !!HostSDK.core.projectManager,
-        })), { hidden: true, active: 'General', manager: false }, 'the switcher is withdrawn with the Projects module, in the same session');
+        })), { shown: false, active: 'General', manager: false }, 'the switcher is withdrawn with the Projects module, in the same session');
       }
       console.log(`  removed ${id}`);
     }
