@@ -38,6 +38,25 @@ async function until(predicate, { timeout = 20000, what = 'condition' } = {}) {
   throw new Error(`timed out waiting for ${what} (last: ${JSON.stringify(last)})`);
 }
 
+/**
+ * Click and wait for what the click should cause; if it did not, click again.
+ *
+ * These are real pointer events against a UI that re-renders on its own - the
+ * palette refetches its sources, a module view repaints - so a click can land on
+ * a node in the middle of being replaced and do nothing at all. Retrying is what
+ * a person does, and it keeps the assertion about the OUTCOME rather than about
+ * the timing. The last attempt uses the full timeout so a genuine failure still
+ * reports as one.
+ */
+async function clickUntil(page, click, condition, { attempts = 3, what = 'the click to take effect' } = {}) {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    if (typeof click === 'function') await click(); else await page.click(click);
+    if (attempt === attempts) break;
+    try { return await until(condition, { timeout: 4000, what }); } catch { /* the UI moved under it; go again */ }
+  }
+  return until(condition, { what });
+}
+
 async function main() {
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'server-tools-lifecycle-'));
   const dataDir = path.join(workDir, 'data');
@@ -172,9 +191,32 @@ async function main() {
         await page.keyboard.press('KeyK');
         await page.keyboard.up('Control');
         if (mode !== 'recent') await page.type('#cmdkInput', 'deployments:');
-        await until(() => page.evaluate(() => [...document.querySelectorAll('#cmdkList .cmdk-row')].some((el) => el.textContent.includes('Palette deployment'))), { what: 'deployment search result' });
-        if (mode === 'mouse') await page.click('#cmdkList .cmdk-row');
-        else await page.keyboard.press('Enter');
+        /* The palette fetches its sources, so the list can still be re-rendered
+           after the row first appears. Wait for it to settle, or a click lands
+           on a row that is being replaced and dispatches nothing. */
+        await until(async () => {
+          const seen = await page.evaluate(() => {
+            const rows = [...document.querySelectorAll('#cmdkList .cmdk-row')];
+            return rows.some((el) => el.textContent.includes('Palette deployment')) ? rows.length : 0;
+          });
+          if (!seen) return false;
+          await wait(120);
+          const again = await page.evaluate(() => {
+            const rows = [...document.querySelectorAll('#cmdkList .cmdk-row')];
+            return rows.some((el) => el.textContent.includes('Palette deployment')) ? rows.length : 0;
+          });
+          return seen === again && again;
+        }, { what: 'deployment search result to settle' });
+
+        if (mode === 'mouse') {
+          // Click the row that IS the deployment, not whichever row is first:
+          // once this has been chosen before, a "recent" entry joins the list.
+          const row = await page.evaluateHandle(() => [...document.querySelectorAll('#cmdkList .cmdk-row')].find((el) => el.textContent.includes('Palette deployment')));
+          const element = row.asElement();
+          assert.ok(element, 'the deployment row is still in the document');
+          await element.click();
+          await element.dispose();
+        } else await page.keyboard.press('Enter');
         await until(() => page.evaluate(() => window.__paletteRoute === '#/deployments/targets/palette-target'), { what: mode + ' selection to dispatch the deployment route' });
         assert.equal(await page.$eval('#cmdkModal', (el) => el.open), false);
       }
@@ -182,8 +224,13 @@ async function main() {
       await page.keyboard.press('KeyK');
       await page.keyboard.up('Control');
       await page.waitForSelector('#cmdkModal[open]');
-      await page.mouse.click(5, 5);
-      await until(() => page.$eval('#cmdkModal', (el) => !el.open), { what: 'outside click to close search' });
+      // The backdrop is what swallows an outside click, and the modal puts it
+      // there as it opens. Clicking before it is laid out hits nothing.
+      await until(() => page.evaluate(() => {
+        const backdrop = document.getElementById('stBackdrop');
+        return !!backdrop && !backdrop.hidden && backdrop.getBoundingClientRect().width > 0;
+      }), { what: 'the modal backdrop to cover the page' });
+      await clickUntil(page, () => page.mouse.click(5, 5), () => page.$eval('#cmdkModal', (el) => !el.open), { what: 'outside click to close search' });
       await until(() => page.$eval('#stBackdrop', (el) => el.hidden), { what: 'search backdrop to clear' });
     } finally { await page.evaluate(() => { window.__restorePalette(); localStorage.removeItem(CMDK_RECENTS_KEY); }); }
 
@@ -215,12 +262,10 @@ async function main() {
       await page.keyboard.press('KeyA');
       await page.keyboard.up('Control');
       await page.type('#cnName', 'Edited connector');
-      await page.click('#btnCnSave');
-      await until(() => page.$eval('#cnModal', (el) => !el.open), { what: 'editor to save and close' });
+      await clickUntil(page, '#btnCnSave', () => page.$eval('#cnModal', (el) => !el.open), { what: 'editor to save and close' });
       assert.equal(await page.evaluate(() => window.__connectorSaved.name), 'Edited connector');
       await page.click('#connectorsList [data-act="edit"]');
-      await page.click('#btnCnCancel');
-      await until(() => page.$eval('#cnModal', (el) => !el.open), { what: 'editor cancel' });
+      await clickUntil(page, '#btnCnCancel', () => page.$eval('#cnModal', (el) => !el.open), { what: 'editor cancel' });
       await page.click('#connectorsList [data-act="edit"]');
       await page.keyboard.press('Escape');
       await until(() => page.$eval('#cnModal', (el) => !el.open), { what: 'editor Escape' });

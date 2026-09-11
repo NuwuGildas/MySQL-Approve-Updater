@@ -534,3 +534,35 @@ test('two sessions on one server keep separate histories, turns and completion e
   const scoped = ctx.audits.map((x) => auditEntryForViewer(x, one)).filter(Boolean);
   assert.ok(scoped.every((x) => x.sessionId === one));
 });
+
+/* ---------- a card a module raised, described only by what crossed the bridge ---------- */
+
+test('a proposal kind that describes no label is still decidable', async (t) => {
+  /* A module's proposalKinds[kind].label() runs in that module's own process.
+     A function cannot cross to the host, so what reaches the host is a handler
+     with approve/reject and, at most, a label that travelled as text on the
+     card. A handler with no label at all used to throw "handler.label is not a
+     function" the moment the user pressed Accept - the decision failed, and the
+     command the user had approved never ran. */
+  const ctx = setup(t);
+  const ran = [];
+  ctx.agent.kinds['module-action'] = { approve: async (p) => { ran.push(p.id); return { ok: true }; } };  // no label
+  const { sessionId } = await proposeOne(ctx);
+
+  const bare = { id: 'card-bare', kind: 'module-action', sessionId, status: 'pending' };
+  const described = { id: 'card-described', kind: 'module-action', sessionId, status: 'pending', label: 'restart "web-01"' };
+  ctx.agent.proposals.push(bare, described);
+
+  ctx.model.push('Done.');
+  const first = await ctx.workflow.decide(sessionId, 'card-bare', { decision: 'approve' });
+  assert.equal(first.decision, 'approved');
+  assert.equal(first.executed, true);
+  assert.deepEqual(ran, ['card-bare'], 'the approved action actually ran');
+
+  /* The label a module did manage to send is what the transcript records. */
+  ctx.model.push('Done.');
+  await ctx.workflow.decide(sessionId, 'card-described', { decision: 'reject' });
+  const notes = ctx.api.history(sessionId).filter((m) => m.kind === 'decision');
+  assert.equal(notes.some((n) => n.text.includes('restart "web-01"')), true, JSON.stringify(notes.map((n) => n.text)));
+  assert.equal(notes.some((n) => n.text.includes('module-action proposal')), true, 'and a card with no label still reads as something');
+});
