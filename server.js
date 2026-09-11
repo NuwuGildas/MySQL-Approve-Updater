@@ -2554,7 +2554,9 @@ app.get('/api/projects', (req, res) => {
 const { createModuleHost } = require('./lib/host/manager');
 const moduleHost = createModuleHost({
   dataDir: DATA_DIR, rootDir: ROOT, isPackaged: IS_PACKAGED,
-  registries: moduleRegistries(),
+  // Asked again on every refresh: a local catalog can appear or be deleted
+  // while the application is running, and that must not need a restart.
+  registries: () => moduleRegistries(),
   requireSignature: process.env.MODULES_ALLOW_UNSIGNED !== '1',
   log: (level, message) => logEvent(level, message),
   broadcast: (event, payload) => sseBroadcast(event, payload),

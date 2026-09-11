@@ -470,3 +470,42 @@ test('a module that fails to activate is not recorded, and leaves the host exact
   assert.deepEqual(result.installed.map((r) => r.id), ['demo']);
   assert.equal(registry.get('demo').version, '1.0.0');
 });
+
+test('where a catalog comes from is asked again, not decided once at startup', async (t) => {
+  /* A developer builds a local catalog, or deletes it. Either should take effect
+     on the next refresh: resolving the registry list once at startup made
+     deleting a local catalog leave the application pointing at a file that is no
+     longer there, with nothing offered until it was restarted. */
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'st-registry-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const local = path.join(dir, 'local.json');
+  const published = path.join(dir, 'published.json');
+  const doc = (id) => JSON.stringify({
+    catalogVersion: 1,
+    modules: [{
+      id, name: id, description: 'x', publisher: 'Test',
+      versions: [{ version: '1.0.0', hostSdk: `^${HOST_SDK_VERSION.split('.')[0]}.0.0`, package: { url: 'http://x/y.tgz', size: 10, sha256: 'a'.repeat(64) } }],
+    }],
+  });
+  fs.writeFileSync(local, doc('from-local'));
+  fs.writeFileSync(published, doc('from-published'));
+
+  /* Exactly what server.js does: prefer a local catalog when the file is there. */
+  const registries = () => (fs.existsSync(local)
+    ? [{ name: 'local', url: local }]
+    : [{ name: 'published', url: published }]);
+  const client = createCatalogClient({ registries, hostSdkVersion: HOST_SDK_VERSION, ttlMs: 0 });
+
+  assert.deepEqual((await client.load()).modules.map((m) => m.id), ['from-local']);
+  assert.deepEqual(client.sources.map((s) => s.name), ['local'], 'and it reports where it is looking');
+
+  fs.rmSync(local);
+  const after = await client.load({ force: true });
+  assert.deepEqual(after.modules.map((m) => m.id), ['from-published'], 'deleting the local catalog falls back, with no restart');
+  assert.deepEqual(after.failures, [], 'and the missing file is not reported as a broken registry');
+  assert.deepEqual(client.sources.map((s) => s.name), ['published']);
+
+  /* A plain array still works, for callers that have nothing to decide. */
+  const fixed = createCatalogClient({ registries: [{ name: 'published', url: published }], hostSdkVersion: HOST_SDK_VERSION, ttlMs: 0 });
+  assert.deepEqual((await fixed.load()).modules.map((m) => m.id), ['from-published']);
+});
