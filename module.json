@@ -1,0 +1,22 @@
+{
+  "packageFormat": 1,
+  "id": "projects",
+  "name": "Projects",
+  "description": "Group connections, servers, connectors, repositories and deployments into projects, and give each one its own assistant conversation.",
+  "version": "1.0.0",
+  "publisher": "Server Tools",
+  "hostSdk": "^1.0.0",
+  "frontend": "frontend/index.js",
+  "backend": "backend/index.js",
+  "dependencies": {},
+  "capabilities": [
+    "ui:pages",
+    "ui:commands",
+    "projects:read",
+    "projects:write",
+    "connections:read",
+    "events:subscribe",
+    "storage:module"
+  ],
+  "pages": ["projects"]
+}

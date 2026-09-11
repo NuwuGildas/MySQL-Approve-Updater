@@ -1,0 +1,14 @@
+<dialog id="prjResModal" class="pr-modal" aria-labelledby="prTitle">
+  <header class="pr-head">
+    <div class="pr-title">
+      <h2 id="prTitle">Project resources</h2>
+      <div class="pr-project"><span class="proj-dot" id="prDot" aria-hidden="true"></span><label class="sr-only" for="prProject">Project</label><select id="prProject"></select></div>
+      <p class="hint" id="prDesc" hidden></p>
+    </div>
+    <button type="button" id="prRefresh">Refresh</button><button type="button" id="prClose" aria-label="Close project resources">Close</button>
+  </header>
+  <div class="pr-readonly" id="prReadOnly" hidden></div>
+  <div class="pr-tools"><div class="pr-tabs seg" id="prTabs" role="tablist" aria-label="Resource types"></div><label class="sr-only" for="prSearch">Search resources</label><input type="search" id="prSearch" placeholder="Search resources…"></div>
+  <div class="pr-list" id="prList"></div>
+  <p class="pr-foot hint" id="prSummary" aria-live="polite"></p>
+</dialog>
