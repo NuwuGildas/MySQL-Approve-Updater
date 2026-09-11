@@ -14,9 +14,15 @@ const path = require('path');
 const { spawn, execFileSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..', '..');
-const { startSshServer, fixtureConnections } = require(path.join(ROOT, 'test', 'fixtures', 'ssh-server.js'));
+/* The SSH fixture moved into the Servers module when servers became one; keep the
+   old path working so a checkout mid-refactor still runs. */
+const SSH_FIXTURE = [
+  path.join(ROOT, 'modules', 'servers', 'test', 'fixtures', 'ssh-server.js'),
+  path.join(ROOT, 'test', 'fixtures', 'ssh-server.js'),
+].find((p) => fs.existsSync(p));
+const { startSshServer, fixtureConnections } = require(SSH_FIXTURE);
 
-const COPY = ['server.js', 'package.json', 'lib', 'public', 'scripts'];
+const COPY = ['server.js', 'package.json', 'lib', 'public', 'scripts', 'config'];
 const rm = (p) => { try { fs.rmSync(p, { recursive: true, force: true }); } catch {} };
 
 function link(target, linkPath) {
@@ -41,6 +47,8 @@ async function makeAppDir() {
  * @param {object} o
  * @param {number} [o.port] HTTP port for the app (never 3000: the user's dev server owns it)
  * @param {number} [o.servers] how many disposable SSH boxes to expose as server profiles
+ * @param {(dir: string) => void} [o.beforeStart] seed the app directory before the server boots,
+ *   e.g. to install modules into it. It runs after the fixture data files are written.
  */
 async function startSandbox(o = {}) {
   const port = o.port || 3106;
@@ -61,6 +69,8 @@ async function startSandbox(o = {}) {
   const fakeBin = path.join(__dirname, 'fake-claude');
   const scriptFile = path.join(fakeBin, 'script.json');
   fs.writeFileSync(scriptFile, '[]');
+
+  if (o.beforeStart) await o.beforeStart(dir);
 
   const env = { ...process.env, PORT: String(port), PATH: fakeBin + path.delimiter + process.env.PATH, MAU_NO_OPEN: '1' };
   const child = spawn(process.execPath, [path.join(dir, 'server.js')], { cwd: dir, env, stdio: ['ignore', 'pipe', 'pipe'] });

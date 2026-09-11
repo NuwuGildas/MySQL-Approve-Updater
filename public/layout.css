@@ -142,7 +142,11 @@ body.page-home #pageHead { display: none; }
 #pageContextWrap[hidden] + .page-project { margin-left: auto; }
 .ag-proj:empty { display: none; }
 
-  @media (max-width: 767px) {.proj-switch { max-width: 46vw; }
+  @media (max-width: 767px) {
+/* No room for it on a phone, and no need: the header keeps what is used
+   constantly, and a project is chosen on the Projects page, where every project
+   has Set active. */
+.proj-switch { display: none; }
 /* the switcher sits mid-header on phones: anchoring to it would push the menu off-screen, so pin it to the viewport */
 .proj-menu { position: fixed; top: calc(var(--hdr-h) + .4rem); left: .75rem; right: .75rem; width: auto; }
 .proj-trigger { max-width: 9.5rem; }
@@ -303,8 +307,21 @@ button, input:not(.mono), select { font-family: inherit; }
    sit behind one button; the originals keep their ids and their listeners and
    the menu simply clicks them. */
 header { flex-wrap: nowrap; }
-header h1 { white-space: nowrap; }
-header .tool-crumb, header .sse-link { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* One row means something has to give when it is tight. The TITLE gives: it is
+   the only flexible thing here, and it truncates. Everything else keeps its
+   size, because a control squeezed to nothing - the project switcher collapsing
+   to a bare dot - is worse than a shortened heading. */
+header > * { flex: none; }
+header h1 { flex: 0 1 auto; min-width: 2.5rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+header .tool-crumb, header .sse-link { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+header .spacer { flex: 1 1 auto; }
+#projTriggerName { max-width: 9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A module's project buttons are mirrored in the menu, so the header does not
+   carry them too: two icons whose meaning is only obvious on hover are exactly
+   what the menu is for. The elements stay in the DOM with their listeners - the
+   menu rows follow their hidden state. */
+header #btnProjManage, header #btnProjResources { display: none; }
+
 .hdr-more { position: relative; flex: none; }
 .hdr-more-menu {
   position: absolute; z-index: 80; top: calc(100% + .4rem); right: 0; min-width: 15rem;
@@ -333,3 +350,33 @@ header .tool-crumb, header .sse-link { min-width: 0; overflow: hidden; text-over
   header .hdr-search { display: none; }   /* it is in the menu, with its shortcut */
   header #btnSettings, header .theme-toggle { display: none !important; }
 }
+
+/* ---- The assistant as an action sheet on phones ----
+   A 400px window that can be dragged around is a desktop idea. On a phone the
+   same #agentDrawer rises from the bottom edge, full width, over a scrim, and
+   is dismissed by tapping outside it - the shape every mobile OS uses for a
+   panel summoned by a button (here #btnAiAgent). shell.js stops saving and
+   restoring window geometry at this size, because that geometry is written as
+   inline styles and would beat everything below. */
+@media (max-width: 767px) {
+  #agentDrawer:not(.ag-docked) {
+    top: auto; right: 0; bottom: 0; left: 0;
+    width: auto; max-width: none; min-width: 0;
+    height: 82dvh; max-height: 82dvh; min-height: 0;
+    border-radius: 18px 18px 0 0; border-bottom: 0;
+    box-shadow: 0 -14px 44px rgba(0, 0, 0, .6);
+    resize: none;
+    animation: ag-sheet-up .22s cubic-bezier(.22, 1, .36, 1);
+  }
+  /* the grab bar: an affordance only - dismissal is a tap on the scrim or the close button */
+  #agentDrawer:not(.ag-docked)::before {
+    content: ''; flex: none; width: 36px; height: 4px; margin: .45rem auto .1rem;
+    border-radius: 99px; background: var(--border);
+  }
+  /* the header is no longer a drag handle at this size (shell.js agrees) */
+  #agentDrawer:not(.ag-docked) > div:first-child { cursor: default; user-select: auto; touch-action: auto; }
+  /* the scrim: the base stylesheet hides the popover backdrop, a sheet needs it back */
+  #agentDrawer:not(.ag-docked)::backdrop { display: block; background: rgba(0, 0, 0, .5); }
+}
+@keyframes ag-sheet-up { from { transform: translateY(100%); } to { transform: none; } }
+@media (prefers-reduced-motion: reduce) { #agentDrawer { animation: none !important; } }

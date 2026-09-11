@@ -323,8 +323,23 @@ function drawerA11y(el) {
 /* ---------- AI assistant: free-floating window (drag by header, resize from corner) ---------- */
 const AI_GEOM_KEY = 'st-ai-geom';
 let agentUserResized = false; // set once the corner grip is used; until then the window hugs its content
+
+/* On a phone the assistant is an action sheet: it rises from the bottom edge,
+   full width, and is dismissed rather than arranged. A saved window position
+   means nothing there - and it is written as INLINE styles, which beat any
+   stylesheet - so geometry is neither restored nor saved at this size. Same
+   breakpoint as the rest of the shell. */
+const AGENT_SHEET = window.matchMedia('(max-width: 767px)');
+const agentIsSheet = () => AGENT_SHEET.matches && !$('agentDrawer')?.classList.contains('ag-docked');
+/** Drop inline geometry, so the sheet is placed purely by CSS. */
+function clearAgentGeom() {
+  const el = $('agentDrawer'); if (!el) return;
+  for (const property of ['left', 'top', 'right', 'bottom', 'width', 'height']) el.style.removeProperty(property);
+}
+
 function saveAgentGeom() {
   const el = $('agentDrawer'); if (el.classList.contains('ag-docked')) return; // a pane has no window geometry
+  if (agentIsSheet()) return;                                                  // and a sheet has none either
   const r = el.getBoundingClientRect();
   const h = agentUserResized || el.style.height ? r.height : null;
   try { localStorage.setItem(AI_GEOM_KEY, JSON.stringify({ left: r.left, top: r.top, w: r.width, h })); } catch {}
@@ -332,6 +347,7 @@ function saveAgentGeom() {
 function restoreAgentGeom() { // called when the window opens
   const el = $('agentDrawer');
   if (el.classList.contains('ag-docked')) return; // sized by the workspace pane, not by the saved window
+  if (agentIsSheet()) { clearAgentGeom(); return; } // a sheet is placed by the stylesheet, edge to edge
   let g = null; try { g = JSON.parse(localStorage.getItem(AI_GEOM_KEY)); } catch {}
   if (!g) return;
   el.style.width = Math.min(g.w, window.innerWidth * 0.96) + 'px';
@@ -345,6 +361,7 @@ function restoreAgentGeom() { // called when the window opens
   const header = el.querySelector(':scope > div'); // the title/controls row is the drag handle
   header.addEventListener('pointerdown', (e) => {
     if (el.classList.contains('ag-docked')) return; // docked in the workspace: the header is not a drag handle
+    if (agentIsSheet()) return;                     // an action sheet is anchored to the bottom edge, not dragged
     if (e.target.closest('button, input, .ag-menu')) return; // controls and the options menu are not drag targets
     const r = el.getBoundingClientRect();
     const ox = e.clientX - r.left, oy = e.clientY - r.top;
@@ -365,7 +382,26 @@ function restoreAgentGeom() { // called when the window opens
     if (r.right - e.clientX < 22 && r.bottom - e.clientY < 22) agentUserResized = true;
   });
   let roTimer = 0; // persist size after the native corner-resize settles
-  new ResizeObserver(() => { if (el.classList.contains('open') && agentUserResized) { clearTimeout(roTimer); roTimer = setTimeout(saveAgentGeom, 200); } }).observe(el);
+  new ResizeObserver(() => { if (el.classList.contains('open') && agentUserResized && !agentIsSheet()) { clearTimeout(roTimer); roTimer = setTimeout(saveAgentGeom, 200); } }).observe(el);
+
+  /* Crossing the breakpoint in either direction: inline geometry left over from
+     the window would pin the sheet somewhere mid-screen (it beats the
+     stylesheet), and geometry the sheet never had would leave the window
+     unplaced. Clear on the way in, restore on the way out. */
+  AGENT_SHEET.addEventListener('change', () => {
+    if (agentIsSheet()) clearAgentGeom();
+    else if (el.classList.contains('open')) restoreAgentGeom();
+  });
+
+  /* Tap outside to dismiss, the way every action sheet closes. The scrim is a
+     popover ::backdrop, which paints but does not take pointer events, so the
+     tap lands on whatever is behind it - listen on the document instead. The
+     button that summoned the sheet is excluded: its own handler toggles. */
+  document.addEventListener('pointerdown', (e) => {
+    if (!agentIsSheet() || !el.classList.contains('open')) return;
+    if (el.contains(e.target) || e.target.closest('#btnAiAgent')) return;
+    closeAgentDrawer();
+  }, true);
 })();
 
 async function startApplication() {

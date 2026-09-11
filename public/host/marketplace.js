@@ -7,38 +7,40 @@
  * draft in its composer, the selected database, open forms and live terminals
  * are all still there afterwards, because none of them are touched.
  *
- * Installed state is server-owned. This dialog renders what /api/modules says
+ * Installed state is server-owned. This view renders what /api/modules says
  * and never grants a module from local storage. */
 
 let marketplaceState = null;
 let marketplaceBusy = new Set();
 
-function moduleMarketplaceDialog() {
-  let dialog = document.getElementById('moduleMarketplace');
-  if (dialog) return dialog;
-  dialog = document.createElement('dialog');
-  dialog.id = 'moduleMarketplace';
-  dialog.setAttribute('aria-labelledby', 'moduleMarketplaceTitle');
-  dialog.innerHTML = `
+function moduleMarketplaceView() {
+  let view = document.getElementById('moduleMarketplace');
+  if (view) return view;
+  view = document.createElement('section');
+  view.id = 'moduleMarketplace';
+  view.hidden = true;
+  view.setAttribute('role', 'main');
+  view.setAttribute('aria-labelledby', 'moduleMarketplaceTitle');
+  view.innerHTML = `
     <div class="module-market-head">
-      <div><h2 id="moduleMarketplaceTitle">Modules</h2><p>Add optional tools to your workspace. Nothing here is downloaded until you add it.</p></div>
-      <button type="button" class="iconbtn" data-close aria-label="Close modules">✕</button>
+      <div><h1 id="moduleMarketplaceTitle" tabindex="-1">Modules</h1><p>Add tools to your workspace and manage the modules you already use.</p></div>
     </div>
     <label class="sr-only" for="moduleSearch">Search modules</label>
     <input id="moduleSearch" type="search" placeholder="Search modules…" autocomplete="off">
     <p id="moduleMarketStatus" role="status"></p>
     <div id="moduleCatalog" class="module-catalog"></div>
     <p class="module-market-foot">Removing a module keeps its saved data and history. Add it again to pick up where you left off.</p>`;
-  document.body.appendChild(dialog);
-  dialog.querySelector('[data-close]').addEventListener('click', () => dialog.close());
-  dialog.querySelector('input').addEventListener('input', () => paintModuleCatalog());
-  dialog.addEventListener('close', () => { if (parseRoute(location.hash)?.id === 'modules') navigate('#/home', { replace: true, focus: false }); });
-  return dialog;
+  document.body.appendChild(view);
+  view.querySelector('input').addEventListener('input', () => paintModuleCatalog());
+  return view;
 }
 
 function openModuleMarketplace() {
-  const dialog = moduleMarketplaceDialog();
-  if (!dialog.open) dialog.showModal();
+  navigate('#/modules');
+}
+
+function showModuleMarketplace() {
+  moduleMarketplaceView().hidden = false;
   renderModuleCatalog();
 }
 
@@ -82,16 +84,24 @@ function moduleCard(module) {
     : module.installed ? 'Inactive'
     : module.compatible ? 'Available' : 'Not compatible';
   card.innerHTML = `
-    <div class="module-card-title"><h3>${esc(module.name)}</h3><span class="badge${module.status === 'failed' || module.status === 'crashed' ? ' failed' : module.status === 'active' ? ' approved' : ''}">${esc(badge)}</span></div>
-    <p>${esc(module.description)}</p>
-    <small>${esc(module.publisher)}${module.signed ? ' · signed' : ''} · v${esc(module.installedVersion || module.availableVersion || '?')}${module.hostSdk ? ` · host SDK ${esc(module.hostSdk)}` : ''}</small>
-    ${module.source?.commit ? `<small class="mono">${esc(module.source.branch || '')}@${esc(String(module.source.commit).slice(0, 10))}</small>` : ''}
-    ${dependencies.length ? `<small>Also adds ${esc(dependencies.map((d) => d.id).join(', '))}</small>` : ''}
-    ${module.requiredBy.length ? `<small>Required by ${esc(module.requiredBy.map((d) => d.name).join(', '))}</small>` : ''}
-    ${module.capabilities.length ? `<details class="module-caps"><summary>${module.capabilities.length} capabilit${module.capabilities.length === 1 ? 'y' : 'ies'}</summary><ul>${module.capabilities.map((c) => `<li>${esc(c.label)}</li>`).join('')}</ul></details>` : ''}
+    <div class="module-card-info">
+      <div class="module-card-title"><h3>${esc(module.name)}</h3><span class="badge${module.status === 'failed' || module.status === 'crashed' ? ' failed' : module.status === 'active' ? ' approved' : ''}">${esc(badge)}</span></div>
+      <p>${esc(module.description)}</p>
+      <small>${esc(module.publisher)} &middot; v${esc(module.installedVersion || module.availableVersion || '?')}${module.signed ? ' &middot; Signed package' : ''}</small>
+      ${dependencies.length ? `<small>Also adds ${esc(dependencies.map((d) => d.id).join(', '))}</small>` : ''}
+      ${module.requiredBy.length ? `<small>Required by ${esc(module.requiredBy.map((d) => d.name).join(', '))}</small>` : ''}
+    </div>
+    <div class="module-actions"></div>
+    <details class="module-caps"><summary>Permissions &amp; details <span>${module.capabilities.length} permissions</span></summary>
+      ${module.capabilities.length ? `<ul>${module.capabilities.map((c) => `<li>${esc(c.label)}</li>`).join('')}</ul>` : ''}
+      <div class="module-package-info">
+        ${module.hostSdk ? `<small>Host SDK ${esc(module.hostSdk)}</small>` : ''}
+        ${module.source?.commit ? `<small class="mono">${esc(module.source.branch || '')}@${esc(String(module.source.commit).slice(0, 10))}</small>` : ''}
+      </div>
+    </details>
     ${module.error ? `<p class="module-error" role="alert">${esc(module.error)}</p>` : ''}
-    <progress class="module-progress" hidden max="1" value="0"></progress>
-    <div class="module-actions"></div>`;
+    <progress class="module-progress" hidden max="1" value="0"></progress>`;
+
 
   const actions = card.querySelector('.module-actions');
   const button = (label, className, handler) => {
@@ -107,7 +117,7 @@ function moduleCard(module) {
     if (module.compatible) button('+ Add module', 'primary', addModule);
     else actions.innerHTML = '<span class="hint">This version needs a newer application.</span>';
   } else {
-    if (module.status === 'active' && module.pages?.length) button('Open', '', () => { document.getElementById('moduleMarketplace')?.close(); navigate('#/' + module.pages[0]); });
+    if (module.status === 'active' && module.pages?.length) button('Open', '', () => navigate('#/' + module.pages[0]));
     if (module.status === 'failed' || module.status === 'crashed') button('Retry', 'primary', retryModule);
     if (module.updateAvailable) button(`Update to ${module.availableVersion}`, 'primary', updateModule);
     const remove = button('Remove', '', removeModule);
