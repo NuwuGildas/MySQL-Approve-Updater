@@ -246,11 +246,22 @@ async function main() {
     const socketsBefore = sockets.length;
     await page.evaluate(() => fetch('/api/m/servers/http/terminal/' + encodeURIComponent(agentSessionId()), { method: 'DELETE' }));
     await sleep(1200);
+    /* Read it the way a user does: the server card's Terminal menu lists recent sessions, ended
+       ones included. The list is filled from the server after the menu opens, so wait for the
+       entry to exist before clicking it - and say so if it never turns up, rather than carrying on
+       into assertions about a view that was never opened. */
     await page.evaluate(() => navigate('#/servers'));
     await until(page, () => !!srvCard('Fixture 1'), null, 20000);
-    await until(page, (id) => openRecentSession('Fixture 1', id), endedId, 25000);
-    await until(page, () => document.getElementById('agentInput').disabled, null, 15000);
-    await sleep(1500);
+    const listed = await until(page, (id) => {
+      const menu = srvCard('Fixture 1')?.querySelector('.term-dd-menu');
+      if (!menu) return false;
+      if (menu.hidden) { srvCard('Fixture 1').querySelector('[data-act="terminal-menu"]').click(); return false; }
+      return !!menu.querySelector(`[data-act="session"][data-sid="${id}"]`);
+    }, endedId, 25000);
+    r.ok('A3', 'an ended session is listed under Recent sessions on its server', listed, String(endedId).slice(0, 8));
+    const opened = await until(page, (id) => openRecentSession('Fixture 1', id), endedId, 25000);
+    r.ok('A3', 'it can be opened from there', opened);
+    await until(page, () => document.getElementById('agentInput').disabled && chatText().length > 0, null, 20000);
     const ended = await page.evaluate(() => ({
       input: document.getElementById('agentInput').disabled,
       send: document.getElementById('btnAgentSend').disabled,

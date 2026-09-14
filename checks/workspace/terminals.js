@@ -5,7 +5,7 @@
    browser never opened. Run: node checks/workspace/terminals.js */
 
 const { startSandbox } = require('./sandbox');
-const { launch, openApp, recorder, shot, until, sleep, APP_READY } = require('./browser');
+const { launch, openApp, recorder, shot, until, untilLocal, sleep, APP_READY } = require('./browser');
 const { installPageHelpers } = require('./page-helpers');
 
 const PORT = Number(process.env.PORT || 3136);
@@ -43,14 +43,55 @@ async function main() {
     r.ok('affordance', 'with no live session the sidebar entry is not offered',
       (await page.evaluate(() => navState())).hidden === true, JSON.stringify(await page.evaluate(() => navState())));
 
-    /* ---- open a terminal on Fixture 1 ---- */
+    /* ---- open a terminal on Fixture 1, and ask for a SECOND session while the first is
+           still opening ----
+       Opens in flight used to be de-duplicated by server alone, so a request for a different
+       session on the same box was handed the pending one: "New terminal" clicked before the first
+       had finished coming up silently put you back in the session you already had, with a progress
+       notice and no explanation. The window is normally a few hundred milliseconds, so the attach
+       is slowed here to sit inside it on purpose. */
     await until(page, () => !!document.querySelector('#serversList .srv-card'), null, 20000);
     await until(page, () => { const b = srvCard('Fixture 1')?.querySelector('[data-act="connect"]'); if (!b) return false; b.click(); return true; }, null, 20000);
     await until(page, () => !!srvCard('Fixture 1')?.querySelector('[data-act="terminal-menu"]'), null, 45000);
-    await until(page, () => openTerminalFromCard('Fixture 1'), null, 20000);
+
+    let slowAttach = true;
+    const attaches = [];
+    await page.setRequestInterception(true);
+    page.on('request', async (req) => {
+      const isAttach = req.method() === 'POST' && req.url().includes('/agent/attach');
+      if (isAttach) attaches.push(req.postData() || '');
+      try {
+        if (isAttach && slowAttach) await sleep(3000);
+        await req.continue();
+      } catch { /* the request was already handled */ }
+    });
+    await until(page, () => termMenuAction('Fixture 1', 'terminal'), null, 20000);
+    await untilLocal(() => attaches.length === 1, 10000);   // the first open is in flight
+    const askedAgain = await until(page, () => termMenuAction('Fixture 1', 'terminal-new'), null, 10000);
+    /* The request itself is the evidence. De-duplicating opens by server alone meant the second
+       click was handed the FIRST open's promise and no second attach was ever sent: the user was
+       left in the session they already had, behind a progress notice, with no explanation. Which
+       open ends up owning the console afterwards is the workspace's existing last-request-wins
+       behaviour and is not what this is about. */
+    const sentTwo = await untilLocal(() => attaches.length === 2, 10000);
+    r.ok('session', 'a new session asked for during an open in flight is really requested',
+      askedAgain && sentTwo, `clicked=${askedAgain} attach requests=${attaches.length}`);
+    slowAttach = false;
+    await until(page, () => consoleCount() >= 1, null, 45000);
+    await sleep(2500); // let both opens settle
+    await page.setRequestInterception(false);
+    const live = await liveIds();
+    const shown = await page.evaluate(() => activeConsole()?.dataset.sessionId || null);
+
     await until(page, () => location.hash.startsWith('#/terminals/'), null, 30000);
-    const sid = (await page.evaluate(() => location.hash)).split('/').pop();
-    r.ok('view', 'opening a terminal lands on the Terminals view addressed by its session', !!sid && sid.length > 8, sid);
+    // keep one live session: the rest of this run counts them
+    const sid = shown;
+    for (const id of live.filter((x) => x !== sid)) await fetch(s.base + '/api/m/servers/http/terminal/' + id, { method: 'DELETE' });
+    // the sidebar count comes from the server, so wait for it to agree before counting on it
+    await until(page, () => consoleCount() === 1 && /Terminals\s*1/.test(navState().text), null, 25000);
+    r.ok('view', 'opening a terminal lands on the Terminals view addressed by its session',
+      await until(page, (id) => location.hash === '#/terminals/' + id, sid, 20000), await page.evaluate(() => location.hash));
+
     await until(page, () => navState().hidden === false, null, 15000);
     const withOne = await page.evaluate(() => navState());
     r.ok('affordance', 'a live session reveals the sidebar entry with its count',

@@ -51,10 +51,13 @@ function parseRoute(hash) {
 }
 
 /** The one navigation entry point. options: { replace, focus, fromHistory } */
+let navCount = 0; // every page change, so a late replay can tell whether anything happened since
+
 function navigate(route, options = {}) {
   const r = route.startsWith('#') ? route : '#' + route;
   const resolved = parseRoute(r);
   if (!resolved) { toast('Unknown page: ' + r, 'warning'); return navigate(ROUTE_HOME, { replace: true }); }
+  navCount++;
   const target = r.slice(1);
   if (location.hash !== r) {
     resolving = true;
@@ -314,18 +317,20 @@ function formAsModal(formId, dialogId, hostId, closeBtnId) {
    reopened tab, a link someone shared - does not resolve yet, and the startup
    preference would quietly replace it. Remember it instead; boot.js replays it
    once the modules have activated. */
-let deferredRoute = null;    // what the address bar asked for
-let deferredFallback = null; // where startup sent us instead
+let deferredRoute = null; // what the address bar asked for
+let deferredAt = -1;      // navCount right after startup chose a page instead
 /**
  * Go to the address the page was opened with, now that the modules have registered their pages.
- * Only from the page startup chose: by the time the modules are up the user may already have
- * clicked somewhere, and pulling them off it would be worse than losing the deep link.
+ * Only if nothing has navigated since startup: by the time the modules are up the user may already
+ * have clicked somewhere, and pulling them off it would be worse than losing the deep link. The
+ * test is the navigation COUNT, not the current address - going to the page startup happened to
+ * choose is still the user going somewhere.
  * @returns {boolean} whether it navigated
  */
 function navResumeDeferredRoute() {
   const wanted = deferredRoute;
   deferredRoute = null;
-  if (!wanted || location.hash !== deferredFallback || !parseRoute(wanted)) return false;
+  if (!wanted || navCount !== deferredAt || !parseRoute(wanted)) return false;
   navigate(wanted, { replace: true, focus: false });
   return true;
 }
@@ -349,7 +354,7 @@ function navStartup() {
     route = startup === 'mysql' ? '#/database/updates' : startup === 'last' && last && parseRoute(last) ? last : ROUTE_HOME;
   }
   navigate(route, { replace: true, focus: false });
-  deferredFallback = deferredRoute ? location.hash : null;
+  deferredAt = navCount;
   if (typeof offerTourOnce === 'function') offerTourOnce(); // first visit: the tour starts on whatever page opened
 }
 

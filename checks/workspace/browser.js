@@ -60,6 +60,20 @@ async function until(page, fn, arg, timeout = 15000) {
   }
 }
 
+/**
+ * Poll a predicate HERE, in the check process, not in the page. For things only this side knows -
+ * requests seen, files written - where until() would evaluate the body in the browser and find
+ * nothing it refers to.
+ */
+async function untilLocal(fn, timeout = 15000) {
+  const end = Date.now() + timeout;
+  for (;;) {
+    if (await fn()) return true;
+    if (Date.now() > end) return false;
+    await sleep(120);
+  }
+}
+
 /* The base application is loaded first and the modules only after it is running, so "ready" means
    the router exists AND the Terminals workspace a module contributes has been mounted. */
 const APP_READY = () => typeof navigate === 'function' && !!document.getElementById('wsSplit');
@@ -86,4 +100,4 @@ async function openApp(browser, base) {
   return page;
 }
 
-module.exports = { launch, openApp, recorder, shot, until, sleep, APP_READY, SHOTS };
+module.exports = { launch, openApp, recorder, shot, until, untilLocal, sleep, APP_READY, SHOTS };
