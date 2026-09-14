@@ -54,8 +54,11 @@
         toast(`${descriptor.name} could not start: ${error.message}. Open Modules to retry.`, 'error');
       },
     });
-    // The address may name a page a module has just registered.
-    const resolved = parseRoute(location.hash);
+    /* The address may name a page a module has just registered: either the one the page was
+       opened with, before the startup preference took over because no module owned it yet,
+       or the one still showing. */
+    const replayed = typeof navResumeDeferredRoute === 'function' && navResumeDeferredRoute();
+    const resolved = replayed ? null : parseRoute(location.hash);
     if (resolved && resolved.id !== (typeof currentPageId !== 'undefined' ? currentPageId : null)) navigate(location.hash, { replace: true, focus: false });
   } catch (error) {
     toast('Installed modules could not be loaded: ' + error.message, 'error');

@@ -5,12 +5,18 @@
    real connections.json, settings.json and chat history is to run a COPY of the app from a temp
    directory with its own data files. node_modules is junctioned rather than copied.
    Two throwaway SSH servers (test/fixtures/ssh-server.js) stand in for real boxes, and a scripted
-   fake `claude` CLI (fake-claude/) stands in for the model, so every turn is deterministic. */
+   fake `claude` CLI (fake-claude/) stands in for the model, so every turn is deterministic.
+
+   Servers, Terminals, Projects, Connectors, Deployments and History are MODULES, so a bare copy of
+   the app has none of them and every page these checks look at is missing. installModules() puts
+   them in, from modules/ as it stands right now - which is the point: a check must see the code
+   being edited, not the last build and not what the user happens to have installed. */
 
 const fs = require('fs');
 const fsp = fs.promises;
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const { spawn, execFileSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..', '..');
@@ -43,12 +49,106 @@ async function makeAppDir() {
   return dir;
 }
 
+/* ---------------------------------------------------------------------------
+   Installing the modules into the sandbox
+
+   The real install path is download -> verify signature -> stage -> activate,
+   and it has its own end-to-end test (test/e2e/module-install.e2e.js). What a
+   frontend check needs is the result of that path, from the working tree, in
+   under a second: the registry treats module-data/state.json as the only
+   authority and reads the code from module-data/installed/<id>/<version>/, so
+   writing both is a complete installation as far as the running app is
+   concerned. Nothing is signed, which is honest - these are development
+   installs of uncommitted code.
+   --------------------------------------------------------------------------- */
+
+const SKIP_IN_PACKAGE = new Set(['.git', '.github', 'test', 'tests', 'coverage', 'node_modules']);
+const SKIP_IN_DEPENDENCY = /[\\/](test|tests|__tests__|\.github|docs?|example|examples)$/;
+
+/** Copy a module's source the way build-module.js packages it: no tests, no git, no build output. */
+function copyPackage(from, to) {
+  fs.cpSync(from, to, {
+    recursive: true,
+    filter: (src) => {
+      const name = path.basename(src);
+      return !SKIP_IN_PACKAGE.has(name) && !name.startsWith('_moved') && !name.endsWith('.tgz');
+    },
+  });
+}
+
+/** A module's bundledDependencies, and theirs, copied out of this checkout. */
+function bundleDependencies(manifest, into) {
+  const seen = new Set();
+  const copy = (name) => {
+    if (seen.has(name)) return;
+    seen.add(name);
+    const from = path.join(ROOT, 'node_modules', name);
+    if (!fs.existsSync(from)) throw new Error(`${manifest.id} bundles "${name}", which is not installed in this checkout`);
+    fs.cpSync(from, path.join(into, 'node_modules', name), { recursive: true, filter: (e) => !SKIP_IN_DEPENDENCY.test(e) });
+    const meta = JSON.parse(fs.readFileSync(path.join(from, 'package.json'), 'utf8'));
+    for (const dependency of Object.keys(meta.dependencies || {})) copy(dependency);
+  };
+  for (const name of manifest.bundledDependencies || []) copy(name);
+}
+
+/**
+ * Install modules into an app directory, straight from source.
+ * @param {string} appDir the sandbox copy of the application
+ * @param {string[]|null} only module ids to install, or null for every module in modules/
+ * @returns {string[]} the ids installed
+ */
+function installModules(appDir, only = null) {
+  const { validateManifest } = require(path.join(ROOT, 'lib', 'host', 'manifest'));
+  const { HOST_SDK_VERSION } = require(path.join(ROOT, 'lib', 'host', 'sdk'));
+  const source = path.join(ROOT, 'modules');
+  if (!fs.existsSync(source)) return [];
+
+  const ids = fs.readdirSync(source, { withFileTypes: true })
+    .filter((e) => e.isDirectory() && fs.existsSync(path.join(source, e.name, 'module.json')))
+    .map((e) => e.name)
+    .filter((id) => !only || only.includes(id))
+    .sort();
+
+  const modules = {};
+  for (const id of ids) {
+    const raw = JSON.parse(fs.readFileSync(path.join(source, id, 'module.json'), 'utf8'));
+    // Validate here rather than letting the registry mark it "broken" at boot, where the
+    // reason would only show up as a missing page halfway through a check.
+    const manifest = validateManifest(raw, { hostSdkVersion: HOST_SDK_VERSION });
+    if (manifest.id !== id) throw new Error(`modules/${id}/module.json declares "${manifest.id}"`);
+
+    const dir = path.join(appDir, 'module-data', 'installed', id, String(manifest.version));
+    fs.mkdirSync(dir, { recursive: true });
+    copyPackage(path.join(source, id), dir);
+    bundleDependencies(manifest, dir);
+
+    modules[id] = {
+      id,
+      version: manifest.version,
+      manifest,
+      installedAt: new Date().toISOString(),
+      activationId: crypto.randomUUID(),
+      digest: null,
+      publisher: { id: 'checks', name: 'Workspace checks' },
+      signed: false, // installed from the working tree, not from a signed package
+      source: { branch: null, commit: null, repository: null },
+      packageUrl: null,
+    };
+  }
+
+  fs.mkdirSync(path.join(appDir, 'module-data'), { recursive: true });
+  fs.writeFileSync(path.join(appDir, 'module-data', 'state.json'), JSON.stringify({ version: 1, modules }, null, 2));
+  return ids;
+}
+
 /**
  * @param {object} o
  * @param {number} [o.port] HTTP port for the app (never 3000: the user's dev server owns it)
  * @param {number} [o.servers] how many disposable SSH boxes to expose as server profiles
- * @param {(dir: string) => void} [o.beforeStart] seed the app directory before the server boots,
- *   e.g. to install modules into it. It runs after the fixture data files are written.
+ * @param {string[]|false} [o.modules] which modules to install; every module in modules/ by
+ *   default, or false for a bare app with none (what the marketplace checks want).
+ * @param {(dir: string) => void} [o.beforeStart] seed the app directory before the server boots.
+ *   It runs after the fixture data files are written and after the modules are installed.
  */
 async function startSandbox(o = {}) {
   const port = o.port || 3106;
@@ -70,6 +170,8 @@ async function startSandbox(o = {}) {
   const scriptFile = path.join(fakeBin, 'script.json');
   fs.writeFileSync(scriptFile, '[]');
 
+  const modules = o.modules === false ? [] : installModules(dir, o.modules || null);
+
   if (o.beforeStart) await o.beforeStart(dir);
 
   const env = { ...process.env, PORT: String(port), PATH: fakeBin + path.delimiter + process.env.PATH, MAU_NO_OPEN: '1' };
@@ -88,7 +190,7 @@ async function startSandbox(o = {}) {
   }
 
   return {
-    base, dir, port, profiles, log,
+    base, dir, port, profiles, log, modules,
     /** Queue what the fake CLI answers, one entry per model step. */
     script: (steps) => fs.writeFileSync(scriptFile, JSON.stringify(steps, null, 2)),
     async stop() {
@@ -100,4 +202,4 @@ async function startSandbox(o = {}) {
   };
 }
 
-module.exports = { startSandbox, ROOT };
+module.exports = { startSandbox, installModules, ROOT };

@@ -54,3 +54,7 @@ ssh-agent-memory.json
 
 # a local module catalog (scripts/modules-local.js); package archives live in dist/
 /registry/
+
+# frontend check output: screenshots, and the scripted CLI's queue, both rewritten on every run
+/checks/workspace/shots/
+/checks/workspace/fake-claude/script.json

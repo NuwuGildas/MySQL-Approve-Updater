@@ -5,12 +5,12 @@
    browser never opened. Run: node checks/workspace/terminals.js */
 
 const { startSandbox } = require('./sandbox');
-const { launch, openApp, recorder, shot, until, sleep } = require('./browser');
+const { launch, openApp, recorder, shot, until, sleep, APP_READY } = require('./browser');
+const { installPageHelpers } = require('./page-helpers');
 
 const PORT = Number(process.env.PORT || 3136);
 
 const installHelpers = () => {
-  window.srvCard = (name) => document.querySelector(`#serversList .srv-name[title="${name}"]`)?.closest('.srv-card') || null;
   window.navEntry = () => document.querySelector('#appNav [data-nav="terminals"]');
   window.navState = () => {
     const el = navEntry();
@@ -28,13 +28,14 @@ const installHelpers = () => {
 
 async function main() {
   const s = await startSandbox({ port: PORT, servers: 2 });
-  const liveIds = async () => ((await (await fetch(s.base + '/api/ssh/terminal')).json()).terminals || [])
+  const liveIds = async () => ((await (await fetch(s.base + '/api/m/servers/http/terminal')).json()).terminals || [])
     .filter((t) => t.status === 'open').map((t) => t.sessionId);
   const browser = await launch();
   const r = recorder('terminals');
   let page;
   try {
     page = await openApp(browser, s.base);
+    await page.evaluate(installPageHelpers);
     await page.evaluate(installHelpers);
 
     /* ---- nothing live: no affordance ---- */
@@ -69,11 +70,11 @@ async function main() {
     /* ---- and it takes you back to that session ---- */
     await page.evaluate(() => navEntry().click());
     const back = await until(page, (id) => location.hash === '#/terminals/' + id
-      && [...consoles.values()].some((c) => c.sessionId === id), sid, 30000);
+      && !!consoleFor(id), sid, 30000);
     r.ok('affordance', 'the entry reopens the most recently used live session', back, await page.evaluate(() => location.hash));
 
     /* ---- a session this browser never opened still counts ---- */
-    const other = await (await fetch(s.base + '/api/ssh/agent/attach', {
+    const other = await (await fetch(s.base + '/api/m/servers/http/agent/attach', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ profileId: 'srv-2' }),
     })).json();
     const sawOther = await until(page, () => /Terminals\s*2/.test(navState().text), null, 20000);
@@ -88,12 +89,13 @@ async function main() {
     await page.evaluate(() => navigate('#/home'));
     await sleep(600);
     await page.reload({ waitUntil: 'domcontentloaded' });
-    await until(page, () => typeof window.openSsh === 'function' && !!document.getElementById('wsSplit'), null, 20000);
+    await until(page, APP_READY, null, 30000);
+    await page.evaluate(installPageHelpers);
     await page.evaluate(installHelpers);
     const afterReload = await until(page, () => navState().present && navState().hidden === false, null, 20000);
     r.ok('reload', 'after a browser reload the entry is still offered', afterReload, JSON.stringify(await page.evaluate(() => navState())));
     await page.evaluate(() => navEntry().click());
-    const reopened = await until(page, () => location.hash.startsWith('#/terminals/') && consoles.size === 1, null, 30000);
+    const reopened = await until(page, () => location.hash.startsWith('#/terminals/') && consoleCount() === 1, null, 30000);
     r.ok('reload', 'and it reopens a live session after the reload', reopened, await page.evaluate(() => location.hash));
     await shot(page, 't-after-reload');
 
@@ -138,13 +140,14 @@ async function main() {
 
     /* ---- ending a session removes the affordance ---- */
     await page.evaluate(() => navigate('#/terminals'));
-    await until(page, () => consoles.size >= 1, null, 30000);
-    for (const id of await liveIds()) await fetch(s.base + '/api/ssh/terminal/' + id, { method: 'DELETE' });
+    await until(page, () => consoleCount() >= 1, null, 30000);
+    for (const id of await liveIds()) await fetch(s.base + '/api/m/servers/http/terminal/' + id, { method: 'DELETE' });
     const gone = await until(page, () => navState().hidden === true, null, 25000);
     r.ok('affordance', 'an ended session is not a reason to offer the entry', gone, JSON.stringify(await page.evaluate(() => navState())));
 
     /* ---- the view with no console still explains itself ---- */
-    await page.evaluate(() => { dockedConsoles().forEach((c) => closeConsole(c.id)); showSshDrawer(); });
+    // close every console the way a user does: each one's own close button
+    await page.evaluate(() => consoleEls().forEach((el) => el.querySelector('[data-cact="close"]').click()));
     await sleep(800);
     const empty = await page.evaluate(() => ({
       shown: !document.getElementById('wsEmpty').hidden,

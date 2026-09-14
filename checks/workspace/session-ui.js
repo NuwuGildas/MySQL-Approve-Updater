@@ -6,6 +6,7 @@
 
 const { startSandbox } = require('./sandbox');
 const { launch, openApp, recorder, shot, until, sleep } = require('./browser');
+const { installPageHelpers } = require('./page-helpers');
 
 const PORT = Number(process.env.PORT || 3106);
 
@@ -24,7 +25,6 @@ const installHelpers = () => {
   window.card = (state) => [...document.querySelectorAll('.agent-proposal')].some((el) => el.dataset.state === state);
   // a connected card is titled with the REMOTE hostname, so find it by the profile name kept in
   // .srv-name[title]; the list is rebuilt on every SSE nudge, so clicking is a retry
-  window.srvCard = (name) => document.querySelector(`#serversList .srv-name[title="${name}"]`)?.closest('.srv-card') || null;
   window.clickCard = (name, sel) => {
     const b = srvCard(name)?.querySelector(sel);
     if (!b) return false;
@@ -40,6 +40,7 @@ async function main() {
   let page;
   try {
     page = await openApp(browser, s.base);
+    await page.evaluate(installPageHelpers);
     await page.evaluate(installHelpers);
 
     // WebSocket creation is not an HTTP "request": watch it on the protocol instead
@@ -111,12 +112,12 @@ async function main() {
       `${String(sessionA).slice(0, 8)} → ${String(sessionB).slice(0, 8)}`);
 
     /* ---- A1/A6: a slow reply for session A must never paint in session B ---- */
-    await page.evaluate((id) => switchAgentSession({ sessionId: id, profileId: 'srv-1', name: 'Fixture 1' }), sessionA);
+    await page.evaluate((id) => pickSession(id), sessionA);
     await until(page, (a) => boundSession() === a && !document.getElementById('agentChatWrap').hidden, sessionA, 15000);
     s.script([{ reply: 'LATE-REPLY-FOR-SESSION-A that must never appear in B.', delayMs: 4000 }]);
     await page.evaluate(() => { document.getElementById('agentInput').value = 'slow one please'; agentSend(); });
     await sleep(600);
-    await page.evaluate((id) => switchAgentSession({ sessionId: id, profileId: 'srv-1', name: 'Fixture 1' }), sessionB);
+    await page.evaluate((id) => pickSession(id), sessionB);
     await sleep(7000);
     const bText = await page.evaluate(() => chatText());
     r.ok('A1', 'a reply for another session never lands in this one', !bText.includes('LATE-REPLY-FOR-SESSION-A'),
@@ -124,7 +125,7 @@ async function main() {
     r.ok('A1', 'the composer targets the session on screen', (await page.evaluate(() => boundSession())) === sessionB);
 
     /* ---- A2: coming back resumes THAT session's saved conversation ---- */
-    await page.evaluate((id) => switchAgentSession({ sessionId: id, profileId: 'srv-1', name: 'Fixture 1' }), sessionA);
+    await page.evaluate((id) => pickSession(id), sessionA);
     r.ok('A2', 'opening a session resumes its saved conversation',
       await until(page, () => chatText().includes('LATE-REPLY-FOR-SESSION-A'), null, 15000));
 
@@ -137,11 +138,11 @@ async function main() {
         await req.continue();
       } catch {}
     });
-    await page.evaluate((id) => switchAgentSession({ sessionId: id, profileId: 'srv-1', name: 'Fixture 1' }), sessionB);
+    await page.evaluate((id) => pickSession(id), sessionB);
     await sleep(120);
-    page.evaluate((id) => switchAgentSession({ sessionId: id, profileId: 'srv-1', name: 'Fixture 1' }), sessionA).catch(() => {});
+    page.evaluate((id) => pickSession(id), sessionA).catch(() => {});
     await sleep(250);
-    await page.evaluate((id) => switchAgentSession({ sessionId: id, profileId: 'srv-1', name: 'Fixture 1' }), sessionB);
+    await page.evaluate((id) => pickSession(id), sessionB);
     await sleep(5000);
     const afterRace = await page.evaluate(() => ({ id: boundSession(), text: chatText() }));
     r.ok('A2', 'a slow load for the session the user left is discarded',
@@ -165,8 +166,8 @@ async function main() {
     r.ok('A5', 'the late reply for a cancelled turn is discarded', !(await page.evaluate(() => chatText())).includes('CANCELLED-REPLY'));
 
     /* ---- A4: approval cards. Align the visible console with the conversation first. ---- */
-    await page.evaluate((id) => openSsh('srv-1', { ai: true, sessionId: id }), sessionB);
-    await until(page, (b) => boundSession() === b && workspaceConsole() && workspaceConsole().sessionId === b, sessionB, 25000);
+    await page.evaluate((id) => pickSession(id), sessionB);
+    await until(page, (b) => boundSession() === b && activeConsole()?.dataset.sessionId === b, sessionB, 25000);
     await page.evaluate(() => document.getElementById('btnWsControl').click()); // hand the shell to the assistant
     r.ok('A4', 'the assistant can be given control from the terminal pane',
       await until(page, () => document.getElementById('wsOwner').dataset.owner === 'assistant', null, 15000));
@@ -243,9 +244,11 @@ async function main() {
     /* ---- A3: an ended session is a read-only archive with no socket ---- */
     const endedId = await page.evaluate(() => boundSession());
     const socketsBefore = sockets.length;
-    await page.evaluate(() => fetch('/api/ssh/terminal/' + encodeURIComponent(agentSessionId()), { method: 'DELETE' }));
+    await page.evaluate(() => fetch('/api/m/servers/http/terminal/' + encodeURIComponent(agentSessionId()), { method: 'DELETE' }));
     await sleep(1200);
-    await page.evaluate((id) => viewEndedSession({ sessionId: id, profileId: 'srv-1', name: 'Fixture 1' }), endedId);
+    await page.evaluate(() => navigate('#/servers'));
+    await until(page, () => !!srvCard('Fixture 1'), null, 20000);
+    await until(page, (id) => openRecentSession('Fixture 1', id), endedId, 25000);
     await until(page, () => document.getElementById('agentInput').disabled, null, 15000);
     await sleep(1500);
     const ended = await page.evaluate(() => ({
@@ -266,16 +269,21 @@ async function main() {
     await shot(page, 'a3-ended-session');
 
     // a fresh session on the same server starts empty and writable again
-    await page.evaluate(() => openSsh('srv-1', { ai: true, newSession: true }));
+    await page.evaluate(() => navigate('#/servers'));
+    await until(page, () => !!srvCard('Fixture 1'), null, 20000);
+    await until(page, () => termMenuAction('Fixture 1', 'terminal-new'), null, 25000);
     const fresh = await until(page, (old) => boundSession() && boundSession() !== old && !document.getElementById('agentInput').disabled, endedId, 30000);
     r.ok('A3', 'starting another terminal gives a new session with its own history',
       fresh && !(await page.evaluate(() => chatText())).includes('card-check'));
 
     /* ---- A0: leaving the server session returns to the project conversation ---- */
-    await page.evaluate(() => sshAgentDetach());
-    const backToProject = await until(page, () => boundSession() === null && !document.getElementById('agentInput').disabled, null, 20000);
-    r.ok('A0', 'leaving a server session returns to the project conversation',
-      backToProject && (await page.evaluate(() => chatText())).includes('PROJECT-SCOPED-ANSWER'),
+    await page.evaluate(() => closeAllConsoles());
+    // the project conversation is FETCHED, so wait for its history too: unbinding happens at once,
+    // and asserting the text the moment the binding clears was a race the check used to lose
+    const backToProject = await until(page, () => boundSession() === null
+      && !document.getElementById('agentInput').disabled
+      && chatText().includes('PROJECT-SCOPED-ANSWER'), null, 20000);
+    r.ok('A0', 'leaving a server session returns to the project conversation', backToProject,
       (await page.evaluate(() => chatText())).replace(/\s+/g, ' ').slice(0, 80));
 
     r.ok('A6', 'no page errors were raised during the run', page.__errors.length === 0, page.__errors.slice(0, 3).join(' | '));

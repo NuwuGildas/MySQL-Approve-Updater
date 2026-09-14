@@ -38,15 +38,31 @@ async function launch() {
 const shot = async (page, name) => { const p = path.join(SHOTS, name + '.png'); await page.screenshot({ path: p }); return p; };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** Poll a page predicate; returns true on success rather than throwing, so a check can record it. */
+/**
+ * Poll a page predicate; returns true on success rather than throwing, so a check can record it.
+ *
+ * A predicate that throws on every poll - a helper that no longer exists, say - used to be
+ * indistinguishable from a condition that simply never came true: both returned false after the
+ * timeout, and the check then failed somewhere else entirely. The last error is reported when the
+ * wait runs out, so a broken predicate says so.
+ */
 async function until(page, fn, arg, timeout = 15000) {
   const end = Date.now() + timeout;
+  let lastError = null;
   for (;;) {
-    try { if (await page.evaluate(fn, arg)) return true; } catch {}
-    if (Date.now() > end) return false;
+    try { if (await page.evaluate(fn, arg)) return true; lastError = null; }
+    catch (error) { lastError = error; }
+    if (Date.now() > end) {
+      if (lastError) console.log(`  (wait gave up after ${timeout}ms; the predicate kept throwing: ${lastError.message})`);
+      return false;
+    }
     await sleep(120);
   }
 }
+
+/* The base application is loaded first and the modules only after it is running, so "ready" means
+   the router exists AND the Terminals workspace a module contributes has been mounted. */
+const APP_READY = () => typeof navigate === 'function' && !!document.getElementById('wsSplit');
 
 /** Open the app and wait for its scripts to have wired themselves up. */
 async function openApp(browser, base) {
@@ -61,9 +77,13 @@ async function openApp(browser, base) {
   // mark it seen before any script runs, or it hijacks the checks
   await page.evaluateOnNewDocument(() => { try { localStorage.setItem('mau-tour-seen', '1'); } catch {} });
   await page.goto(base + '/#/servers', { waitUntil: 'domcontentloaded' });
-  await until(page, () => typeof window.openSsh === 'function' && !!document.getElementById('wsSplit'));
+  // Loudly: everything after this assumes the app is up, and a check that carries on without it
+  // fails ten steps later on something unrelated.
+  if (!await until(page, APP_READY, null, 30000)) {
+    throw new Error('the application did not finish starting: ' + (errors.slice(0, 3).join(' | ') || 'no page errors were raised'));
+  }
   page.__errors = errors;
   return page;
 }
 
-module.exports = { launch, openApp, recorder, shot, until, sleep, SHOTS };
+module.exports = { launch, openApp, recorder, shot, until, sleep, APP_READY, SHOTS };

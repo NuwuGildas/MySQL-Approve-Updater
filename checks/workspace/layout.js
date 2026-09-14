@@ -6,12 +6,12 @@
 
 const { startSandbox } = require('./sandbox');
 const { launch, openApp, recorder, shot, until, sleep } = require('./browser');
+const { installPageHelpers } = require('./page-helpers');
 
 const PORT = Number(process.env.PORT || 3116);
 const WIDTHS = [390, 768, 1440, 1900];
 
 const installHelpers = () => {
-  window.srvCard = (name) => document.querySelector(`#serversList .srv-name[title="${name}"]`)?.closest('.srv-card') || null;
   window.geom = () => {
     const px = (v) => parseFloat(getComputedStyle(document.documentElement).getPropertyValue(v)) || 0;
     const hdr = document.querySelector('body > header')?.getBoundingClientRect();
@@ -48,6 +48,7 @@ async function main() {
   let page;
   try {
     page = await openApp(browser, s.base);
+    await page.evaluate(installPageHelpers);
     await page.evaluate(installHelpers);
 
     // connect the fixture and open its terminal page
@@ -78,8 +79,17 @@ async function main() {
     r.ok('B-card', 'the card carries no session chips', !/ended \(read-only\)|· \d+ msg/.test(cardShape.text), cardShape.text.slice(0, 110));
     r.ok('B-card', 'the action row stays on one line at card width', cardShape.lines === 1,
       `${cardShape.lines} line(s) at ${cardShape.width}px: ${cardShape.labels.join(' | ')}`);
-    const wanted = ['AI chat', 'Refresh', 'Terminal', 'Disconnect']; // the actions that must survive
+    const wanted = ['Refresh', 'Terminal', 'Disconnect']; // the actions that must stay on the card itself
     r.ok('B-card', 'the card keeps every action it had', wanted.every((w) => cardShape.labels.some((l) => l.includes(w))), cardShape.labels.join(' | '));
+    /* Opening a terminal WITH the assistant is no longer a button of its own: it is an entry in
+       the Terminal menu, next to a plain terminal and a new one. Still one click from the card. */
+    const termMenu = await page.evaluate(() => {
+      const menu = srvCard('Fixture 1')?.querySelector('.term-dd-menu');
+      return menu ? [...menu.querySelectorAll('[data-act]')].map((e) => e.textContent.replace(/\s+/g, ' ').trim()) : null;
+    });
+    r.ok('B-card', 'the Terminal menu still offers a terminal with the assistant',
+      !!termMenu && termMenu.some((l) => /terminal \+ ai/i.test(l)) && termMenu.some((l) => /^terminal$/i.test(l)),
+      (termMenu || []).join(' | '));
     await shot(page, 'b-card-connected');
 
     await until(page, () => {
@@ -182,9 +192,10 @@ async function main() {
     const liveRegions = await page.evaluate(() => [...document.querySelectorAll('#sshDrawer [aria-live], #sshDrawer [role="status"]')].map((e) => e.id || e.className));
     r.ok('B10', 'the workspace has exactly one live region', liveRegions.length === 1 && liveRegions[0] === 'wsOwnerLive', JSON.stringify(liveRegions));
     const ctlState = await page.evaluate(() => {
-      const b = document.getElementById('btnWsControl'), c = workspaceConsole();
+      const b = document.getElementById('btnWsControl');
+      const state = { disabled: b.disabled, label: b.textContent.trim(), consoles: consoleCount(), owner: termOwner(), session: workspaceSessionId() };
       b.click();
-      return { disabled: b.disabled, label: b.textContent, consoles: consoles.size, status: c && c.session.terminal.status, control: c && c.session.terminal.control };
+      return state;
     });
     r.ok('B10', 'the control button is live on an open session', !ctlState.disabled, JSON.stringify(ctlState));
     // wait for the WORD, not the data attribute: a handover briefly reports the old owner
@@ -195,8 +206,8 @@ async function main() {
       badge: document.querySelector('#wsOwner .ws-owner-text').textContent,
       chatBadge: document.querySelector('#wsChatOwner .ws-owner-text').textContent,
       chatHidden: document.getElementById('wsChatOwner').getAttribute('aria-hidden'),
-      readOnly: !!document.querySelector('.ssh-console.active').classList.contains('assistant-driving'),
-      stdin: (() => { const c = workspaceConsole(); return c && c.term.options.disableStdin; })(),
+      readOnly: !!activeConsole().classList.contains('assistant-driving'),
+      stdin: termReadOnly(), // the real thing: xterm's own input surface, not a class that could lie
     }));
     r.ok('B10', 'ownership is announced in words, once, and shown as text in both panes',
       /assistant has control/i.test(owned.said) && /assistant/i.test(owned.badge) && /assistant/i.test(owned.chatBadge) && owned.chatHidden === 'true',
@@ -205,30 +216,30 @@ async function main() {
     await shot(page, 'b-1440-assistant-control');
     await page.evaluate(() => document.getElementById('btnWsControlChat').click());
     await until(page, () => /you have control/i.test(document.getElementById('wsOwnerLive').textContent)
-      && !workspaceConsole().term.options.disableStdin, null, 20000);
-    const back = await page.evaluate(() => ({ said: document.getElementById('wsOwnerLive').textContent, stdin: workspaceConsole().term.options.disableStdin }));
+      && termReadOnly() === false, null, 20000);
+    const back = await page.evaluate(() => ({ said: document.getElementById('wsOwnerLive').textContent, stdin: termReadOnly() }));
     r.ok('B10', 'taking control back is announced and re-enables typing', /you have control/i.test(back.said) && back.stdin === false, JSON.stringify(back));
 
     /* ---- B11: the xterm refits when its visible box changes ---- */
     await page.setViewport({ width: 1900, height: 950 });
     await sleep(900);
-    const before = await page.evaluate(() => { const c = workspaceConsole(); return { cols: c.term.cols, rows: c.term.rows }; });
+    const before = await page.evaluate(() => termSize());
     await page.setViewport({ width: 760, height: 900 }); // drops to tabs and narrows the terminal box
-    await page.evaluate(() => setWorkspaceTab('terminal'));
+    await page.evaluate(() => document.getElementById('wsTabTerminal').click());
     await sleep(1000);
-    const narrow = await page.evaluate(() => { const c = workspaceConsole(); return { cols: c.term.cols, rows: c.term.rows }; });
+    const narrow = await page.evaluate(() => termSize());
     r.ok('B11', 'the xterm refits when the pane changes shape', narrow.cols < before.cols,
       `${before.cols}x${before.rows} → ${narrow.cols}x${narrow.rows}`);
     // switching to the chat tab must not fit a hidden host down to nothing
-    await page.evaluate(() => setWorkspaceTab('chat'));
+    await page.evaluate(() => document.getElementById('wsTabChat').click());
     await sleep(700);
-    const hidden = await page.evaluate(() => { const c = workspaceConsole(); return { cols: c.term.cols, rows: c.term.rows }; });
+    const hidden = await page.evaluate(() => termSize());
     r.ok('B11', 'a hidden pane is never fitted to a zero box', hidden.cols === narrow.cols && hidden.rows === narrow.rows,
       `${narrow.cols}x${narrow.rows} → ${hidden.cols}x${hidden.rows}`);
-    await page.evaluate(() => setWorkspaceTab('terminal'));
+    await page.evaluate(() => document.getElementById('wsTabTerminal').click());
     await page.setViewport({ width: 1900, height: 950 });
     await sleep(1000);
-    const wideAgain = await page.evaluate(() => { const c = workspaceConsole(); return { cols: c.term.cols, rows: c.term.rows }; });
+    const wideAgain = await page.evaluate(() => termSize());
     r.ok('B11', 'the xterm refits again when the pane is revealed and widened', wideAgain.cols > hidden.cols,
       `${hidden.cols} → ${wideAgain.cols} columns`);
 

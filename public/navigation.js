@@ -308,7 +308,28 @@ function formAsModal(formId, dialogId, hostId, closeBtnId) {
   return observer;
 }
 
-/* ---------- startup: address wins, then the startup preference ---------- */
+/* ---------- startup: address wins, then the startup preference ----------
+   A module registers its pages only after the base application is running, so at
+   this point an address naming a module page - #/servers from a bookmark, a
+   reopened tab, a link someone shared - does not resolve yet, and the startup
+   preference would quietly replace it. Remember it instead; boot.js replays it
+   once the modules have activated. */
+let deferredRoute = null;    // what the address bar asked for
+let deferredFallback = null; // where startup sent us instead
+/**
+ * Go to the address the page was opened with, now that the modules have registered their pages.
+ * Only from the page startup chose: by the time the modules are up the user may already have
+ * clicked somewhere, and pulling them off it would be worse than losing the deep link.
+ * @returns {boolean} whether it navigated
+ */
+function navResumeDeferredRoute() {
+  const wanted = deferredRoute;
+  deferredRoute = null;
+  if (!wanted || location.hash !== deferredFallback || !parseRoute(wanted)) return false;
+  navigate(wanted, { replace: true, focus: false });
+  return true;
+}
+
 function navStartup() {
   document.body.classList.add('shell');
   registerCorePages();
@@ -321,11 +342,14 @@ function navStartup() {
   syncNavInert();
   let route = parseRoute(location.hash) ? location.hash : null;
   if (!route) {
+    // Keep it only if it looks like a route; "#" and "#section" are not addresses to restore.
+    if (/^#\/.+/.test(location.hash)) deferredRoute = location.hash;
     const startup = prefStartup();
     let last = null; try { last = localStorage.getItem('st-last-route'); } catch {}
     route = startup === 'mysql' ? '#/database/updates' : startup === 'last' && last && parseRoute(last) ? last : ROUTE_HOME;
   }
   navigate(route, { replace: true, focus: false });
+  deferredFallback = deferredRoute ? location.hash : null;
   if (typeof offerTourOnce === 'function') offerTourOnce(); // first visit: the tour starts on whatever page opened
 }
 
