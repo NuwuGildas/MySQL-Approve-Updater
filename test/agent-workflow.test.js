@@ -755,3 +755,78 @@ test('correcting a narrated proposal does not cost a tool step', async (t) => {
   assert.equal(turn.actions.length, MAX_STEPS, 'the retry did not eat one of the tool calls');
   assert.equal(turn.reply, 'All six checks came back clean.');
 });
+
+/* ---------- a proposal that is not bound to a session ---------- */
+
+/* Rules and deploy manifests are proposed FOR THE WORKSPACE, not for one shell, so their cards
+   carry no session id - the chat window says as much where it decides which cards to draw. The
+   turn reported only cards whose session matched its own, so an unbound one was never handed back:
+   the tool ran, the card sat pending on the server, and the user was shown nothing to approve. */
+
+function withUnboundProposalTool(ctx) {
+  ctx.agent.kinds.rule = { label: (p) => `rule "${p.rule.name}"`, approve: async () => ({ saved: true }) };
+  ctx.agent.tools.propose_rule = {
+    description: 'Propose a rule. The user approves it in the chat.',
+    run: async (input) => {
+      const proposal = { id: `rule-${ctx.agent.proposals.length + 1}`, kind: 'rule', action: 'create', rule: { name: String(input?.name || 'a rule'), draft: true }, status: 'pending', ts: new Date().toISOString() };
+      ctx.agent.proposals.push(proposal); // no sessionId: exactly what server.js does
+      return { proposalId: proposal.id, status: 'pending_user_approval' };
+    },
+  };
+}
+
+test('a card raised without a session id is still handed to the conversation that raised it', async (t) => {
+  const ctx = setup(t);
+  withUnboundProposalTool(ctx);
+  const attached = await ctx.api.attach('p1');
+  ctx.model.push(JSON.stringify({ tool: 'propose_rule', input: { name: 'Canonicalise casino links' } }), 'I have proposed the rule for you to approve.');
+
+  const turn = await ctx.workflow.runTurn(attached.sessionId, { message: 'write me a rule' });
+  assert.equal(turn.proposals.length, 1, 'the card must reach the client, or the user sees nothing to approve');
+  assert.equal(turn.proposals[0].rule.name, 'Canonicalise casino links');
+  assert.equal(turn.outcome, 'awaiting-approval', 'and the turn is not finished work');
+});
+
+test('a card belonging to ANOTHER session is still not handed over', async (t) => {
+  const ctx = setup(t);
+  withUnboundProposalTool(ctx);
+  const mine = await ctx.api.attach('p1');
+  // something else raised a card, for a different conversation, while this turn was running
+  ctx.agent.tools.propose_rule = {
+    description: 'x',
+    run: async () => {
+      ctx.agent.proposals.push({ id: 'other', kind: 'rule', sessionId: 'someone-elses-session', rule: { name: 'theirs' }, status: 'pending' });
+      return { ok: true };
+    },
+  };
+  ctx.model.push(JSON.stringify({ tool: 'propose_rule', input: {} }), 'Done.');
+
+  const turn = await ctx.workflow.runTurn(mine.sessionId, { message: 'go' });
+  assert.deepEqual(turn.proposals, [], 'a named session that is not this one is not this one');
+  assert.equal(turn.outcome, 'final');
+});
+
+test('an unbound card that was already pending before the turn is not claimed by it', async (t) => {
+  const ctx = setup(t);
+  withUnboundProposalTool(ctx);
+  const attached = await ctx.api.attach('p1');
+  ctx.agent.proposals.push({ id: 'earlier', kind: 'rule', rule: { name: 'from a previous turn' }, status: 'pending' });
+  ctx.model.push('Nothing to do.');
+
+  const turn = await ctx.workflow.runTurn(attached.sessionId, { message: 'hello' });
+  assert.deepEqual(turn.proposals, [], 'only cards this turn raised are reported as its own');
+});
+
+test('a rule proposal makes the "you described it but did not propose it" correction stand down', async (t) => {
+  const ctx = setup(t);
+  withUnboundProposalTool(ctx);
+  const attached = await ctx.api.attach('p1');
+  /* The model proposes the rule properly and then writes the covering note, in the words the
+     detector looks for. The card is real, so the note must be left alone. */
+  ctx.model.push(JSON.stringify({ tool: 'propose_rule', input: { name: 'r' } }), 'Please Accept, Reject, or provide an Alternative.');
+
+  const turn = await ctx.workflow.runTurn(attached.sessionId, { message: 'write me a rule' });
+  assert.equal(turn.proposals.length, 1);
+  assert.doesNotMatch(turn.reply, /Nothing was actually proposed/, 'it WAS proposed: do not tell the user otherwise');
+  assert.equal(ctx.model.used, 2, 'and the model is not asked to do it again');
+});

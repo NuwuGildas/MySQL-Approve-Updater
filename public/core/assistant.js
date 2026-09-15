@@ -647,9 +647,14 @@ function appendAgentProposal(p) {
       ${t.draft ? '<span class="badge draftbadge">draft</span>' : ''}</div>
     <div class="ap-meta">${esc(t.table)} · WHERE ${esc(t.where || '1=1')} · limit ${t.limit} · ${t.transforms.length} transform(s)</div>
     <details><summary>Full definition</summary><pre>${esc(JSON.stringify(t, null, 2))}</pre></details>
+    <div class="hint">${t.draft
+      ? 'Saved as a draft: it appears in the rules list and runs nothing until you open it and start a session.'
+      : 'Saved as a live rule. It still previews and asks for approval row by row before anything is written.'}</div>
     <div class="actions">
-      <button class="approve" data-dec="approve">Approve and save</button>
-      <button class="reject" data-dec="reject">Reject</button>
+      <!-- the button says what pressing it does; "Approve and save" hid the difference between
+           adding a draft and adding a rule that is ready to run -->
+      <button class="approve" data-dec="approve">${t.draft ? 'Add to drafts' : (p.action === 'update' ? 'Save the change' : 'Add the rule')}</button>
+      <button class="reject" data-dec="reject">Cancel</button>
     </div>`;
   wireAgentProposalDecision(el, p, (r) => {
     appendAgentMsg('note', '', null, { kind: 'decision', decision: r.status, proposalAction: p.action, ruleName: t.name });
