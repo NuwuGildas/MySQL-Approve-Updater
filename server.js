@@ -21,6 +21,7 @@ const net = require('net');
 const path = require('path');
 const crypto = require('crypto');
 const { normalizeRules, columnList } = require('./lib/shared/rules');
+const { createProfileSanitizer } = require('./lib/shared/connection-profile');
 
 // When packaged as a standalone exe (pkg), __dirname points into the read-only
 // snapshot: static assets load from there, but everything the app WRITES (and
@@ -1188,6 +1189,10 @@ function maskProfile(p) {
   return {
     id: p.id,
     name: p.name,
+    /* Whether this is an SSH server or a database connection. It is not a secret, it is WHAT the
+       profile is - and leaving it out meant the Servers page could never tell which profiles were
+       its own to manage, so its Remove button was never drawn for anything. */
+    sshOnly: !!p.sshOnly,
     db: { host: p.db.host, port: p.db.port, user: p.db.user, database: p.db.database, passwordSet: !!p.db.password },
     ssh: {
       authKind: p.ssh?.authKind || '',
@@ -1230,54 +1235,8 @@ function storePastedKey(profileId, pem, passphrase) {
   return file;
 }
 
-function sanitizeProfile(body, existing) {
-  const name = String(body.name || '').trim();
-  if (!name) throw httpError(400, 'Connection name is required');
-  const db = body.db || {};
-  const database = String(db.database || '').trim();
-  const user = String(db.user || '').trim();
-  const sshIn = body.ssh || {};
-  // A profile is either a DB connection (needs database + user) or an
-  // SSH-only server (ssh enabled + host). sshOnly profiles can't drive the
-  // database side but appear in the SSH servers view.
-  const sshOnly = !!body.sshOnly || (!database && !user && sshIn.enabled);
-  if (!sshOnly) {
-    if (!database) throw httpError(400, 'Database name is required');
-    if (!user) throw httpError(400, 'Database user is required');
-  }
-  const num = (v, dflt) => (Number.isInteger(Number(v)) && Number(v) > 0 ? Number(v) : dflt);
-  const profile = {
-    id: existing?.id || crypto.randomUUID(),
-    name,
-    sshOnly,
-    db: {
-      host: String(db.host || '127.0.0.1').trim() || '127.0.0.1',
-      port: num(db.port, 3306),
-      user,
-      password: db.password ? String(db.password) : (existing?.db.password || ''),
-      database,
-    },
-    ssh: {
-      enabled: !!sshIn.enabled,
-      host: String(sshIn.host || '').trim(),
-      port: num(sshIn.port, 22),
-      user: String(sshIn.user || '').trim(),
-      password: sshIn.password ? String(sshIn.password) : (existing?.ssh?.password || ''),
-      privateKeyPath: String(sshIn.privateKeyPath || '').trim(),
-      passphrase: sshIn.passphrase ? String(sshIn.passphrase) : (existing?.ssh?.passphrase || ''),
-    },
-  };
-  // authentication choice: the app-managed key, a pasted private key, a key file path, or a password
-  const auth = String(sshIn.auth || '').trim();
-  if (auth === 'app-key') { profile.ssh.privateKeyPath = ensureAppKey().privateKeyPath; profile.ssh.password = ''; profile.ssh.authKind = 'app-key'; }
-  else if (sshIn.privateKeyInline) { profile.ssh.privateKeyPath = storePastedKey(profile.id, sshIn.privateKeyInline, profile.ssh.passphrase); profile.ssh.authKind = 'own-key'; }
-  else if (auth === 'password') { profile.ssh.privateKeyPath = ''; profile.ssh.passphrase = ''; profile.ssh.authKind = 'password'; }
-  else profile.ssh.authKind = existing?.ssh?.authKind || (profile.ssh.privateKeyPath ? 'own-key' : profile.ssh.password ? 'password' : '');
-  if (profile.ssh.enabled && !profile.ssh.host) throw httpError(400, 'SSH is enabled but the SSH host is empty');
-  if (sshOnly && !profile.ssh.enabled) throw httpError(400, 'An SSH server needs SSH enabled with a host');
-  if (sshOnly && !profile.ssh.privateKeyPath && !profile.ssh.password) throw httpError(400, 'Choose how to authenticate: the Server Tools key, your own key, or a password');
-  return profile;
-}
+/* Turning a submitted form into a stored profile, credential rules and all: lib/shared/connection-profile. */
+const sanitizeProfile = createProfileSanitizer({ httpError, ensureAppKey, storePastedKey });
 
 function assertNoPendingSession(what) {
   if (session && session.status !== 'done' && session.status !== 'aborted' && sessionCounts(session).pending > 0) {
