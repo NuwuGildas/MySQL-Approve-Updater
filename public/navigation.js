@@ -262,7 +262,11 @@ $('sqlBar').addEventListener('click', (e) => {
 }, true);
 
 /* ---------- assistant: module context in its header, optional docking beside the workspace (§16) ---------- */
-function updateAgentContext(item) { const el = $('agentCtx'); if (el) el.textContent = item ? `· ${item.label === 'Home' ? 'Compass' : String(item.title || '').replace(' · The Ascension', '')}` : ''; }
+function updateAgentContext(item) {
+  const el = $('agentCtx'); if (el) el.textContent = item ? `· ${item.label === 'Home' ? 'Compass' : String(item.title || '').replace(' · The Ascension', '')}` : '';
+  // the assistant is scoped to this page, so the chip that says so is redrawn with the page name
+  if (typeof renderAgentScopeChip === 'function') renderAgentScopeChip();
+}
 const prefAgentDock = () => { try { return localStorage.getItem('st-agent-dock') === '1'; } catch { return false; } };
 function setAgentDock(on) {
   try { localStorage.setItem('st-agent-dock', on ? '1' : '0'); } catch {}

@@ -21,8 +21,21 @@ const agentSessionEnded = () => !!agentSessionId() && sessionIsDead(sshAgent);
    here, and it is what every 'agent' event is matched against. */
 let agentConversationId = null;
 const agentConversation = () => agentConversationId || agentSessionId();
+/* Which page the user is looking at. The assistant is scoped to it: on the MySQL Update Tool it is
+   offered the rules and the database and told so, rather than every tool in the workspace. Sent with
+   every request, so a decision that resumes a turn resumes it on the same page. */
+const agentPage = () => (typeof currentPageId !== 'undefined' && currentPageId ? currentPageId : null);
+/** That page as the user knows it, for the scope chip: its own title, or the id as a fallback. */
+const agentPageLabel = () => {
+  const id = agentPage();
+  if (!id) return 'this workspace';
+  try { return (typeof pageDef === 'function' && (pageDef(id)?.title || pageDef(id)?.label)) || id; } catch { return id; }
+};
+/* The segment goes too: a module declares its pages in its manifest as route segments, and for
+   Deployments that is not the same string as the page id ("deploy" at "#/deployments"). */
+const agentPageSegment = () => { try { return (typeof pageDef === 'function' && pageDef(agentPage())?.segment) || null; } catch { return null; } };
 const agentSessionBody = (fields = {}, sessionId = agentSessionId()) =>
-  JSON.stringify(sessionId ? { ...fields, sessionId } : { ...fields, projectId: currentProjectId });
+  JSON.stringify({ ...fields, page: agentPage(), pageSegment: agentPageSegment(), ...(sessionId ? { sessionId } : { projectId: currentProjectId }) });
 const agentSessionUrl = (path, extra = {}) =>
   `${path}?${new URLSearchParams({ ...extra, ...(agentSessionId() ? { sessionId: agentSessionId() } : { projectId: currentProjectId }) })}`;
 

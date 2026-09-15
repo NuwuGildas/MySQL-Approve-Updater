@@ -274,6 +274,17 @@ async function openAgent() { // never closes whatever view/module is open: the w
     setAgentStatus(e.message, 'bad');
   }
 }
+/* The chip says what the assistant may do AND where it is working.
+ *
+ * The tool list follows the page, so which page that is belongs on the label and not only in the
+ * popover - and it has to be redrawn when the user navigates, not just when the window opens.
+ * navigation.js calls this from updateAgentContext, alongside the page name in the header.
+ */
+function renderAgentScopeChip() {
+  const el = $('agentScopeText'); if (!el) return;
+  el.textContent = agentSessionId() ? 'Every command needs approval' : `Read-only · ${agentPageLabel()}`;
+}
+
 // header status line: state dot + short text (connected provider, or what is going on)
 function setAgentStatus(text, state) {
   const dot = state === 'ok' ? 'ok' : state === 'busy' ? 'busy' : state === 'bad' ? '' : 'off';
@@ -380,7 +391,7 @@ function showAgentChat(st) {
   $('agentChatWrap').hidden = false;
   $('btnAgentReset').hidden = $('btnAgentDisconnect').hidden = false;
   const bound = !!agentSessionId();
-  $('agentScopeText').textContent = bound ? 'Every command needs approval' : 'Read-only';
+  renderAgentScopeChip();
   $('agentScopePop').innerHTML = bound
     ? `<dl>
       <dt>Server</dt><dd>${esc(sshAgent.name || sshAgent.host || '')}</dd>
@@ -392,11 +403,12 @@ function showAgentChat(st) {
     <div class="hint">The assistant reads the same terminal output you see. Give it terminal control before running a proposed command. Each command needs your acceptance; reject it or reply with an alternative. This conversation belongs only to this server session.</div>`
     : `<dl>
       <dt>Scope</dt><dd>Project “${esc(currentProjectName())}”</dd>
+      <dt>Page</dt><dd>${esc(agentPageLabel())}</dd>
       <dt>Server access</dt><dd>None: connect a server to work on one</dd>
       <dt>Agent</dt><dd>${esc(providerLabel)}</dd>
       <dt>Model</dt><dd>${esc(st.model || 'provider default')}</dd>
     </dl>
-    <div class="hint">Database and deployment access is read-only. Rule changes, deploy manifests and deploy actions come back as proposals you approve here. Open a server terminal to give this assistant a shell to work in.</div>`;
+    <div class="hint">The assistant works on the page you are on: it is given that page's tools and nothing else, so ask about servers on Servers and about deployments on Deployments. Database access is read-only; rule changes and deploy actions come back as proposals you approve here. Open a server terminal to give this assistant a shell to work in.</div>`;
   // model switcher: provider-appropriate suggestions, current value prefilled
   const claudeModels = ['claude-fable-5', 'claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5-20251001', 'claude-sonnet-4-5', 'claude-opus-4-1', 'claude-3-5-haiku-latest'];
   const codexModels = ['gpt-5-codex', 'gpt-5', 'o4-mini', 'gpt-4.1'];
