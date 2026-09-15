@@ -58,3 +58,4 @@ ssh-agent-memory.json
 # frontend check output: screenshots, and the scripted CLI's queue, both rewritten on every run
 /checks/workspace/shots/
 /checks/workspace/fake-claude/script.json
+/checks/workspace/fake-claude/prompts.json

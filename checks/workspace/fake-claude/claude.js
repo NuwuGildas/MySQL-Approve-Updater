@@ -27,6 +27,17 @@ if (args.includes('--help')) {
 let prompt = '';
 process.stdin.on('data', (d) => { prompt += d; });
 process.stdin.on('end', () => {
+  /* Keep every prompt. What the model was TOLD is the thing worth asserting for anything about
+     tools, scope or house rules - a check that only reads the answer cannot tell the difference
+     between a tool the assistant chose not to use and one it was never offered. */
+  try {
+    const file = path.join(__dirname, 'prompts.json');
+    let seen = [];
+    try { seen = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { seen = []; }
+    seen.push({ at: new Date().toISOString(), prompt });
+    fs.writeFileSync(file, JSON.stringify(seen.slice(-20), null, 2));
+  } catch { /* recording is a convenience, never a reason to fail the turn */ }
+
   let queue = [];
   try { queue = JSON.parse(fs.readFileSync(scriptFile, 'utf8')); } catch { queue = []; }
   if (!Array.isArray(queue)) queue = [queue];

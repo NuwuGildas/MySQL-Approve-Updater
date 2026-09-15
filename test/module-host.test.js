@@ -26,6 +26,7 @@ const { createInstaller } = require('../lib/host/installer');
 const { createServices } = require('../lib/host/services');
 const { createRegistryServer } = require('../scripts/module-registry');
 const { HOST_SDK_VERSION } = require('../lib/host/sdk');
+const { assistantGrants } = require('../lib/host/manager');
 
 /* ---------------- a throwaway publisher and a package factory ---------------- */
 
@@ -558,4 +559,29 @@ test('the assistant\'s own sign-in is its own capability, its own setting, and n
   const entry = shared.find((e) => e.action === 'assistant-credential-shared');
   assert.equal(entry.module, 'demo');
   assert.equal(JSON.stringify(shared).includes('sk-ant-oat-secret'), false, 'the audit trail records that it happened, never what');
+});
+
+test('a module only contributes to the assistant what its manifest asked for', () => {
+  /* The manifest is the list the user read before installing. Registration itself used to be
+     unguarded - only the host services BEHIND a tool were checked - so a module that never declared
+     assistant:tools could still put one in the assistant's list, and it would fail only when used. */
+  const offered = { assistantTools: [{ name: 'do_a_thing' }, { name: 'do_another' }], proposalKinds: ['thing-change'] };
+
+  const none = assistantGrants([], offered);
+  assert.equal(none.tools, false);
+  assert.equal(none.kinds, false);
+  assert.match(none.warnings.join(' | '), /2 assistant tools but its manifest does not declare "assistant:tools"/);
+  assert.match(none.warnings.join(' | '), /1 proposal kind but its manifest does not declare "assistant:proposals"/);
+
+  const partial = assistantGrants(['assistant:tools'], offered);
+  assert.equal(partial.tools, true, 'what it asked for');
+  assert.equal(partial.kinds, false, 'and nothing else');
+  assert.equal(partial.warnings.length, 1);
+
+  const full = assistantGrants(['assistant:tools', 'assistant:proposals'], offered);
+  assert.deepEqual([full.tools, full.kinds, full.warnings], [true, true, []]);
+
+  // a module that offers nothing is not warned about anything it never tried to do
+  assert.deepEqual(assistantGrants([], { assistantTools: [], proposalKinds: [] }).warnings, []);
+  assert.deepEqual(assistantGrants(undefined, {}).warnings, []);
 });

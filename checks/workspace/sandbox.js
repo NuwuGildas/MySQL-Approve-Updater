@@ -168,7 +168,9 @@ async function startSandbox(o = {}) {
 
   const fakeBin = path.join(__dirname, 'fake-claude');
   const scriptFile = path.join(fakeBin, 'script.json');
+  const promptFile = path.join(fakeBin, 'prompts.json');
   fs.writeFileSync(scriptFile, '[]');
+  fs.writeFileSync(promptFile, '[]');
 
   const modules = o.modules === false ? [] : installModules(dir, o.modules || null);
 
@@ -193,6 +195,9 @@ async function startSandbox(o = {}) {
     base, dir, port, profiles, log, modules,
     /** Queue what the fake CLI answers, one entry per model step. */
     script: (steps) => fs.writeFileSync(scriptFile, JSON.stringify(steps, null, 2)),
+    /** Every prompt the model was given, newest last: what it was TOLD, not what it answered. */
+    prompts: () => { try { return JSON.parse(fs.readFileSync(promptFile, 'utf8')); } catch { return []; } },
+    lastPrompt: () => { const all = (() => { try { return JSON.parse(fs.readFileSync(promptFile, 'utf8')); } catch { return []; } })(); return all.length ? all[all.length - 1].prompt : ''; },
     async stop() {
       try { child.kill(); } catch {}
       for (const s of ssh) { try { await s.close(); } catch {} }
