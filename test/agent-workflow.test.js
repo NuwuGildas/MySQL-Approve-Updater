@@ -131,6 +131,13 @@ function createSessionModule({ host, terminals, agent }) {
   }
 
   agent.kinds['ssh-command'] = { label: (p) => p.cmd, approve };
+  /* A read-only tool alongside the proposing one: a real module has both, and a turn that spends
+     its budget looking before it proposes is the ordinary shape, not an edge case. */
+  agent.tools.ssh_status = {
+    description: 'What this session looks like right now. Read-only.',
+    enabled: (sessionId) => !!live(sessionId),
+    run: async (input, meta) => status(meta?.sessionId),
+  };
   agent.tools.ssh_exec = {
     description: 'Propose one command in this session. It does not run until the user approves it.',
     enabled: (sessionId) => live(sessionId)?.status === 'open',
@@ -664,4 +671,87 @@ test('turn guidance comes after the standing rules, so it still wins', async (t)
   assert.match(prompt, /TURN GUIDANCE: the user approved/);
   assert.ok(prompt.indexOf('TURN GUIDANCE') > prompt.indexOf('How to reply'),
     'the occasional instruction is nearer the model than the standing one');
+});
+
+/* ---------- running out of tool steps ---------- */
+
+/* The budget buys TOOL CALLS. A turn that spends them all is still entitled to say what it found:
+   running out used to end the turn with a canned apology that threw away every tool result - and
+   said "I did not finish" even when the last call had raised an approval card the user was looking
+   at. */
+
+const { MAX_STEPS } = require('../lib/agent-workflow');
+
+test('a turn that spends every tool step still gets to write its answer', async (t) => {
+  const ctx = setup(t);
+  const attached = await ctx.api.attach('p1');
+  for (let i = 0; i < MAX_STEPS; i++) ctx.model.push(JSON.stringify({ tool: 'ssh_status', input: {} }));
+  ctx.model.push('I checked the session six times; it is open and idle.');
+
+  const turn = await ctx.workflow.runTurn(attached.sessionId, { message: 'look at everything' });
+  assert.equal(turn.actions.length, MAX_STEPS, 'it spent the whole budget');
+  assert.equal(turn.reply, 'I checked the session six times; it is open and idle.');
+  assert.doesNotMatch(turn.reply, /tool-step limit/);
+  assert.equal(turn.outcome, 'final');
+});
+
+test('the answering pass is told it has no tool calls left', async (t) => {
+  const ctx = setup(t);
+  const attached = await ctx.api.attach('p1');
+  for (let i = 0; i < MAX_STEPS; i++) ctx.model.push(JSON.stringify({ tool: 'ssh_status', input: {} }));
+  ctx.model.push('Done.');
+  await ctx.workflow.runTurn(attached.sessionId, { message: 'look at everything' });
+
+  const last = ctx.model.prompts.at(-1);
+  assert.match(last, /you have used every tool call for this turn/i, 'the last prompt says the budget is gone');
+  assert.match(last, /must be your answer/i);
+  const earlier = ctx.model.prompts.at(-2);
+  assert.doesNotMatch(earlier, /you have used every tool call/i, 'and the ones before it do not');
+});
+
+test('a tool call on the answering pass is not run, and is never shown as the reply', async (t) => {
+  const ctx = setup(t);
+  const attached = await ctx.api.attach('p1');
+  for (let i = 0; i < MAX_STEPS; i++) ctx.model.push(JSON.stringify({ tool: 'ssh_status', input: {} }));
+  ctx.model.push(JSON.stringify({ tool: 'ssh_status', input: {} })); // ignores the guidance
+
+  const turn = await ctx.workflow.runTurn(attached.sessionId, { message: 'look at everything' });
+  assert.equal(turn.actions.length, MAX_STEPS, 'the extra call was not run');
+  assert.doesNotMatch(turn.reply, /"tool"/, 'and raw JSON is never the answer');
+  assert.match(turn.reply, /without reaching an answer/);
+  assert.match(turn.reply, /ssh_status/, 'it says what it did spend the steps on');
+});
+
+test('running out of steps having raised a card does not report the turn as unfinished', async (t) => {
+  const ctx = setup(t);
+  const attached = await ctx.api.attach('p1');
+  const sessionId = attached.sessionId;
+  await ctx.terminals.setControl(sessionId, 'assistant');
+  /* The shape from the report: five reads, then a proposal on the last step. The card is real and
+     the user can see it, so the reply must not claim the work did not happen. */
+  for (let i = 0; i < MAX_STEPS - 1; i++) ctx.model.push(JSON.stringify({ tool: 'ssh_status', input: {} }));
+  ctx.model.push(JSON.stringify({ tool: 'ssh_exec', input: { cmd: 'df -h' } }));
+  ctx.model.push(JSON.stringify({ tool: 'ssh_status', input: {} })); // still will not answer
+
+  const turn = await ctx.workflow.runTurn(sessionId, { message: 'check it over and propose the fix' });
+  assert.equal(turn.proposals.length, 1, 'the card was raised');
+  assert.equal(turn.outcome, 'awaiting-approval');
+  assert.match(turn.reply, /the work is done/i);
+  assert.match(turn.reply, /approval card above is real/i);
+  assert.doesNotMatch(turn.reply, /without reaching an answer/);
+});
+
+test('correcting a narrated proposal does not cost a tool step', async (t) => {
+  const ctx = setup(t);
+  const attached = await ctx.api.attach('p1');
+  const sessionId = attached.sessionId;
+  await ctx.terminals.setControl(sessionId, 'assistant');
+  // one wasted pass describing a command, then the full budget of real calls, then the answer
+  ctx.model.push('Proposed command: `df -h`. Please Accept, Reject, or provide an Alternative.');
+  for (let i = 0; i < MAX_STEPS; i++) ctx.model.push(JSON.stringify({ tool: 'ssh_status', input: {} }));
+  ctx.model.push('All six checks came back clean.');
+
+  const turn = await ctx.workflow.runTurn(sessionId, { message: 'check it' });
+  assert.equal(turn.actions.length, MAX_STEPS, 'the retry did not eat one of the tool calls');
+  assert.equal(turn.reply, 'All six checks came back clean.');
 });

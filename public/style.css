@@ -143,11 +143,30 @@ body.agent-busy .ag-ico .ai-mini.focus { display: inline-block; animation: ai-wo
 .agent-actions summary::before { content: '›'; display: inline-block; margin-right: .3rem; color: var(--accent); transition: transform .12s; }
 .agent-actions[open] summary::before { transform: rotate(90deg); }
 .agent-actions summary:hover { color: var(--text); }
-.agent-action { font-size: .72rem; color: var(--muted); padding: .12rem 0 .12rem .8rem; overflow-wrap: anywhere; display: flex; gap: .4rem; align-items: baseline; }
-.agent-action::before { content: '✓'; color: var(--green); flex: none; }
-.agent-action.err::before { content: '✕'; color: var(--red); }
-.agent-action code { font-family: ui-monospace, Consolas, monospace; font-size: .68rem; opacity: .85; }
-.agent-action .ms { margin-left: auto; flex: none; font-variant-numeric: tabular-nums; }
+/* One action: tick, tool name, a peek at the argument, how long it took. The name and the
+   duration never shrink and never wrap; only the peek gives way, to an ellipsis. */
+.agent-action { font-size: .72rem; color: var(--muted); padding: .12rem 0; }
+.agent-action, .agent-action > summary { display: flex; gap: .45rem; align-items: baseline; min-width: 0; }
+/* an expandable action is a BLOCK: only its summary is a row, so the body below gets the full width */
+details.agent-action { display: block; }
+.agent-action > summary { cursor: pointer; list-style: none; padding: .12rem 0; }
+.agent-action > summary::-webkit-details-marker { display: none; }
+.agent-action::before, .agent-action > summary::before { content: '✓'; color: var(--green); flex: none; width: .8rem; }
+.agent-action.err::before, .agent-action.err > summary::before { content: '✕'; color: var(--red); }
+details.agent-action::before { content: none; } /* the summary carries it */
+details.agent-action > summary:hover .aa-peek { color: var(--text); }
+details.agent-action[open] > summary .aa-peek { opacity: .5; }
+.aa-tool { flex: none; font-family: ui-monospace, Consolas, monospace; color: var(--text); white-space: nowrap; }
+.aa-peek { flex: 1 1 auto; min-width: 0; font-family: ui-monospace, Consolas, monospace; font-size: .68rem; opacity: .85;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agent-action .ms { flex: none; margin-left: auto; font-variant-numeric: tabular-nums; opacity: .8; }
+/* Opened: the label above the value, not beside it. The assistant window is ~400px wide, and a
+   label column turns a SQL query into a tall narrow ribbon; the value needs the whole width. */
+.aa-field { margin: .25rem 0 .4rem 1.25rem; min-width: 0; }
+.aa-field b { display: block; margin-bottom: .15rem; font-weight: 600; color: var(--muted); font-size: .68rem; }
+.aa-field pre { margin: 0; font-family: ui-monospace, Consolas, monospace; font-size: .68rem; line-height: 1.5;
+  white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); max-height: 14rem; overflow: auto;
+  background: var(--panel2); border-radius: 6px; padding: .3rem .45rem; }
 /* empty state */
 .ag-empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: .45rem; padding: 1.4rem .6rem 1rem; color: var(--muted); }
 .ag-empty .ag-ico { width: 88px; height: 88px; border-radius: 11px; }

@@ -460,6 +460,35 @@ function renderAgentText(text) {
   return s;
 }
 
+/* What the assistant did, under the reply.
+ *
+ * Every action used to be one flex row holding the whole input as a single JSON string. A long
+ * argument - a SQL query, a proposed rule - then wrapped to a dozen lines, and because the tool
+ * NAME was in the same shrinking row it broke a character at a time and read vertically. So: the
+ * name never wraps, the argument is a one-line preview, and anything long opens on demand with each
+ * field on its own, wrapped like text rather than like a JSON blob. */
+const ACTION_PEEK = 96;
+
+function actionFields(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return [['input', input]];
+  return Object.entries(input);
+}
+const actionValue = (v) => (typeof v === 'string' ? v : JSON.stringify(v, null, 2));
+
+function renderAgentActions(actions) {
+  const failed = actions.some((a) => !a.ok);
+  const rows = actions.map((a) => {
+    const oneLine = JSON.stringify(a.input ?? {});
+    const peek = oneLine.length > ACTION_PEEK ? oneLine.slice(0, ACTION_PEEK) + '…' : oneLine;
+    const head = `<span class="aa-tool">${esc(a.tool)}</span><span class="aa-peek">${esc(peek)}</span><span class="ms">${a.ms} ms</span>`;
+    if (oneLine.length <= ACTION_PEEK) return `<div class="agent-action ${a.ok ? '' : 'err'}">${head}</div>`;
+    const body = actionFields(a.input).map(([k, v]) =>
+      `<div class="aa-field"><b>${esc(k)}</b><pre>${esc(actionValue(v))}</pre></div>`).join('');
+    return `<details class="agent-action ${a.ok ? '' : 'err'}"><summary>${head}</summary>${body}</details>`;
+  }).join('');
+  return `<details class="agent-actions"><summary>${actions.length} action${actions.length === 1 ? '' : 's'} taken${failed ? ' · some failed' : ''}</summary>${rows}</details>`;
+}
+
 function appendAgentMsg(role, text, actions, meta) {
   const empty = $('agentMessages').querySelector('.ag-empty'); if (empty) empty.remove();
   const el = document.createElement('div');
@@ -514,10 +543,7 @@ function appendAgentMsg(role, text, actions, meta) {
     return el;
   }
   el.className = 'agent-msg ' + (role === 'user' ? 'user' : 'ai');
-  const acts = (actions && actions.length)
-    ? `<details class="agent-actions"><summary>${actions.length} action${actions.length === 1 ? '' : 's'} taken${actions.some((a) => !a.ok) ? ' · some failed' : ''}</summary>${actions.map((a) =>
-        `<div class="agent-action ${a.ok ? '' : 'err'}"><span>${esc(a.tool)}</span><code>${esc(JSON.stringify(a.input))}</code><span class="ms">${a.ms} ms</span></div>`).join('')}</details>`
-    : '';
+  const acts = (actions && actions.length) ? renderAgentActions(actions) : '';
   const who = role === 'user' ? 'You' : '<span class="ag-ico"><img class="ai-mini" src="/assets/robot-logo-animated_1.svg" alt="" aria-hidden="true"></span>AI Agent';
   el.innerHTML = `<div class="who">${who}</div><div class="txt">${renderAgentText(text)}</div>${acts}`;
   $('agentMessages').appendChild(el);
@@ -813,12 +839,22 @@ async function saveAgentModel() {
 $('agentModel').addEventListener('change', saveAgentModel); // fires on datalist pick and on blur-with-change
 $('agentModel').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); $('agentModel').blur(); } });
 $('btnAgentReset').addEventListener('click', async () => {
+  /* Both conversations can be cleared. This used to return early when no terminal session was
+     bound, which is the WORKSPACE conversation - the one most people are looking at - so the button
+     was visible and did nothing. "No session" is a scope, not a disabled state. */
   const sessionId = agentSessionId(), epoch = agentSessionEpoch;
-  if (!sessionId) return;
+  const scope = sessionId ? 'this terminal session’s conversation' : 'this project’s conversation';
+  const ok = await confirmDialog({
+    title: 'Reset chat',
+    message: `Clear ${scope} and start over? The messages are deleted and cannot be recovered. Pending approval cards are rejected.`,
+    okLabel: 'Clear it', okClass: 'reject',
+  });
+  if (!ok) return;
   try {
     await api('/api/agent/reset', { method: 'POST', body: agentSessionBody({}, sessionId) });
     if (sessionId === agentSessionId() && epoch === agentSessionEpoch) await openAgent();
-  } catch (e) { if (sessionId === agentSessionId()) toast(e.message); }
+    toast('Chat cleared', 'success');
+  } catch (e) { if (sessionId === agentSessionId()) toast(e.message, 'error'); }
 });
 $('btnAgentDisconnect').addEventListener('click', async () => {
   const ok = await confirmDialog({
