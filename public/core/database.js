@@ -283,7 +283,11 @@ function fillForm(r) {
   $('rPk').value = r?.pkColumn || '';
   $('rWhere').value = r?.where || '';
   $('rLimit').value = r?.limit || '';
-  $('rDisplay').value = (r?.displayColumns || []).join(', ');
+  /* The field is a comma-separated list either way. A rule normally holds an array, but one typed
+     into rules.json by hand - or pasted out of a chat - often holds the string, and .join on a
+     string is not a function: the editor threw and the rule could not be opened at all. */
+  const display = r?.displayColumns;
+  $('rDisplay').value = Array.isArray(display) ? display.join(', ') : String(display || '');
   $('transformList').innerHTML = '';
   (r?.transforms?.length ? r.transforms : [undefined]).forEach(addTransformRow);
   updateColDatalist();

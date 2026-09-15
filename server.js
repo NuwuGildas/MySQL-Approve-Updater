@@ -20,6 +20,7 @@ const fsp = require('fs/promises');
 const net = require('net');
 const path = require('path');
 const crypto = require('crypto');
+const { normalizeRules, columnList } = require('./lib/shared/rules');
 
 // When packaged as a standalone exe (pkg), __dirname points into the read-only
 // snapshot: static assets load from there, but everything the app WRITES (and
@@ -456,8 +457,7 @@ function valuesEqual(a, b) {
 
 let rules = [];
 try {
-  rules = JSON.parse(fs.readFileSync(RULES_FILE, 'utf8'));
-  if (!Array.isArray(rules)) rules = [];
+  rules = normalizeRules(JSON.parse(fs.readFileSync(RULES_FILE, 'utf8')), (m) => console.warn(m));
 } catch { rules = []; }
 
 async function saveRules() {
@@ -471,8 +471,8 @@ function sanitizeRuleInput(body) {
   const table = String(body.table || '').trim();
   const pkColumn = String(body.pkColumn || '').trim();
   const where = String(body.where || '').trim();
-  const displayColumns = String(body.displayColumns || '')
-    .split(',').map((s) => s.trim()).filter(Boolean);
+  // the same reading of the field as the one applied to what is already on disk
+  const displayColumns = columnList(body.displayColumns);
   let limit = Number(body.limit);
   if (!Number.isInteger(limit) || limit < 1) limit = settings.maxPreviewRows;
   limit = Math.min(limit, settings.maxPreviewRows);
