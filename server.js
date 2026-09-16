@@ -21,6 +21,7 @@ const net = require('net');
 const path = require('path');
 const crypto = require('crypto');
 const { normalizeRules, columnList } = require('./lib/shared/rules');
+const { writeFileAtomic } = require('./lib/shared/atomic-file');
 const { createProfileSanitizer } = require('./lib/shared/connection-profile');
 
 // When packaged as a standalone exe (pkg), __dirname points into the read-only
@@ -137,9 +138,7 @@ try {
 }
 
 async function saveConnections() {
-  const tmp = CONNECTIONS_FILE + '.tmp';
-  await fsp.writeFile(tmp, JSON.stringify(connStore, null, 2), 'utf8');
-  await fsp.rename(tmp, CONNECTIONS_FILE);
+  await writeFileAtomic(CONNECTIONS_FILE, JSON.stringify(connStore, null, 2));
 }
 
 function profileById(id) {
@@ -462,9 +461,7 @@ try {
 } catch { rules = []; }
 
 async function saveRules() {
-  const tmp = RULES_FILE + '.tmp';
-  await fsp.writeFile(tmp, JSON.stringify(rules, null, 2), 'utf8');
-  await fsp.rename(tmp, RULES_FILE);
+  await writeFileAtomic(RULES_FILE, JSON.stringify(rules, null, 2));
 }
 
 function sanitizeRuleInput(body) {

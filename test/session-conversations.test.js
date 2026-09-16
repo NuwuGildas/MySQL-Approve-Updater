@@ -128,3 +128,48 @@ test('only a real conversation message is accepted, and an unknown session is a 
   assert.deepEqual(store.status(null), { attached: false, sessionId: null });
   assert.equal(store.status('does-not-exist').missing, true);
 });
+
+test('a write that fails does not take the conversation down with it', async (t) => {
+  /* The report that prompted this: on Windows the rename over the file fails with EPERM whenever
+     anything else holds a handle for a moment - a scanner, an indexer, a watcher, a second copy of
+     the app. That used to be latched into readOnly, so one momentary lock meant every message the
+     user typed afterwards came back 503 for the life of the process. */
+  const { store, dir } = fixture(t);
+  store.create('session-1', { profileId: 'p1' });
+  await store.flush();
+
+  /* Make the rename fail the way Windows does: the destination is a directory that cannot be
+     replaced. Nothing else about the store changes. */
+  const file = path.join(dir, FILE_NAME);
+  fs.rmSync(file);
+  fs.mkdirSync(file);
+  store.push('session-1', { role: 'user', text: 'this one cannot reach the disk' });
+  await store.flush();
+
+  assert.equal(store.readOnly, null, 'a failed write is not an unreadable file');
+  assert.match(store.lastSaveError, /could not be saved/);
+  assert.match(store.status('session-1').lastSaveError, /could not be saved/, 'and the user is told');
+
+  /* The point: the conversation still works, in memory and through the API. */
+  assert.equal(store.history('session-1').at(-1).text, 'this one cannot reach the disk');
+  assert.doesNotThrow(() => store.push('session-1', { role: 'assistant', text: 'and so does this one' }));
+  await store.flush();
+  assert.equal(store.history('session-1').length, 2);
+
+  /* And when whatever was holding the file lets go, the next message saves everything. */
+  fs.rmdirSync(file);
+  store.push('session-1', { role: 'user', text: 'saved again' });
+  await store.flush();
+  assert.equal(store.lastSaveError, null, 'the complaint is withdrawn once it succeeds');
+  const stored = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.deepEqual(stored.sessions['session-1'].messages.map((m) => m.text),
+    ['this one cannot reach the disk', 'and so does this one', 'saved again'],
+    'nothing written while the file was held was lost');
+});
+
+test('an unreadable file still refuses every write, which is a different thing', async (t) => {
+  const { store } = fixture(t, { file: '{ not json' });
+  assert.match(store.readOnly, /cannot be read/);
+  assert.equal(store.lastSaveError, null);
+  assert.throws(() => store.create('session-1', {}), /cannot be read/);
+});
