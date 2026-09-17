@@ -1,6 +1,6 @@
 # Deployments · The Ascension
 
-Connect a repository, detect its stack, review the plan and ship to a VPS, shared host or platform, with rollback, health checks and run history.
+Connect a repository, detect its stack, review the plan and ship to a VPS, shared host or platform, with rollback, health checks and run history. Scaffolds a WordPress project from scratch, or lays your own code over a clean core.
 
 An optional module for Server Tools. It is **not** part of the base
 application: the base ships without a byte of this package, and a user adds it
@@ -10,8 +10,8 @@ publisher signature and activates it in place.
 | | |
 |---|---|
 | Module id | `deployments` |
-| Version | 1.0.0 |
-| Host SDK | `^1.0.0` |
+| Version | 1.3.0 |
+| Host SDK | `^1.1.0` |
 | Branch | `modules/deployments` |
 
 ## What it may do

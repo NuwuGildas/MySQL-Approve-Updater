@@ -2,6 +2,7 @@
 /* Stack registry. Order matters for tie-breaking: more specific first.
    Static requires only, so pkg bundles every module. */
 const STACKS = [
+  require('./wordpress'),   // before php-composer: a WordPress project may also carry a composer.json
   require('./php-laravel'),
   require('./php-composer'),
   require('./node-app'),
@@ -15,7 +16,7 @@ const byId = Object.fromEntries(STACKS.map((s) => [s.id, s]));
 /** Pick the stack module for a resolved manifest. */
 function stackFor(manifest) {
   const { type, framework } = manifest.stack || {};
-  if (type === 'php') return framework === 'laravel' ? byId['php-laravel'] : byId['php-composer'];
+  if (type === 'php') return framework === 'wordpress' ? byId['wordpress'] : framework === 'laravel' ? byId['php-laravel'] : byId['php-composer'];
   if (type === 'node') return byId['node-app'];
   if (type === 'static') return byId['static-site'];
   if (type === 'docker') return byId['docker'];

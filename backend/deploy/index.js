@@ -18,8 +18,8 @@ const cli = require('./cli');
 
 function mount(rawCtx) {
   const ctx = validateCtx(rawCtx);
-  const stores = createStores(ctx.DATA_DIR, { log: ctx.logEvent, projects: ctx.projects });
-  const vault = createVault(ctx.DATA_DIR);
+  const stores = createStores(ctx.DATA_DIR, { log: ctx.logEvent, projects: ctx.projects, storage: ctx.storage });
+  const vault = createVault(ctx.DATA_DIR, process.env, ctx.storage);
   const redact = createRedactor(() => {
     const vals = vault.values();
     for (const p of ctx.connStore.profiles || []) { if (p.ssh?.password) vals.push(p.ssh.password); if (p.ssh?.passphrase) vals.push(p.ssh.passphrase); if (p.db?.password) vals.push(p.db.password); }

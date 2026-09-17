@@ -104,3 +104,35 @@ test('overwrite mode keeps the site up behind a maintenance page and removes sta
     assert.ok(m.files.includes('assets/app.js'));
   } finally { conn.close(); }
 });
+
+test('overwrite mode leaves shared storage inside the docroot alone', async () => {
+  const conn = await createFtpConn(cfg());
+  try {
+    /* What a WordPress media library looks like on FTP-only hosting: uploads live inside the
+       docroot, are excluded from the artifact, and were never in a ship manifest. Shipping over
+       the tree must not touch them - and swapping the docroot for a fresh one would strand them. */
+    await conn.mkdirp('/public_html/wp-content/uploads/2026/09');
+    await conn.writeFile('/public_html/wp-content/uploads/2026/09/photo.jpg', 'binary-ish');
+    await conn.writeFile('/public_html/.ship-manifest.json', JSON.stringify({ ts: '20260907120000', files: ['index.html'] }));
+
+    await shared.shipInPlace(conn, target, '20260907130000', stage('v4'), { swap: false, warn: () => {} });
+    const photo = path.join(root, 'public_html', 'wp-content', 'uploads', '2026', '09', 'photo.jpg');
+    assert.ok(fs.existsSync(photo), 'the media library survived the deploy');
+    assert.equal(fs.readFileSync(photo, 'utf8'), 'binary-ish');
+    assert.equal(fs.readFileSync(path.join(root, 'public_html', 'index.html'), 'utf8'), 'v4', 'and the code was still updated');
+  } finally { conn.close(); }
+});
+
+test('a swap would strand that same shared storage, which is why the pipeline avoids it', async () => {
+  const conn = await createFtpConn(cfg());
+  try {
+    await conn.mkdirp('/public_html/wp-content/uploads');
+    await conn.writeFile('/public_html/wp-content/uploads/keep.jpg', 'x');
+    const r = await shared.shipInPlace(conn, target, '20260907140000', stage('v5'), { swap: true });
+    assert.equal(r.mode, 'swap');
+    assert.ok(!fs.existsSync(path.join(root, 'public_html', 'wp-content', 'uploads', 'keep.jpg')),
+      'the live docroot no longer has the uploads: exactly the outcome the manifest.shared check prevents');
+    assert.ok(fs.existsSync(path.join(root, path.basename(r.previous), 'wp-content', 'uploads', 'keep.jpg')),
+      'they are in the swapped-out copy, but the site cannot see them');
+  } finally { conn.close(); }
+});

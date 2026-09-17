@@ -9,19 +9,26 @@ const path = require('path');
 const { createProjectView } = require('./project-view');
 const { migrateDeploymentProjects } = require('./projects');
 
-function createStore(file, initial) {
+function createStore(file, initial, storage) {
+  const fs = storage?.fs || require('fs');
+  const fsp = storage?.promises || require('fs/promises');
   let data;
   try { data = JSON.parse(fs.readFileSync(file, 'utf8')); }
   catch { data = typeof initial === 'function' ? initial() : JSON.parse(JSON.stringify(initial)); }
   let chain = Promise.resolve();
   const save = () => {
     const snapshot = JSON.stringify(data, null, 2);
-    chain = chain.then(async () => {
+    if (storage?.mode === 'mysql') {
+      fs.writeFileSync(file, snapshot, 'utf8');
+      return Promise.resolve();
+    }
+    const work = chain.then(async () => {
       const tmp = file + '.tmp';
       await fsp.writeFile(tmp, snapshot, 'utf8');
       await fsp.rename(tmp, file);
-    }).catch((e) => { console.error(`deploy: failed to save ${path.basename(file)}: ${e.message}`); });
-    return chain;
+    });
+    chain = work.catch((e) => { console.error(`deploy: failed to save ${path.basename(file)}: ${e.message}`); });
+    return work;
   };
   const setSync = (next) => {
     fs.writeFileSync(file + '.tmp', JSON.stringify(next, null, 2), 'utf8');
@@ -31,7 +38,8 @@ function createStore(file, initial) {
   return { get: () => data, set: (d) => { data = d; return save(); }, setSync, save, file };
 }
 
-function createStores(DATA_DIR, { projects = createProjectView(), log = () => {} } = {}) {
+function createStores(DATA_DIR, { projects = createProjectView(), log = () => {}, storage } = {}) {
+  const createStore = (file, initial) => module.exports.createStore(file, initial, storage);
   const repos = createStore(path.join(DATA_DIR, 'deploy-repos.json'), { repos: [] });
   const targets = createStore(path.join(DATA_DIR, 'deploy-targets.json'), { targets: [] });
   const runs = createStore(path.join(DATA_DIR, 'deploy-runs.json'), { runs: [] });
@@ -40,6 +48,7 @@ function createStores(DATA_DIR, { projects = createProjectView(), log = () => {}
   const connectors = createStore(path.join(DATA_DIR, 'connectors.json'), { connectors: [] });
   const pendingProjects = new Map();
   const stores = {
+    storage,
     repos, targets, runs, servers, templates, connectors, projects, pendingProjects,
     workDir: path.join(DATA_DIR, 'deploy-work'),
     runsDir: path.join(DATA_DIR, 'deploy-runs'),

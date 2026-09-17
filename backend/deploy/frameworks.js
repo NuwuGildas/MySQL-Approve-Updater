@@ -14,6 +14,7 @@ const CATALOG = [
   F('remix', 'Remix', 'fullstack', 'node', 'remix', { pm: 'npm', install: 'npm ci', build: 'npm run build', start: 'npm run start', port: 3000, runtime: 'node' }),
   F('astro-ssr', 'Astro (SSR)', 'fullstack', 'node', 'astro', { pm: 'npm', install: 'npm ci', build: 'npm run build', start: 'node ./dist/server/entry.mjs', port: 4321, runtime: 'node' }),
   F('laravel', 'Laravel', 'fullstack', 'php', 'laravel', { pm: 'composer', install: 'composer install --no-dev --prefer-dist --optimize-autoloader --no-interaction', build: 'npm ci && npm run build', start: null, port: null, runtime: 'php-fpm', docroot: 'public', health: '/up', shared: { files: ['.env'], dirs: ['storage/app', 'storage/framework', 'storage/logs'] } }),
+  F('wordpress', 'WordPress', 'fullstack', 'php', 'wordpress', { pm: null, install: null, build: null, start: null, port: null, runtime: 'php-fpm', docroot: '.', health: '/', shared: { files: [], dirs: ['wp-content/uploads'] }, artifact: { include: ['**'], exclude: ['.git/**', '.github/**', 'node_modules/**', 'tests/**', 'test/**', '.env', '.env.*', '**/*.map', 'ship.json', 'wp-content/uploads/**', 'uploads/**', 'wp-content/cache/**', 'wp-content/upgrade/**', 'wp-content/backup*/**', 'wp-content/debug.log'] } }),
   F('symfony', 'Symfony', 'fullstack', 'php', 'symfony', { pm: 'composer', install: 'composer install --no-dev --prefer-dist --optimize-autoloader --no-interaction', build: null, start: null, port: null, runtime: 'php-fpm', docroot: 'public', shared: { files: ['.env.local'], dirs: ['var/log'] } }),
   F('django', 'Django', 'fullstack', 'python', 'django', { pm: 'pip', install: 'python3 -m venv .venv && .venv/bin/pip install -q -r requirements.txt', build: '.venv/bin/python manage.py collectstatic --noinput', start: '.venv/bin/gunicorn config.wsgi:application --bind 127.0.0.1:$PORT --workers 2', port: 8000, runtime: 'python', shared: { files: ['.env'], dirs: ['media'] } }),
   // backend
@@ -53,6 +54,7 @@ function fragmentFor(id, over = {}) {
     health: { path: over.healthPath || c.health || '/', expectStatus: [200, 399] },
   };
   if (c.shared) frag.shared = c.shared;
+  if (c.artifact) frag.artifact = c.artifact;
   const b = over.base && typeof over.base === 'object' ? over.base : null; // a detected manifest the form was filled from
   if (b) {
     if (b.shared) frag.shared = b.shared;
@@ -63,7 +65,23 @@ function fragmentFor(id, over = {}) {
     if (typeof b.root === 'string' && b.root && b.root !== '.') frag.root = b.root;
     if (Array.isArray(b.health?.expectStatus)) frag.health.expectStatus = b.health.expectStatus;
   }
+  /* WordPress is assembled rather than built - core is downloaded at build time and the repository
+     is laid over it - so the picker carries the handful of settings that describes. Whatever
+     detection already worked out is the starting point; the form only overrides what it was given. */
+  if (c.framework === 'wordpress') frag.stack.wordpress = wordpressBlock(b?.stack?.wordpress, over);
   return frag;
+}
+
+/** The stack.wordpress block, from what detection found plus whatever the form set. */
+function wordpressBlock(detected, over = {}) {
+  const base = { version: 'latest', contentDir: 'wp-content', core: 'download', intoDir: '', configFromVault: null, ...(detected || {}) };
+  const wp = { ...base };
+  if (over.wpVersion !== undefined && String(over.wpVersion).trim()) wp.version = String(over.wpVersion).trim();
+  if (over.wpCore !== undefined && over.wpCore) wp.core = over.wpCore === 'repo' ? 'repo' : 'download';
+  if (over.wpContentDir !== undefined && over.wpContentDir) wp.contentDir = over.wpContentDir === '.' ? '.' : 'wp-content';
+  if (over.wpConfigVault !== undefined) wp.configFromVault = String(over.wpConfigVault || '').trim() || null;
+  wp.intoDir = wp.contentDir === '.' ? 'wp-content' : ''; // always follows contentDir; never set by hand
+  return wp;
 }
 
 /** Map a detection result (stack fragment) to a catalog id. */
@@ -83,4 +101,4 @@ function formFrom(manifest) {
   return { install, build, start: manifest?.runtime?.start || '', port: manifest?.runtime?.port || '', outputDir: manifest?.build?.outputDir || '', docroot: manifest?.runtime?.docroot || '.', healthPath: manifest?.health?.path || '/' };
 }
 
-module.exports = { CATALOG, GROUPS, fragmentFor, catalogIdFor, formFrom };
+module.exports = { CATALOG, GROUPS, fragmentFor, wordpressBlock, catalogIdFor, formFrom };

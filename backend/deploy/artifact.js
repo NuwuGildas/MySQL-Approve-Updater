@@ -37,15 +37,33 @@ async function selectFiles(srcDir, rules) {
 
 /**
  * Stage the artifact into `stageDir` (copy): used for FTP uploads and as tar input.
- * @returns {Promise<{files:number, bytes:number}>}
+ *
+ * `baseDir` is laid down first and the selected files go over the top, so a stack that assembles
+ * part of the release itself - WordPress core, say - can have the repository win wherever the two
+ * overlap. `intoDir` puts the selected files in a subdirectory of the release, for repositories
+ * that ARE a subdirectory of the application (a bare wp-content, say) rather than the whole of it.
+ *
+ * @returns {Promise<{files:number, bytes:number, base:number}>}
  */
-async function stage(srcDir, stageDir, manifest, meta, { onLine, onProgress } = {}) {
+async function stage(srcDir, stageDir, manifest, meta, { onLine, onProgress, baseDir = null, intoDir = '' } = {}) {
   await fsp.rm(stageDir, { recursive: true, force: true });
   await fsp.mkdir(stageDir, { recursive: true });
+  let base = 0;
+  if (baseDir) {
+    if (!fs.existsSync(baseDir)) throw new Error(`base layer not found: ${baseDir}`);
+    await fsp.cp(baseDir, stageDir, { recursive: true, force: true });
+    base = (await selectFiles(baseDir, { include: ['**'], exclude: [] })).length;
+    if (onLine) onLine(`base layer: ${base} file(s)`);
+  }
+  // checked before it is tidied up, or "../escape" would normalise into a perfectly innocent "escape"
+  const raw = String(intoDir || '').replace(/\\/g, '/');
+  if (path.isAbsolute(raw) || raw.split('/').includes('..')) throw new Error(`intoDir must be a relative path without "..": ${intoDir}`);
+  const into = raw.split('/').filter((s) => s && s !== '.').join('/');
+  const destRoot = into ? path.join(stageDir, into) : stageDir;
   const files = await selectFiles(srcDir, manifest.artifact);
   let bytes = 0, i = 0;
   for (const rel of files) {
-    const from = path.join(srcDir, rel), to = path.join(stageDir, rel);
+    const from = path.join(srcDir, rel), to = path.join(destRoot, rel);
     await fsp.mkdir(path.dirname(to), { recursive: true });
     await fsp.copyFile(from, to);
     bytes += (await fsp.stat(from)).size;
@@ -59,8 +77,8 @@ async function stage(srcDir, stageDir, manifest, meta, { onLine, onProgress } = 
     await fsp.copyFile(from, to);
     files.push(x.to.replace(/\\/g, '/'));
   }
-  await fsp.writeFile(path.join(stageDir, '.release.json'), JSON.stringify({ commit: meta.commit || null, shortCommit: meta.shortCommit || null, branch: meta.branch || null, ts: meta.ts, runId: meta.runId, builtAt: new Date().toISOString(), builtOn: require('os').hostname(), tool: 'server-tools' }));
-  return { files: files.length + 1, bytes };
+  await fsp.writeFile(path.join(stageDir, '.release.json'), JSON.stringify({ commit: meta.commit || null, shortCommit: meta.shortCommit || null, branch: meta.branch || null, ts: meta.ts, runId: meta.runId, builtAt: new Date().toISOString(), builtOn: require('os').hostname(), tool: 'server-tools', ...(meta.base ? { base: meta.base } : {}) }));
+  return { files: files.length + 1, bytes, base };
 }
 
 /** Executable-looking files get 0755 in the tarball even when built on Windows. */

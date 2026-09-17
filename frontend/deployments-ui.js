@@ -25,7 +25,7 @@ export function createDeploymentsUI({ host, mount }) {
     det: null, detRepo: null, plan: null, probe: null, releases: null, setup: null, editingRepo: null, editingTarget: null, loaded: false,
     servers: [], cloudJob: null, cloudMeta: null, templates: [],
   };
-  const dpPrefAi = () => { try { return localStorage.getItem('st-deploy-ai') !== '0'; } catch { return true; } };
+  const dpPrefAi = () => { try { return AppPreferences.getItem('st-deploy-ai') !== '0'; } catch { return true; } };
   const dpFmtAgo = (iso) => { if (!iso) return ''; const s = Math.round((Date.now() - Date.parse(iso)) / 1000); return s < 60 ? `${s}s ago` : s < 3600 ? `${Math.round(s / 60)}m ago` : s < 86400 ? `${Math.round(s / 3600)}h ago` : `${Math.round(s / 86400)}d ago`; };
   const dpFmtMs = (ms) => (ms == null ? '' : ms < 1000 ? `${ms} ms` : ms < 60000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`);
   const dpBadge = (status) => `<span class="badge ${esc(status)}">${esc(String(status).replace('_', ' '))}</span>`;
@@ -66,7 +66,7 @@ export function createDeploymentsUI({ host, mount }) {
   /* ---------- open / close / load ---------- */
   async function openDeploy(targetId) {
     $('deployDrawer').classList.add('open');
-    try { if (localStorage.getItem('st-deploy-compact') === '1') { $('deployDrawer').classList.add('compact'); $('btnDpCompact').textContent = '»'; } } catch {}
+    try { if (AppPreferences.getItem('st-deploy-compact') === '1') { $('deployDrawer').classList.add('compact'); $('btnDpCompact').textContent = '»'; } } catch {}
     await loadDeploy();
     if (targetId) dpSelect(targetId);
   }
@@ -165,7 +165,7 @@ export function createDeploymentsUI({ host, mount }) {
     const r = e.target.closest('[data-repo]');
     if (r) { const first = dp.targets.find((x) => x.repoId === r.dataset.repo); if (first) dpSelect(first.id); else { dp.sel = null; dpRenderNav(); dpRenderMain(r.dataset.repo); } }
   });
-  host.on($('btnDpCompact'), 'click', () => { const c = $('deployDrawer').classList.toggle('compact'); $('btnDpCompact').textContent = c ? '»' : '«'; try { localStorage.setItem('st-deploy-compact', c ? '1' : '0'); } catch {} });
+  host.on($('btnDpCompact'), 'click', () => { const c = $('deployDrawer').classList.toggle('compact'); $('btnDpCompact').textContent = c ? '»' : '«'; try { AppPreferences.setItem('st-deploy-compact', c ? '1' : '0'); } catch {} });
 
   /* ---------- main pane ---------- */
   function dpSelect(id) {
@@ -233,7 +233,8 @@ export function createDeploymentsUI({ host, mount }) {
   function dpOpenWizard(repoId) {
     dpFillProjectSelect('wzProject');
     wz.step = 1; wz.source = repoId ? 'existing' : 'git'; wz.dest = dp.profiles.length ? 'vps-ssh' : 'shared-hosting'; wz.transport = 'ftps'; wz.pendingRepoId = repoId || null;
-    for (const id of ['wzUrl', 'wzBranch', 'wzToken', 'wzKeyPath', 'wzPath', 'wzRepoName', 'wzTargetName', 'wzHealth', 'wzRoot', 'wzFtpHost', 'wzFtpUser', 'wzHome', 'wzDocroot', 'wzLocalRoot', 'wzLocalReload']) $(id).value = '';
+    for (const id of ['wzUrl', 'wzBranch', 'wzToken', 'wzKeyPath', 'wzPath', 'wzRepoName', 'wzTargetName', 'wzHealth', 'wzRoot', 'wzFtpHost', 'wzFtpUser', 'wzHome', 'wzDocroot', 'wzLocalRoot', 'wzLocalReload', 'wzNewDir', 'wzNewTheme']) $(id).value = '';
+    wz.created = null; $('wzNewWpHint').textContent = 'Nothing is written until you press this.'; $('btnWzNewWp').disabled = false;
     $('wzLocalProc').value = 'none'; delete $('wzLocalRoot').dataset.touched;
     $('wzAuth').value = 'none'; $('wzEnv').value = 'production'; $('wzWeb').value = 'nginx'; $('wzTransport').value = 'ftps'; $('wzAuto').checked = false; $('wzPlanNow').checked = true;
     wz.fw = null; wz.detected = null; wz.build = 'auto'; wz.fwGroup = 'all'; wzAiButtonState(); for (const id of ['fwInstall', 'fwBuild', 'fwStart', 'fwPort', 'fwOut', 'fwDocroot', 'fwHealth', 'wzDomain', 'wzSslEmail']) $(id).value = ''; $('wzSsl').checked = true; $('btnFwDetected').hidden = true; $('fwDetectHint').textContent = '';
@@ -274,9 +275,10 @@ export function createDeploymentsUI({ host, mount }) {
   }
   const isAbsLocal = (p) => /^([A-Za-z]:[\\/]|\/|~[\\/]|\\\\)/.test(p);
   function wzRepoName() {
+    if (wz.source === 'new-wp') return wz.created?.name || $('wzRepoName').value.trim() || '';
     if (wz.source === 'existing') return dp.repos.find((r) => r.id === $('wzRepo').value)?.name || '';
     if ($('wzRepoName').value.trim()) return $('wzRepoName').value.trim();
-    const u = wz.source === 'git' ? $('wzUrl').value.trim() : $('wzPath').value.trim();
+    const u = wz.source === 'git' ? $('wzUrl').value.trim() : wz.source === 'new-wp' ? $('wzNewDir').value.trim() : $('wzPath').value.trim();
     const base = u.replace(/[\/\\]+$/, '').split(/[\/\\:]/).pop() || '';
     return base.replace(/\.git$/, '');
   }
@@ -299,6 +301,7 @@ export function createDeploymentsUI({ host, mount }) {
     // detection: local folders and connected repos with a checkout can be inspected now; git URLs are detected on the first Plan
     let dir = null;
     if (wz.source === 'local') dir = $('wzPath').value.trim();
+    if (wz.source === 'new-wp' && wz.created) dir = wz.created.path;  // detect it straight away: it arrives as WordPress
     const existing = wz.source === 'existing' ? dp.repos.find((r) => r.id === $('wzRepo').value) : null;
     if (existing?.source.kind === 'local') dir = existing.source.path;
     if (dir && wz.detected?.dir !== dir) {
@@ -319,8 +322,31 @@ export function createDeploymentsUI({ host, mount }) {
     btn.title = on ? 'Read the repository, detect the framework and fill in the deploy configuration' : 'Connect the AI assistant (Settings → AI assistant) to detect from the repository';
   }
   /** "AI detect": the server clones/reads the source, runs heuristics, asks the AI to confirm and refine, and the form is filled from the answer. */
+  /* Writing a WordPress project into an empty folder. It is the one step of the wizard that touches
+     the disk before Finish, so it is its own button rather than something Next does quietly. */
+  host.on($('btnWzNewWp'), 'click', async () => {
+    const dir = $('wzNewDir').value.trim();
+    if (!dir) { $('wzNewDir').focus(); return toast('Choose an empty folder for the project', 'warning'); }
+    if (!isAbsLocal(dir)) { $('wzNewDir').focus(); return toast('Use a full path to a folder on this computer', 'warning'); }
+    $('btnWzNewWp').disabled = true;
+    $('wzNewWpHint').textContent = 'Writing the project…';
+    try {
+      const body = { dir, name: $('wzRepoName').value.trim() || undefined, themeSlug: $('wzNewTheme').value.trim() || undefined };
+      wz.created = await http('/deploy/wordpress/new', { method: 'POST', body: JSON.stringify(body) });
+      $('wzNewWpHint').innerHTML = `Created <b>${esc(wz.created.name)}</b> in ${esc(wz.created.path)} — ${wz.created.files.length} files, theme <b>${esc(wz.created.themeName)}</b>${wz.created.git ? ', git repository initialised' : ''}. Connected as a repository.`;
+      if (!$('wzRepoName').value.trim()) $('wzRepoName').value = wz.created.name;
+      await loadDeploy();
+      toast(`WordPress project "${wz.created.name}" created`, 'success');
+    } catch (e) {
+      $('wzNewWpHint').textContent = e.message;
+      $('btnWzNewWp').disabled = false;
+      toast(e.message, 'error');
+    }
+  });
+
   /** Cache key of the wizard's current source (what "AI detect" would inspect). */
   function wzSourceKey() {
+    if (wz.source === 'new-wp') return wz.created ? 'repo:' + wz.created.repo.id : null;
     if (wz.source === 'existing') return $('wzRepo').value ? 'repo:' + $('wzRepo').value : null;
     if (wz.source === 'local') return $('wzPath').value.trim() ? 'local:' + $('wzPath').value.trim() : null;
     return $('wzUrl').value.trim() ? 'git:' + $('wzUrl').value.trim() + '#' + ($('wzBranch').value.trim() || '') : null;
@@ -341,7 +367,8 @@ export function createDeploymentsUI({ host, mount }) {
     const key = wzSourceKey();
     const reuse = key && !body.force && (wz.detected?.key === key && wz.detected.by ? wz.detected : wz.detCache.get(key));
     if (reuse) { const lbl = wzApplyDetection(reuse, 'reused from the earlier detection (shift-click to run it again)'); toast(lbl ? `${lbl}: earlier detection reused` : 'Earlier detection reused', 'success'); return; }
-    if (wz.source === 'existing') { body.repoId = $('wzRepo').value; if (!body.repoId) return toast('Pick a repository first', 'warning'); }
+    if (wz.source === 'new-wp') { if (!wz.created) return toast('Create the project first', 'warning'); body.repoId = wz.created.repo.id; }
+    else if (wz.source === 'existing') { body.repoId = $('wzRepo').value; if (!body.repoId) return toast('Pick a repository first', 'warning'); }
     else if (wz.source === 'local') { const p = $('wzPath').value.trim(); if (!p) { wzShow(1); $('wzPath').focus(); return toast('Enter the folder path first', 'warning'); } body.source = { kind: 'local', path: p }; }
     else {
       const url = $('wzUrl').value.trim(); if (!url) { wzShow(1); $('wzUrl').focus(); return toast('Enter the repository URL first', 'warning'); }
@@ -366,6 +393,10 @@ export function createDeploymentsUI({ host, mount }) {
     $('fwGrid').setAttribute('role', 'radiogroup'); $('fwGrid').setAttribute('aria-label', 'Framework');
     $('fwGrid').innerHTML = list.map((c) => `<button type="button" role="radio" aria-checked="${wz.fw === c.id}" class="fw-card ${wz.fw === c.id ? 'on' : ''} ${wz.detected?.catalogId === c.id ? 'detected' : ''}" data-fw="${c.id}" title="${esc(c.label)} · ${esc(c.stackType)}"><span class="fw-ico" aria-hidden="true" style="background:${FW_COLORS[c.id] || '#3a4756'}">${esc(FW_MARK[c.id] || c.label[0])}</span><span class="fw-name">${esc(c.label)}</span></button>`).join('');
     $('fwCfgHint').textContent = wz.fw ? `${wz.catalog.frameworks.find((c) => c.id === wz.fw)?.label} defaults applied: edit freely` : 'auto: detection decides on the first Plan; pick a framework to pre-fill and edit the commands';
+    // WordPress needs settings no other framework has, and nothing else should be bothered by them
+    const isWp = (wz.fw || wz.detected?.catalogId) === 'wordpress';
+    $('fwWp').hidden = !isWp;
+    for (const id of ['fwInstall', 'fwStart', 'fwPort', 'fwOut']) $(id).closest('div').hidden = isWp && id !== 'fwInstall';
   }
   /** Stack type chosen in the framework step (picked framework, else the detection result), null when left to detection. */
   function wzStackType() {
@@ -377,16 +408,37 @@ export function createDeploymentsUI({ host, mount }) {
     wz.fw = id;
     const v = form || { install: c.install, build: c.build, start: c.start, port: c.port, outputDir: c.outputDir, docroot: c.docroot, healthPath: c.health };
     $('fwInstall').value = v.install || ''; $('fwBuild').value = v.build || ''; $('fwStart').value = v.start || ''; $('fwPort').value = v.port || ''; $('fwOut').value = v.outputDir || ''; $('fwDocroot').value = v.docroot || '.'; $('fwHealth').value = v.healthPath || c.health || '/';
+    if (id === 'wordpress') {
+      const w = (wz.detected?.catalogId === 'wordpress' && wz.detected.fragment?.stack?.wordpress) || {};
+      $('fwWpVersion').value = w.version && w.version !== 'latest' ? w.version : '';
+      $('fwWpContent').value = w.contentDir === '.' ? '.' : 'wp-content';
+      /* A project this wizard just wrote has no secret named yet, and leaving the field blank means
+         shipping without a wp-config.php. Suggest the name the "+ Secret" button would create. */
+      const suggested = wz.created ? `WP_DB_${String(wz.created.name).toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 30) || 'SITE'}` : '';
+      $('fwWpVault').value = w.configFromVault || suggested;
+    }
     wzRenderFw();
   }
   host.on($('fwTabs'), 'click', (e) => { const b = e.target.closest('button'); if (b) { wz.fwGroup = b.dataset.g; wzRenderFw(); } });
   host.on($('fwGrid'), 'click', (e) => { const c = e.target.closest('[data-fw]'); if (!c) return; if (wz.fw === c.dataset.fw) { wz.fw = null; wzRenderFw(); } else wzPickFramework(c.dataset.fw, wz.detected?.catalogId === c.dataset.fw ? wz.detected.form : null); });
   host.on($('btnFwDetected'), 'click', () => { if (wz.detected?.catalogId) wzPickFramework(wz.detected.catalogId, wz.detected.form); });
+  /* The WordPress database block, written straight into the vault from here: it is several lines,
+     so the generic single-line secret row in the access step cannot carry it. */
+  host.on($('fwWp'), 'click', (e) => {
+    if (!e.target.closest('[data-act="wp-secret"]')) return;
+    const slug = (x) => String(x || 'site').toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40) || 'SITE';
+    wz.wpSecretPending = true;
+    dpOpenSecretModal({
+      name: $('fwWpVault').value.trim() || `WP_DB_${slug(wzRepoName())}`,
+      value: ['WORDPRESS_DB_NAME=', 'WORDPRESS_DB_USER=', 'WORDPRESS_DB_PASSWORD=', 'WORDPRESS_DB_HOST=localhost', 'WORDPRESS_TABLE_PREFIX=wp_', '', '# optional: WORDPRESS_SITE_URL, WORDPRESS_DEBUG, WORDPRESS_ALLOW_FILE_MODS, WORDPRESS_CONFIG_EXTRA'].join('\n'),
+    });
+  });
   host.on($('wzBuildSeg'), 'click', (e) => { const b = e.target.closest('button'); if (!b) return; wz.build = b.dataset.v; $('wzBuildSeg').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b)); $('wzBuildHint').textContent = wz.build === 'remote' ? 'Build runs on the server inside the new release; the server needs the toolchain.' : wz.build === 'local' ? 'Build runs on this machine, then the artifact is uploaded.' : 'Auto builds on the server when it has the toolchain, otherwise here and uploads the artifact.'; });
   /** Manifest fragment from the framework step (null = leave it to detection). */
   async function wzManifest() {
     if (!wz.fw) return null;
     const over = { install: $('fwInstall').value.trim(), build: $('fwBuild').value.trim(), start: $('fwStart').value.trim() || null, port: $('fwPort').value.trim(), outputDir: $('fwOut').value.trim(), docroot: $('fwDocroot').value.trim() || '.', healthPath: $('fwHealth').value.trim() || '/' };
+    if (wz.fw === 'wordpress') Object.assign(over, { wpVersion: $('fwWpVersion').value.trim() || 'latest', wpContentDir: $('fwWpContent').value, wpConfigVault: $('fwWpVault').value.trim() });
     if (wz.detected?.fragment && wz.detected.catalogId === wz.fw) over.base = wz.detected.fragment; // keep shared paths, hooks, env and root from the detection
     const r = await http(`/deploy/frameworks/${encodeURIComponent(wz.fw)}/fragment`, { method: 'POST', body: JSON.stringify(over) });
     return r.manifest;
@@ -411,7 +463,8 @@ export function createDeploymentsUI({ host, mount }) {
     const refs = {};
     $('wzSecrets').querySelectorAll('.wz-secret').forEach((row) => { const name = row.querySelector('[data-wz-sname]').value.trim(); const val = row.querySelector('[data-wz-svalue]').value; refs[row.dataset.key] = name; if (val) secrets[name] = val; });
     let repo = null, repoId = null;
-    if (wz.source === 'existing') repoId = $('wzRepo').value;
+    if (wz.source === 'new-wp') repoId = wz.created?.repo.id || null;      // the route already connected it
+    else if (wz.source === 'existing') repoId = $('wzRepo').value;
     else if (wz.source === 'local') repo = { name: repoName, source: { kind: 'local', path: $('wzPath').value.trim() } };
     else repo = { name: repoName, source: { kind: 'git', url: $('wzUrl').value.trim(), branch: $('wzBranch').value.trim() || null, auth: $('wzAuth').value === 'token' ? { kind: 'https-token', tokenRef: `\${vault:${refs.gitToken}}` } : $('wzAuth').value === 'ssh' ? { kind: 'ssh', keyPath: $('wzKeyPath').value.trim() || null } : null } };
     const env = $('wzEnv').value; const name = $('wzTargetName').value.trim(); const healthUrl = $('wzHealth').value.trim() || (wz.dest === 'vps-ssh' && $('wzDomain').value.trim() ? `http://${$('wzDomain').value.trim()}/` : '');
@@ -430,6 +483,7 @@ export function createDeploymentsUI({ host, mount }) {
       if (!dpValidProject($('wzProject').value)) { $('wzProject').focus(); return err('Choose the project for this deployment'); }
       if (wz.source === 'git' && !/^(https?:\/\/|git@|ssh:\/\/)/.test($('wzUrl').value.trim())) return err('Enter the repository URL (https:// or git@…)');
       if (wz.source === 'local' && !$('wzPath').value.trim()) return err('Enter the folder path');
+      if (wz.source === 'new-wp' && !wz.created) { $('wzNewDir').focus(); return err('Press "Create the project" first: the rest of the setup describes the project it writes'); }
       if (wz.source === 'existing' && !$('wzRepo').value) return err('Pick a repository');
       if (wz.source === 'git' && $('wzAuth').value === 'token' && !$('wzToken').value) return err('Paste the access token');
       if (!wzRepoName()) return err('Give the repository a name');
@@ -1669,11 +1723,11 @@ export function createDeploymentsUI({ host, mount }) {
   }
 
   /* ---------- modals: secret ---------- */
-  function dpOpenSecretModal() { $('dsName').value = ''; $('dsValue').value = ''; $('dpSecretModal').showModal(); $('dsName').focus(); }
+  function dpOpenSecretModal({ name = '', value = '' } = {}) { $('dsName').value = name; $('dsValue').value = value; $('dpSecretModal').showModal(); (name ? $('dsValue') : $('dsName')).focus(); }
   host.on($('btnDpSecretCancel'), 'click', () => $('dpSecretModal').close());
   host.on($('dpSecretForm'), 'submit', async (e) => {
     e.preventDefault();
-    try { await http(`/deploy/secrets/${encodeURIComponent($('dsName').value.trim())}`, { method: 'PUT', body: JSON.stringify({ value: $('dsValue').value }) }); $('dpSecretModal').close(); toast('Secret stored', 'success'); await loadDeploy(); if ($('dpTargetModal').open) { dpRefreshSecretSelects($('dsName').value.trim(), tfState.secretFor, dp.editingTarget); tfState.secretFor = null; dpTargetSync(); } if ($('dpRepoModal').open) dpOpenRepoModal(dp.editingRepo); }
+    try { const stored = $('dsName').value.trim(); await http(`/deploy/secrets/${encodeURIComponent(stored)}`, { method: 'PUT', body: JSON.stringify({ value: $('dsValue').value }) }); $('dpSecretModal').close(); toast('Secret stored', 'success'); await loadDeploy(); if (wz.wpSecretPending) { $('fwWpVault').value = stored; wz.wpSecretPending = false; } if ($('dpTargetModal').open) { dpRefreshSecretSelects(stored, tfState.secretFor, dp.editingTarget); tfState.secretFor = null; dpTargetSync(); } if ($('dpRepoModal').open) dpOpenRepoModal(dp.editingRepo); }
     catch (err) { toast(err.message, 'error'); }
   });
 
@@ -1693,7 +1747,7 @@ export function createDeploymentsUI({ host, mount }) {
     if (e.key === 'Escape' && dpOpen() && !document.querySelector('dialog[open]')) { if (!$('dpAddMenu').hidden) $('dpAddMenu').hidden = true; else closeDeploy(); }
   });
   hostOn($('btnManageDeploy'), 'click', () => { $('settingsModal').close(); openDeploy(); });
-  hostOn($('setDpAi'), 'change', () => { try { localStorage.setItem('st-deploy-ai', $('setDpAi').checked ? '1' : '0'); } catch {} });
+  hostOn($('setDpAi'), 'change', () => { try { AppPreferences.setItem('st-deploy-ai', $('setDpAi').checked ? '1' : '0'); } catch {} });
   async function renderDeploySettings() {
     try {
       const st = await http('/deploy/status');

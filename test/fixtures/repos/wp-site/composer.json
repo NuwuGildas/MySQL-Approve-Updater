@@ -1,0 +1,5 @@
+{
+  "name": "acme/site",
+  "require": { "php": ">=8.2", "wpackagist-plugin/classic-editor": "^1.6" },
+  "extra": { "installer-paths": { "wp-content/plugins/{$name}/": ["type:wordpress-plugin"] } }
+}

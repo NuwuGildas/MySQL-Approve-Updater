@@ -80,6 +80,8 @@ class Run extends EventEmitter {
 }
 
 function createEngine(ctx, deps) {
+  const fs = ctx.storage?.fs || require('fs');
+  const fsp = ctx.storage?.promises || require('fs/promises');
   const { stores, vault, redact } = deps;
   const runs = new Map();          // id → Run (live + recently finished)
   const targetLocks = new Map();   // targetId → runId
@@ -102,7 +104,9 @@ function createEngine(ctx, deps) {
 
   function attachRun(run) {
     const logFile = path.join(stores.runsDir, `${run.id}.log`);
-    const ws = fs.createWriteStream(logFile, { flags: 'a' });
+    const ws = ctx.storage?.mode === 'mysql'
+      ? { write: (chunk) => fs.appendFileSync(logFile, chunk), end() {} }
+      : fs.createWriteStream(logFile, { flags: 'a' });
     let batch = [], timer = null;
     const flush = () => { if (batch.length) { emit('log', { runId: run.id, lines: batch }); batch = []; } timer = null; };
     run.on('log', (e) => {

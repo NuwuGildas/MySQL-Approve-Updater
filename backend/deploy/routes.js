@@ -16,6 +16,7 @@ const { probeTool } = require('./exec');
 const { isRef, refName, NAME_RE } = require('./vault');
 const frameworks = require('./frameworks');
 const { requireProject } = require('./projects');
+const wpStarter = require('./wp-starter');
 
 function maskRepo(r) {
   const s = { ...r.source };
@@ -378,6 +379,7 @@ function createRouter({ ctx, engine, stores, vault, redact, agentApi, autoShip, 
       if (m.runtime.kind === 'docker') { out['nginx (reverse proxy to the container)'] = templates.nginxNode({ domain, port: m.runtime.port || 8080 }); out['docker notes'] = `# The release dir is the compose project dir; "current" always points at the running one.
 # Containers are (re)created by: docker compose up -d --remove-orphans   (run in ${L.current})
 # Give the deploy user docker access:  sudo usermod -aG docker ${user}`; }
+      if (m.stack.framework === 'wordpress') out['WordPress'] = templates.wordpressNotes({ shared: L.shared, current: L.current, domain, configFromVault: m.stack.wordpress?.configFromVault || null });
       out['sudoers (reload only)'] = templates.sudoers({ user, phpVersion: m.stack.php });
       out['first-time server prep'] = `sudo mkdir -p ${L.root} && sudo chown -R ${user}:${user} ${L.root}\n# create ${L.shared}/.env with your production settings before the first ship`;
     } else if (norm.type === 'local') {
@@ -397,6 +399,31 @@ ${m.runtime.kind === 'node' || m.runtime.kind === 'python' ? `# Start command (r
       out['notes'] = `Symlink strategy: ${norm.paths.docroot} -> ${L.current}${docroot ? '/' + docroot : ''}\nIf your host forbids symlinked docroots use the .htaccess strategy, or FTP in-place mode.`;
     }
     res.json({ layout: L, templates: out });
+  }));
+
+  /* ---- starting a WordPress project with nothing to start from ----
+     Writes a real project into an empty folder (theme, ship.json, .gitignore, git init) and
+     connects it as a local repository. Everything after this is the ordinary path. */
+  r.post('/wordpress/new', wrap(async (req, res) => {
+    const b = req.body || {};
+    if (b.configFromVault && !NAME_RE.test(String(b.configFromVault))) throw httpError(400, 'configFromVault must be an UPPER_SNAKE_CASE vault name');
+    let created;
+    try {
+      created = await wpStarter.createProject({
+        dir: b.dir, name: b.name, themeSlug: b.themeSlug,
+        version: b.version || 'latest', configFromVault: b.configFromVault || null,
+        git: b.git !== false,
+      });
+    } catch (e) { throw httpError(e.status || 400, e.message); }
+    // connected the way any other local folder is, so nothing downstream knows it was generated
+    let repo = null;
+    if (b.connect !== false) {
+      repo = sanitizeRepo({ name: created.name, source: { kind: 'local', path: created.path } }, ctx, vault, null);
+      stores.repos.get().repos.push(repo);
+      await stores.repos.save();
+    }
+    audit({ action: 'deploy-wordpress-new', path: created.path, name: created.name, theme: created.themeSlug, version: b.version || 'latest', files: created.files.length, git: created.git, repo: repo?.id || null });
+    res.status(201).json({ ...created, repo: repo ? maskRepo(repo) : null });
   }));
 
   /* ---- framework catalog + detection on a local folder (wizard) ---- */

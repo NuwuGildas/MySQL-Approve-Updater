@@ -444,3 +444,8 @@ body.shell #deployDrawer.open { display: flex; }
 @media (max-width: 767px) {body.shell #deployDrawer { margin-left: 0; }
 }.dp-log, .dp-code { font-family: ui-monospace, Consolas, "Cascadia Mono", monospace; }
 
+
+/* "New WordPress project": the one wizard step that writes to disk before Finish, so its button
+   stands on its own line with room for what it wrote underneath. */
+.wz-newwp-foot { display: flex; align-items: center; gap: .7rem; flex-wrap: wrap; margin-top: .6rem; }
+.wz-newwp-foot .hint { margin: 0; flex: 1 1 16rem; min-width: 0; overflow-wrap: anywhere; }

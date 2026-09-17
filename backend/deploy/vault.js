@@ -23,7 +23,8 @@ function parseKey(s) {
   throw new VaultError('DEPLOY_MASTER_KEY must be 32 bytes as 64 hex chars or base64', 500);
 }
 
-function createVault(DATA_DIR, env = process.env) {
+function createVault(DATA_DIR, env = process.env, storage) {
+  const fs = storage?.fs || require('fs');
   const file = path.join(DATA_DIR, 'deploy-secrets.enc');
   const keyFile = path.join(DATA_DIR, 'deploy-master.key');
   let key, keySource;

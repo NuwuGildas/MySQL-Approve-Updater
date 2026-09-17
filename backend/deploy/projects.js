@@ -18,6 +18,7 @@ function requireProject(stores, id) {
  * Back up each changed file once; never rewrite an unreadable project store.
  */
 function migrateDeploymentProjects(stores, log = () => {}) {
+  const fs = stores.storage?.fs || require('fs');
   const projects = stores.projects;
   const fallback = projects.get('general') || projects.list()[0];
   if (projects.readOnly || !fallback) return;

@@ -135,4 +135,35 @@ function sudoers({ user, phpVersion }) {
 ${user || 'deploy'} ALL=(root) NOPASSWD: /bin/systemctl reload nginx, /bin/systemctl reload apache2, /bin/systemctl reload php${phpVersion || '8.3'}-fpm, /bin/systemctl restart ${user || 'deploy'}-*.service, /usr/bin/systemctl reload nginx, /usr/bin/systemctl reload php${phpVersion || '8.3'}-fpm, /usr/bin/tee /etc/nginx/sites-available/*, /usr/bin/ln -sfn /etc/nginx/sites-available/* /etc/nginx/sites-enabled/*, /usr/sbin/nginx -t, /usr/bin/certbot *`;
 }
 
-module.exports = { nginxPhp, nginxNode, nginxStatic, apachePhp, systemdNode, pm2Ecosystem, htaccessRewrite, maintenanceHtml, htaccessMaintenance, sudoers };
+/* What is left to do by hand on a WordPress target: create the database, and run the install
+   once. Everything else - core, wp-config.php, the uploads link - the deploy does. */
+function wordpressNotes({ shared, domain, configFromVault }) {
+  const vaultName = configFromVault || '(none yet: name one as stack.wordpress.configFromVault)';
+  return `# 1. The database. A deploy never creates, migrates or touches one.
+#    mysql -e "CREATE DATABASE wp CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+#    mysql -e "CREATE USER 'wp'@'localhost' IDENTIFIED BY 'a-strong-password';"
+#    mysql -e "GRANT ALL ON wp.* TO 'wp'@'localhost'; FLUSH PRIVILEGES;"
+
+# 2. Its settings, in the vault as ${vaultName}. wp-config.php is generated from these
+#    on every deploy, with salts kept in the vault so nobody is signed out by a ship.
+#    WORDPRESS_DB_NAME=wp
+#    WORDPRESS_DB_USER=wp
+#    WORDPRESS_DB_PASSWORD=a-strong-password
+#    WORDPRESS_DB_HOST=localhost
+
+# 3. Ship, then finish the famous five-minute install once, in the browser:
+#    http://${domain || 'example.com'}/wp-admin/install.php
+
+# Media uploads are shared storage: they live outside the releases and survive every deploy.
+#    ${shared}/wp-content/uploads     (linked into each release)
+# Make it writable by the web server, once:
+#    sudo chown -R www-data ${shared}/wp-content/uploads
+
+# Installing plugins and themes from wp-admin is switched off: they would be written into the
+# release directory, which the next deploy replaces, so they would silently disappear. Commit them
+# to the repository instead - or set WORDPRESS_ALLOW_FILE_MODS=true in the vault entry if you would
+# rather have the admin screens and accept losing what they install on the next ship.
+# Core updates come from the deploy as well: bump stack.wordpress.version and ship.`;
+}
+
+module.exports = { nginxPhp, nginxNode, nginxStatic, apachePhp, systemdNode, pm2Ecosystem, htaccessRewrite, maintenanceHtml, htaccessMaintenance, sudoers, wordpressNotes };

@@ -40,6 +40,7 @@ async function runPipeline({ ctx, run, target: rawTarget, repo, stores, vault, r
   let conn = null;
   let L = null, probe = null, manifest = null, stack = null, appDir = null, repoDir = null, ts = null, buildWhere = null, strategy = null;
   let releaseCreated = false, activated = false, inPlaceResult = null;
+  let overlay = null; // what stack.prepare() assembled for the release to be laid over
   const stageTimer = { t: 0 };
   const stage = (name) => { stageTimer.t = Date.now(); run.setStage(name); checkCancel(); };
   const fail = (name, e) => { const err = e instanceof StageError ? e : new StageError(name, e.message || String(e), EXIT[name] || 1); err.cause = e; return err; };
@@ -126,7 +127,14 @@ async function runPipeline({ ctx, run, target: rawTarget, repo, stores, vault, r
     } catch (e) { throw fail('detect', e); }
 
     /* ---------------- platform (PaaS) targets take a short path ---------------- */
-    if (adapter.capabilities.paas) { await doPaasFlow(); return; }
+    if (adapter.capabilities.paas) {
+      /* That path hands the checkout to the platform and never assembles a release here, so a stack
+         that only exists once assembled would ship as a bare repository - a wp-content folder with
+         no WordPress around it - and look like it worked. Say so instead. */
+      if (stack.prepare) throw fail('plan', new Error(`${stack.label} releases are assembled before they ship (core is downloaded and your repository laid over it), which a platform target does not do: deploy it to a server, shared hosting or this computer instead`));
+      await doPaasFlow();
+      return;
+    }
 
     /* ---------------- plan ---------------- */
     stage('plan');
@@ -143,6 +151,11 @@ async function runPipeline({ ctx, run, target: rawTarget, repo, stores, vault, r
         if (missing.length) throw new Error(`the server lacks ${missing.join(', ')} needed to build and run this ${stack.label} app`);
         if (wanted === 'local') warn(`${stack.label} apps are always built on the server`);
         buildWhere = 'remote';
+      } else if (stack.localOnly) {
+        // the stack assembles part of the release here (it downloads it, generates it) and ships the
+        // result, so that the same artifact lands on a VPS, on FTP-only hosting and on this computer
+        buildWhere = 'local';
+        if (wanted === 'remote') warn(`${stack.label} releases are assembled on this machine and shipped whole`);
       } else if (adapter.capabilities.remoteBuild === false) { buildWhere = 'local'; if (wanted === 'remote') warn(`${adapter.label} builds on this machine`); }
       else if (!conn.canExec || target.type === 'shared-hosting') { buildWhere = 'local'; if (wanted === 'remote') warn('shared hosting always builds locally'); }
       else if (wanted === 'remote') { if (missing.length) throw new Error(`remote build requested but the server lacks: ${missing.join(', ')}`); buildWhere = 'remote'; }
@@ -166,6 +179,7 @@ async function runPipeline({ ctx, run, target: rawTarget, repo, stores, vault, r
       const relDir = L.release(ts);
       const buildCwd = buildWhere === 'local' ? appDir : relDir;
       if (buildWhere === 'remote') add('build', 'remote', L.releases, `upload source archive → ${L.releaseSrcTgz(ts)} and extract into ${relDir}`, 'upload source');
+      if (stack.prepare && buildWhere === 'local') for (const s of (stack.planSteps ? stack.planSteps(manifest) : [`assemble the ${stack.label} release`])) add('build', 'local', appDir, s, 'scaffold');
       for (const h of hooksFor(manifest, 'before_build', buildWhere, buildWhere)) add('build', buildWhere, buildCwd, h, 'hook before_build');
       for (const s of manifest.build.steps) add('build', buildWhere, buildCwd, s, 'build');
       for (const h of hooksFor(manifest, 'after_build', buildWhere, buildWhere)) add('build', buildWhere, buildCwd, h, 'hook after_build');
@@ -258,6 +272,21 @@ async function runPipeline({ ctx, run, target: rawTarget, repo, stores, vault, r
         await remoteCmds(hooksFor(manifest, 'after_build', 'remote', buildWhere), L.release(ts), cacheEnv);
         await localCmds([...hooksFor(manifest, 'before_build', 'local', buildWhere), ...hooksFor(manifest, 'after_build', 'local', buildWhere)], appDir);
       } else {
+        /* A stack that assembles part of the release itself does it first, so build steps and
+           before_build hooks see the finished tree. It writes into the build directory, never into
+           the checkout: a repo source of kind "local" IS the user's working folder. */
+        if (stack.prepare) {
+          const buildDir = path.join(stores.workDir, repo.id, '.build', run.id);
+          await fsp.mkdir(buildDir, { recursive: true });
+          run.setProgress({ label: `assembling the ${stack.label} release`, done: 0, total: null });
+          overlay = await stack.prepare({
+            manifest, appDir, buildDir, cacheDir: path.join(stores.workDir, '_cache'), target, repo, vault,
+            log: sys, warn, signal: run.signal,
+            fetchImpl: ctx.fetch || globalThis.fetch, // injectable so a check never reaches the network
+          });
+          run.setProgress(null);
+          if (overlay?.notes?.length) sys(`assembled: ${overlay.notes.join(', ')}`);
+        }
         await localCmds(hooksFor(manifest, 'before_build', 'local', buildWhere), appDir);
         await localCmds(manifest.build.steps, appDir);
         await localCmds(hooksFor(manifest, 'after_build', 'local', buildWhere), appDir);
@@ -274,8 +303,8 @@ async function runPipeline({ ctx, run, target: rawTarget, repo, stores, vault, r
         const srcForArtifact = manifest.build.outputDir ? path.join(appDir, manifest.build.outputDir) : appDir;
         if (!fs.existsSync(srcForArtifact)) throw new Error(`build output "${manifest.build.outputDir}" was not produced`);
         run.setProgress({ label: 'selecting and copying files', done: 0, total: null, unit: 'files' });
-        const st = await artifact.stage(srcForArtifact, stageDir, manifest, { repoDir: appDir, commit: run.commit, shortCommit: run.shortCommit, branch: run.branch, ts, runId: run.id }, { onLine: (l) => (l.startsWith('WARN ') ? warn(l.slice(5)) : sys(l)), onProgress: (i, n, b) => run.setProgress({ label: `copying files (${artifact.fmtBytes(b)})`, done: i, total: n, unit: 'files' }) });
-        sys(`staged ${st.files} file(s), ${artifact.fmtBytes(st.bytes)}`);
+        const st = await artifact.stage(srcForArtifact, stageDir, manifest, { repoDir: appDir, commit: run.commit, shortCommit: run.shortCommit, branch: run.branch, ts, runId: run.id, base: overlay?.notes?.join(', ') || null }, { onLine: (l) => (l.startsWith('WARN ') ? warn(l.slice(5)) : sys(l)), onProgress: (i, n, b) => run.setProgress({ label: `copying files (${artifact.fmtBytes(b)})`, done: i, total: n, unit: 'files' }), baseDir: overlay?.baseDir || null, intoDir: overlay?.intoDir || '' });
+        sys(`staged ${st.files} file(s)${st.base ? ` (${st.base} from the base layer)` : ''}, ${artifact.fmtBytes(st.bytes)}`);
         if (conn.canExec) {
           tgz = path.join(buildDir, `release-${ts}.tgz`);
           let lastLogged = 0;
@@ -318,7 +347,17 @@ async function runPipeline({ ctx, run, target: rawTarget, repo, stores, vault, r
         await run.remoteCmds(hooksFor(manifest, 'after_ship', 'remote', buildWhere), L.release(ts));
       } else {
         // in-place (no shell)
-        const swap = await adapter.canSwap(conn, target);
+        let swap = await adapter.canSwap(conn, target);
+        /* Shared storage lives INSIDE the docroot when there is no shell to link it out of the way -
+           wp-content/uploads, storage/, an .env. Swapping the docroot for a freshly uploaded one
+           leaves all of it behind in the -old- copy: the files are not destroyed, but the live site
+           loses them, which for a media library is the same thing. Ship over the existing tree
+           instead; uploads are excluded from the artifact, so they are simply not touched. */
+        const persists = [...manifest.shared.dirs, ...manifest.shared.files];
+        if (swap && persists.length) {
+          swap = false;
+          warn(`${persists.join(', ')} must survive a deploy and there is no shell to link them out of the docroot: shipping over the existing files rather than swapping the directory, so they are kept. The trade is a moment of downtime behind a maintenance page, and no -old- copy to roll back to.`);
+        }
         const prevManifest = (() => null)();
         inPlaceResult = await adapter.shipInPlace(conn, target, ts, stageDir, { onLine: sys, warn, swap, previousManifest: prevManifest, onProgress: (d, t, b, f) => { if (d % 25 === 0 || d === t) sys(`  ${d}/${t} files (${artifact.fmtBytes(b)}) ${f}`); } });
         run.previousRelease = inPlaceResult.previous;

@@ -442,6 +442,7 @@
         <button type="button" class="on" data-v="git"><b>Git repository</b><span>GitHub, GitLab, Bitbucket or any git URL</span></button>
         <button type="button" data-v="local"><b>Local folder</b><span>A checkout on this machine</span></button>
         <button type="button" data-v="existing"><b>Connected repository</b><span>Reuse one already in the list</span></button>
+        <button type="button" data-v="new-wp"><b>New WordPress project</b><span>No repository yet: start one from scratch</span></button>
       </div>
       <div data-wz="git">
         <label for="wzUrl">Repository URL</label><input id="wzUrl" placeholder="https://github.com/acme/shop.git">
@@ -451,6 +452,18 @@
       </div>
       <div data-wz="local" hidden><label for="wzPath">Folder path</label><input id="wzPath" placeholder="C:\dev\shop"></div>
       <div data-wz="existing" hidden><label for="wzRepo">Repository</label><select id="wzRepo"></select></div>
+      <!-- Nothing to connect yet: write a project into an empty folder, then carry on as a local one. -->
+      <div data-wz="new-wp" hidden>
+        <p class="hint" style="margin:.2rem 0 .6rem">A theme you can edit, a place for plugins, a <code>ship.json</code> and a <code>.gitignore</code> — written into an empty folder and connected as a repository. WordPress itself is downloaded at build time, never committed.</p>
+        <div class="row">
+          <div><label for="wzNewDir">New folder <span class="hint">(must be empty)</span></label><input id="wzNewDir" placeholder="C:\dev\acme-site"></div>
+          <div><label for="wzNewTheme">Theme folder <span class="hint">(empty = from the name)</span></label><input id="wzNewTheme" placeholder="acme-theme"></div>
+        </div>
+        <div class="wz-newwp-foot">
+          <button type="button" id="btnWzNewWp" class="primary">Create the project</button>
+          <span class="hint" id="wzNewWpHint">Nothing is written until you press this.</span>
+        </div>
+      </div>
       <label for="wzRepoName">Name <span class="hint">(how it appears in the sidebar)</span></label><input id="wzRepoName" placeholder="shop">
     </section>
     <section class="wz-step" data-step="2">
@@ -476,6 +489,24 @@
           <div><label for="fwOut">Output directory <span class="hint">(static builds)</span></label><input id="fwOut" placeholder="dist"></div>
           <div><label for="fwDocroot">Web root inside the release <span class="hint">(PHP: public)</span></label><input id="fwDocroot" placeholder="."></div>
           <div><label for="fwHealth">Health path</label><input id="fwHealth" placeholder="/"></div>
+        </div>
+        <!-- WordPress is assembled rather than built: core is downloaded here and the repository is
+             laid over it, so it needs a few settings the other frameworks do not. -->
+        <div id="fwWp" hidden>
+          <div class="fw-cfg-head" style="margin-top:.5rem"><b>WordPress</b><span class="hint">core is downloaded and shipped with each release; your repository is laid over it</span></div>
+          <div class="row">
+            <div><label for="fwWpVersion">Core version <span class="hint">(pin one so a redeploy ships the same core)</span></label><input id="fwWpVersion" placeholder="latest"></div>
+            <div><label for="fwWpContent">Your repository is <span class="hint">(where wp-content lives)</span></label>
+              <select id="fwWpContent">
+                <option value="wp-content">a project holding wp-content/</option>
+                <option value=".">wp-content itself (themes/, plugins/)</option>
+              </select>
+            </div>
+          </div>
+          <div class="row">
+            <div><label for="fwWpVault">Database settings from secret <span class="hint">(WORDPRESS_DB_NAME, _USER, _PASSWORD)</span></label><div class="tf-inline"><input id="fwWpVault" placeholder="WP_DB_ACME" pattern="[A-Z][A-Z0-9_]{0,63}"><button type="button" class="tf-mini" data-act="wp-secret" title="Store the database settings in the vault">+ Secret</button></div></div>
+          </div>
+          <p class="hint" id="fwWpHint">wp-config.php is generated from that secret, with salts kept in the vault so a deploy does not sign everyone out. Commit your own wp-config.php and it is used instead. The database is never touched: finish the install in the browser once.</p>
         </div>
       </div>
     </section>

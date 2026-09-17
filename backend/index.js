@@ -41,6 +41,7 @@ async function activate(host) {
   const { Client: SSHClient } = host.shared('ssh2');
 
   const app = express();
+  if (host.storage) app.use(host.storage.middleware);
   app.use(express.json({ limit: '2mb' }));
 
   /* ---- what the engine calls a connection store ----
@@ -105,6 +106,7 @@ async function activate(host) {
   });
 
   const ctx = {
+    storage: host.storage,
     app, DATA_DIR: host.appDataDir, ROOT: host.codeDir, IS_PACKAGED: !!process.env.MODULE_IS_PACKAGED,
     httpError, wrap,
     audit: (entry) => { host.audit(entry).catch(() => {}); },
@@ -178,4 +180,4 @@ async function activate(host) {
   };
 }
 
-module.exports = { activate };
+module.exports = { activate, storageVersion: 1 };
