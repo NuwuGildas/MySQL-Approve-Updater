@@ -1,6 +1,9 @@
 <aside id="auditDrawer" aria-label="Activity history" inert>
   <div class="audit-head">
-    <h2 style="margin:0;font-size:.85rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)">History <span class="sec-hint" id="auditCount"></span></h2>
+    <div class="audit-title">
+      <h2>History</h2>
+      <p class="sec-hint" id="auditCount" aria-live="polite"></p>
+    </div>
     <span class="spacer"></span>
     <button id="btnAuditResume" class="aireview glossy" title="Open the AI chat and continue the conversation">Resume AI chat</button>
     <button id="btnAuditRefresh" title="Reload">Refresh</button>
@@ -8,12 +11,42 @@
     <button id="btnAuditDock" class="btn-dock" title="Drawer orientation: vertical (right) or horizontal (bottom); applies to all drawers">Vertical</button>
     <button id="btnAuditClose" title="Close (Esc)">✕</button>
   </div>
+
   <div class="audit-filters">
     <input id="auditSearch" type="search" placeholder="Search events…" aria-label="Search history" autocomplete="off">
     <select id="auditTime" aria-label="Time range"><option value="all">All time</option><option value="today">Last 24 hours</option><option value="7d">Last 7 days</option><option value="30d">Last 30 days</option></select>
     <select id="auditOutcome" aria-label="Outcome"><option value="all">Any outcome</option><option value="succeeded">Succeeded / approved</option><option value="failed">Failed / rejected</option></select>
+    <div class="flt-more">
+      <button id="btnAuditMore" type="button" aria-expanded="false" aria-haspopup="true" title="Filter by who acted and by exact event type">More filters</button>
+      <div id="auditMorePanel" class="flt-panel" role="group" aria-label="More filters" hidden>
+        <label for="auditActor">Started by</label>
+        <select id="auditActor"><option value="all">Anyone</option><option value="you">You</option><option value="ai">The assistant</option><option value="system">The system</option></select>
+        <label for="auditAction">Event type</label>
+        <select id="auditAction" aria-describedby="auditActionHint"><option value="all">Every type</option></select>
+        <p id="auditActionHint" class="flt-hint">Every type recorded in the trail, with how many of each are loaded.</p>
+      </div>
+    </div>
     <button id="btnAuditClear" type="button" hidden>Clear filters</button>
   </div>
-  <div id="auditChips"></div>
-  <div id="auditBody"></div>
+
+  <div id="auditChips" role="group" aria-label="Event categories"></div>
+  <div id="auditBody" tabindex="-1"></div>
+
+  <dialog id="auditDetail" class="ev-detail" aria-labelledby="auditDetailTitle">
+    <div class="ev-detail-head">
+      <div>
+        <div class="ev-detail-meta" id="auditDetailMeta"></div>
+        <h3 id="auditDetailTitle"></h3>
+      </div>
+      <span class="spacer"></span>
+      <button id="btnAuditDetailClose" class="iconbtn" type="button" title="Close (Esc)">✕</button>
+    </div>
+    <div id="auditDetailBody"></div>
+    <div class="modal-foot">
+      <button id="btnAuditDetailCopy" type="button">Copy JSON</button>
+      <button id="btnAuditDetailChat" type="button" hidden>Open the assistant</button>
+      <span class="spacer"></span>
+      <button id="btnAuditDetailDone" type="button" class="primary">Done</button>
+    </div>
+  </dialog>
 </aside>

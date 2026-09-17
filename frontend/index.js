@@ -52,7 +52,7 @@ export async function activate(host) {
 
   host.registerTourStep({
     id: 'history', order: 40, element: '#auditDrawer .audit-filters', route: '#/history', title: 'History',
-    intro: 'Every decision, edit, session, deploy run and AI action, grouped by day. Filter by category chips, search text, time range and outcome; the filters are remembered between visits. The raw JSON-lines file downloads from the header.',
+    intro: 'Every decision, edit, session, deploy run and AI action, newest first, grouped by day. One card per event says what happened, to what and how it went; opening a card shows the recorded fields, the rest of the same run or conversation, and the raw line. Narrow by category, search, time range and outcome, or by who acted and the exact event type behind "More filters" - all of it remembered between visits. The raw JSON-lines file downloads from the header.',
   });
 
   host.registerSearchSource({

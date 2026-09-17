@@ -10,14 +10,15 @@ publisher signature and activates it in place.
 | | |
 |---|---|
 | Module id | `history` |
-| Version | 1.0.0 |
-| Host SDK | `^1.0.0` |
+| Version | 1.2.0 |
+| Host SDK | `^1.1.0` |
 | Branch | `modules/history` |
 
 ## What it may do
 
 - `ui:pages`
 - `ui:commands`
+- `assistant:tools`
 - `audit:read`
 - `events:subscribe`
 - `storage:module`

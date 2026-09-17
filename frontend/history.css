@@ -1,5 +1,7 @@
 /* history: styles moved out of the base application's style.css.
    Scoped to this module's own views; removing the module removes them. */
+
+/* ---------------------------------------------------------------- the drawer itself */
 #auditDrawer:not(.open) { visibility: hidden; transition: transform .25s ease, visibility 0s linear .25s; }
 body:not(.drawers-ready) #auditDrawer { transition: none !important; }
 body.drawers-h #auditDrawer {
@@ -20,43 +22,140 @@ body.drawers-h #auditDrawer.open { transform: translateY(0); }
   transform: translateX(103%); transition: transform .25s ease;
 }
 #auditDrawer.open { transform: translateX(0); }
-.audit-head { display: flex; align-items: center; gap: .5rem; margin-bottom: .5rem; flex: none; flex-wrap: nowrap; }
+
+/* The base stylesheet gives every button display:flex, and a display rule beats the [hidden]
+   attribute - so a button this view hides stays on screen, and the filter panel opens itself.
+   One rule, at the edge of the view, rather than a guard at each of the five places. */
+#auditDrawer [hidden] { display: none !important; }
+
+/* ---------------------------------------------------------------- header */
+.audit-head { display: flex; align-items: flex-start; gap: .5rem; margin-bottom: .55rem; flex: none; flex-wrap: wrap; }
 .audit-head button { padding: .2rem .55rem; font-size: .75rem; }
+.audit-title { min-width: 0; }
+.audit-title h2 { margin: 0; font-size: .85rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.audit-title #auditCount { margin: .1rem 0 0; font-size: .74rem; color: var(--muted); }
+
+/* ---------------------------------------------------------------- filters */
+.audit-filters { display: flex; gap: .4rem; flex-wrap: wrap; align-items: center; margin: .2rem 0 .5rem; flex: none; }
+.audit-filters input[type=search] { flex: 1 1 180px; min-width: 0; }
+.audit-filters select { flex: 0 1 170px; width: auto; }
+.flt-more { position: relative; }
+#btnAuditMore.on { border-color: var(--accent); color: var(--accent); }
+.flt-panel {
+  position: absolute; top: calc(100% + .35rem); right: 0; z-index: 5;
+  width: min(280px, 80vw); display: flex; flex-direction: column; gap: .25rem;
+  background: var(--panel2); border: 1px solid var(--border); border-radius: 10px;
+  padding: .6rem .7rem; box-shadow: 0 10px 28px rgba(0, 0, 0, .45);
+}
+.flt-panel label { font-size: .68rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+/* flex-basis in a column is a HEIGHT: without this the two selects grow into boxes. */
+.flt-panel select { width: 100%; flex: none; }
+.flt-panel .flt-hint { margin: .25rem 0 0; font-size: .68rem; color: var(--muted); line-height: 1.4; }
+
 #auditChips { display: flex; gap: .35rem; flex-wrap: wrap; margin-bottom: .5rem; flex: none; }
 .chip-btn { padding: .18rem .6rem; font-size: .74rem; border: 1px solid var(--border); border-radius: 99px; background: var(--panel2); color: var(--muted); cursor: pointer; }
 .chip-btn.on { color: #fff; background: #1c3a5e; border-color: #2d5f9e; }
-.chip-btn .chip-n { opacity: .6; font-size: .68rem; }
+.chip-btn .chip-n { opacity: .6; font-size: .68rem; margin-left: .3rem; }
+
+/* ---------------------------------------------------------------- the feed */
 #auditBody { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding-right: .2rem; }
-.tl-day { position: sticky; top: 0; background: var(--panel); color: var(--muted); font-size: .66rem; text-transform: uppercase; letter-spacing: .08em; padding: .35rem .1rem .25rem; z-index: 1; }
-.tl-item { display: flex; gap: .55rem; align-items: flex-start; padding: .4rem .2rem; border-bottom: 1px solid rgba(255,255,255,.04); }
-.tl-ic { flex: none; width: 22px; height: 22px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: .72rem; background: var(--panel2); border: 1px solid var(--border); color: var(--muted); }
-.tl-ic.approve { color: var(--green); border-color: #2f5d43; }
-.tl-ic.rules { color: var(--amber); border-color: #7a5c17; }
-.tl-ic.ai { color: var(--accent); border-color: #2d5f9e; }
-.tl-ic.ssh { color: var(--accent); border-color: #2d5f9e; font-family: ui-monospace, Consolas, monospace; }
-.tl-body { flex: 1; min-width: 0; }
-.tl-desc { font-size: .82rem; overflow-wrap: anywhere; }
-.tl-desc b { color: var(--text); }
-.tl-time { flex: none; color: #55677a; font-size: .68rem; font-family: ui-monospace, Consolas, monospace; margin-top: .1rem; }
-.tl-raw { margin-top: .15rem; }
-.tl-raw summary { cursor: pointer; color: var(--muted); font-size: .68rem; }
-.tl-raw pre { margin: .2rem 0 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted); font-size: .68rem; background: var(--code-bg, #0b0f13); border: 1px solid var(--border); border-radius: 6px; padding: .4rem; max-height: 220px; overflow: auto; }
-.tl-chat { margin: .35rem 0; max-width: 88%; cursor: pointer; }
-.tl-chat.me { margin-left: auto; }
-.tl-chat .tl-who { font-size: .62rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: .12rem; }
-.tl-chat .tl-bubble { font-size: .82rem; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; padding: .4rem .55rem; }
-.tl-chat.me .tl-bubble { background: #1c3a5e; border-color: #2d5f9e; }
-.tl-chat:hover .tl-bubble { border-color: var(--accent); }
-.tl-tools { font-size: .64rem; color: var(--muted); margin-top: .15rem; font-family: ui-monospace, Consolas, monospace; }
-.audit-filters { display: flex; gap: .4rem; flex-wrap: wrap; align-items: center; margin: .2rem 0 .5rem; }
-.audit-filters input[type=search] { flex: 1 1 180px; min-width: 0; }
-.audit-filters select { flex: 0 1 170px; width: auto; }
-.tl-ic.deploy { color: var(--green); border-color: #2f5d43; }
+#auditBody:focus { outline: none; }
+.tl-day {
+  position: sticky; top: 0; z-index: 2; margin: .6rem 0 .3rem;
+  background: var(--panel); color: var(--muted);
+  font-size: .66rem; font-weight: 600; text-transform: uppercase; letter-spacing: .08em;
+  padding: .35rem .1rem .3rem; border-bottom: 1px solid var(--border);
+}
+.tl-day:first-child { margin-top: 0; }
+
+/* One event. A button, because the whole card opens its details. */
+.ev {
+  /* The base stylesheet centres every button; a card is read from its left edge. */
+  display: flex; flex-direction: column; align-items: stretch; justify-content: flex-start;
+  gap: .22rem; width: 100%;
+  margin: 0 0 .3rem; padding: .5rem .65rem .5rem .8rem;
+  text-align: left; font: inherit; cursor: pointer;
+  background: var(--panel2); color: var(--text);
+  border: 1px solid var(--border); border-left: 3px solid var(--border); border-radius: 9px;
+}
+.ev:hover { border-color: var(--accent); border-left-color: var(--accent); }
+.ev:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* The rail is the category, read before anything else on the card. */
+.ev-ai, .ev-ssh { border-left-color: var(--accent); }
+.ev-approvals, .ev-deploy { border-left-color: var(--green); }
+.ev-rules { border-left-color: var(--amber); }
+.ev-sql { border-left-color: var(--purple); }
+.ev-bad { border-left-color: var(--red); }
+
+.ev-top { display: flex; align-items: center; gap: .35rem; flex-wrap: wrap; }
+.ev-top .spacer { flex: 1; }
+.ev-type {
+  font-size: .64rem; font-weight: 600; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--text); background: rgba(255, 255, 255, .06);
+  border: 1px solid var(--border); border-radius: 5px; padding: .06rem .35rem;
+}
+.ev-actor { font-size: .64rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.ev-actor-ai { color: var(--accent); }
+.ev-status { font-size: .64rem; text-transform: uppercase; letter-spacing: .05em; }
+.ev-status::before { content: "● "; font-size: .7em; vertical-align: .1em; }
+.ev-success { color: var(--green); }
+.ev-failed { color: var(--red); }
+.ev-warn { color: var(--amber); }
+.ev-pending { color: var(--accent); }
+.ev-time { flex: none; color: #55677a; font-size: .68rem; font-family: ui-monospace, Consolas, monospace; }
+
+.ev-title { font-size: .84rem; line-height: 1.35; overflow-wrap: anywhere; }
+.ev-subject {
+  font-size: .76rem; color: var(--muted); line-height: 1.4;
+  overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+/* The host keeps the fact of a message, not its words. Saying so beats a blank card. */
+.ev-redacted { font-size: .68rem; color: var(--muted); font-style: italic; }
+
+.ev-facts { display: flex; flex-wrap: wrap; gap: .25rem .5rem; margin-top: .1rem; }
+.ev-fact { font-size: .68rem; color: var(--text); font-family: ui-monospace, Consolas, monospace; }
+.ev-fact i { font-style: normal; color: var(--muted); margin-right: .25rem; }
+
+.tl-sentinel { display: flex; flex-direction: column; align-items: center; gap: .35rem; padding: .9rem 0 1.4rem; }
+.tl-more { padding: .3rem .9rem; font-size: .76rem; }
+.tl-note { font-size: .68rem; color: var(--muted); text-align: center; }
+
+/* ---------------------------------------------------------------- the details view */
+.ev-detail { width: min(620px, 94vw); }
+.ev-detail-head { display: flex; align-items: flex-start; gap: .5rem; margin-bottom: .6rem; }
+.ev-detail-head h3 { margin: .2rem 0 0; font-size: .95rem; overflow-wrap: anywhere; }
+.ev-detail-meta { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
+.ev-detail-meta time { font-size: .68rem; color: var(--muted); font-family: ui-monospace, Consolas, monospace; }
+.ev-detail-subject { margin: 0 0 .6rem; font-size: .82rem; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
+.ev-detail-facts { display: grid; grid-template-columns: max-content 1fr; gap: .2rem .8rem; margin: 0 0 .7rem; font-size: .78rem; }
+.ev-detail-facts dt { color: var(--muted); }
+.ev-detail-facts dd { margin: 0; overflow-wrap: anywhere; font-family: ui-monospace, Consolas, monospace; }
+.ev-detail-kin { margin-bottom: .7rem; }
+.ev-detail-kin h4 { margin: 0 0 .3rem; font-size: .68rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.ev-kin {
+  display: flex; align-items: center; gap: .5rem; width: 100%; text-align: left;
+  padding: .3rem .45rem; margin-bottom: .2rem; font: inherit; font-size: .76rem;
+  background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 7px; cursor: pointer;
+}
+.ev-kin:hover { border-color: var(--accent); }
+.ev-kin > span:nth-child(2) { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+
+.tl-raw summary { cursor: pointer; color: var(--muted); font-size: .72rem; }
+.tl-raw pre { margin: .35rem 0 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted); font-size: .7rem; background: var(--code-bg, #0b0f13); border: 1px solid var(--border); border-radius: 6px; padding: .5rem; max-height: 260px; overflow: auto; }
+
+/* ---------------------------------------------------------------- light theme */
 :root[data-theme="light"] .chip-btn.on { background: #dfeafb; border-color: #1e6fd9; color: #123f80; }
-:root[data-theme="light"] .tl-ic.approve { border-color: #9ad2b0; }
-:root[data-theme="light"] .tl-ic.rules { border-color: #e2c48c; }
-:root[data-theme="light"] .tl-ic.ai, :root[data-theme="light"] .tl-ic.ssh { border-color: #9dc0f0; }
-:root[data-theme="light"] .tl-ic.deploy { border-color: #9ad2b0; }
+:root[data-theme="light"] .ev-type { background: rgba(0, 0, 0, .04); }
+:root[data-theme="light"] .ev-time { color: #6b7c8e; }
+
+/* ---------------------------------------------------------------- narrow screens */
+@media (max-width: 520px) {
+  .audit-head button { font-size: .72rem; }
+  .audit-filters select { flex: 1 1 140px; }
+  .flt-panel { right: auto; left: 0; }
+  .ev-detail-facts { grid-template-columns: 1fr; gap: 0 0; }
+  .ev-detail-facts dt { margin-top: .35rem; }
+}
 
 /* history: styles moved out of the base application's layout.css.
    Scoped to this module's own views; removing the module removes them. */
@@ -71,5 +170,6 @@ body.shell #auditDrawer.open { display: flex; }
 body.shell #auditDrawer { padding: .9rem clamp(1rem, 2.5vw, 1.6rem); }
 body.shell #auditDrawer .btn-dock, body.shell #btnAuditClose { display: none; }
 
-@media (max-width: 767px) {body.shell #auditDrawer { margin-left: 0; }
+@media (max-width: 767px) {
+  body.shell #auditDrawer { margin-left: 0; }
 }

@@ -56,4 +56,4 @@ async function activate(host) {
   };
 }
 
-module.exports = { activate };
+module.exports = { activate, storageVersion: 1 };

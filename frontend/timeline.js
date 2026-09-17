@@ -1,138 +1,260 @@
-/* The timeline itself: categories, one-line descriptions, filters and rendering.
-   Moved out of the base application's navigation.js and history client, which
-   is why the filter persistence and the day grouping look familiar. */
+/* The activity feed: one column, newest first, one card per recorded event.
+ *
+ * It used to be two lanes - your messages on the right, the assistant's on the left, everything
+ * else in a thin line between them - which read well for a conversation and badly for everything
+ * else, and most of the trail is everything else. So: a single chronological column, each event a
+ * card that answers "what happened, to what, how did it go" at a glance, with the identifiers and
+ * the raw line moved into a details view for when that glance is not enough.
+ *
+ * What an event MEANS lives in ./events.mjs and is tested on its own. This file is the view: what
+ * is on screen, what is filtered out, and how much of it is drawn at once.
+ */
 'use strict';
 
-const CAT_META = {
-  ai: { label: 'AI', icon: '🤖', cls: 'ai' },
-  approvals: { label: 'Approvals', icon: '✓', cls: 'approve' },
-  rules: { label: 'Rules', icon: '▤', cls: 'rules' },
-  ssh: { label: 'SSH', icon: '›_', cls: 'ssh' },
-  deploy: { label: 'Ascension', icon: '⇧', cls: 'deploy' },
-  other: { label: 'Other', icon: '•', cls: 'other' },
-};
+import {
+  CATEGORIES, CATEGORY, EMPTY_FILTERS, classify, describePlain as plain,
+  dayLabel, hhmm, isFiltering, matches, typeLabel,
+} from './events.mjs';
 
-function auditCategory(a) {
-  if (!a) return 'other';
-  if (a === 'ai-chat' || a === 'ai-chat-cancelled') return 'ai';
-  if (a === 'approve') return 'approvals';
-  if (a.startsWith('ssh')) return 'ssh';
-  if (a.startsWith('deploy') || a.startsWith('agent-deploy') || a.startsWith('connector')) return 'deploy';
-  return 'rules';
-}
+/** Cards drawn per pass. The trail runs to thousands of entries and they are not all worth drawing. */
+const CHUNK = 60;
+/** How far the reader can ask the host to go back. The backend clamps at 2000 either way. */
+const DEPTHS = [500, 1000, 2000];
 
-function dayLabel(iso) {
-  if (!iso) return 'Earlier';
-  const day = iso.slice(0, 10);
-  const today = new Date().toISOString().slice(0, 10);
-  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-  if (day === today) return 'Today';
-  if (day === yesterday) return 'Yesterday';
-  return day;
-}
-const hhmm = (iso) => (iso || '').slice(11, 16);
+const STATUS_TEXT = { success: 'Succeeded', failed: 'Failed', warn: 'Warning', pending: 'Running' };
+const ACTOR_TEXT = { you: 'You', ai: 'Assistant', system: 'System' };
 
 export function createTimeline({ host, $, esc }) {
   let entries = [];
+  let actions = [];
+  let depth = 0;                 // index into DEPTHS
+  let reachedEnd = false;        // asking for more stopped bringing more
   let category = 'all';
-  let filters = host.storage.get('filters', { q: '', time: 'all', outcome: 'all' });
+  let filters = { ...EMPTY_FILTERS, ...(host.storage.get('filters', null) || {}) };
+  let rows = [];                 // {entry, i, c} that survived every filter
+  let shown = 0;
+  let lastDay = null;
+  let sentinelObserver = null;
   let pending = 0;
+  let searchTimer = 0;
 
-  /* ---- one-line human description per entry ---- */
-  function describe(e) {
-    const action = e.action;
-    const table = e.table ? ` on <b>${esc(e.table)}</b>` : '';
-    const rule = e.rule ? ` "${esc(e.rule)}"` : '';
-    switch (action) {
-      case 'ai-chat': return null; // rendered as a chat bubble instead
-      case 'ai-chat-cancelled': return 'AI reply stopped by the user' + (e.tools?.length ? ' after ' + esc(e.tools.join(', ')) : '');
-      case 'preview': return `Previewed${rule}${table}: ${e.matchedRows} matched, ${e.proposedChanges} would change`;
-      case 'approve': return `Approved a change${table}${e.pk !== undefined ? ` (id ${esc(String(e.pk))})` : ''}`;
-      case 'reject': return `Rejected a change${table}${e.pk !== undefined ? ` (id ${esc(String(e.pk))})` : ''}`;
-      case 'skip': return `Skipped a change${table}${e.pk !== undefined ? ` (id ${esc(String(e.pk))})` : ''}`;
-      case 'edit': return `Hand-edited a proposed value${table}${e.column ? ` · ${esc(e.column)}` : ''}`;
-      case 'abort': return `Aborted the session${rule}: ${e.discardedPending ?? 0} discarded`;
-      case 'clear': return `Cleared the preview${rule}: ${e.discardedPending ?? 0} discarded`;
-      case 'agent-rule-approved': return `Approved the AI's rule proposal${rule}`;
-      case 'agent-rule-rejected': return `Rejected the AI's rule proposal${rule}`;
-      case 'project-create': return `Created project <b>${esc(e.project || '')}</b>`;
-      case 'project-update': return `Updated project <b>${esc(e.project || '')}</b>`;
-      case 'project-delete': return `Deleted project <b>${esc(e.project || '')}</b> (its resources were kept)`;
-      case 'project-link': return `Added a ${esc(e.kind || 'resource')} to project <b>${esc(e.project || '')}</b>`;
-      case 'project-unlink': return `Removed a ${esc(e.kind || 'resource')} from project <b>${esc(e.project || '')}</b>`;
-      case 'ssh-session-connect': return `Connected SSH: ${esc(e.sshUser || '')}@${esc(e.sshHost || '')}`;
-      case 'ssh-session-cleanup': return `Cleaned up ${esc(e.sshHost || '')} (${esc((e.cleaned || []).join(', '))})`;
-      case 'ssh-terminal-open': return `Opened a terminal on ${esc(e.sshHost || '')}`;
-      case 'ai-ssh-attach': return `The assistant joined a terminal on <b>${esc(e.profile || '')}</b>`;
-      case 'ai-ssh-proposed': return `The assistant proposed a ${esc(e.class || '')} command: <code>${esc(String(e.cmd || '').slice(0, 120))}</code>`;
-      case 'ai-ssh-exec': return `Approved command ran (exit ${esc(String(e.exitCode))}): <code>${esc(String(e.cmd || '').slice(0, 120))}</code>`;
-      case 'connector-add': return `Connector <b>${esc(e.connector || '')}</b> (${esc(e.kind || '')}) added${e.status === 'ok' ? ' and verified' : ': verification failed'}`;
-      case 'connector-update': return `Connector <b>${esc(e.connector || '')}</b> updated${e.status === 'ok' ? ' and verified' : ''}`;
-      case 'connector-verify': return `Connector <b>${esc(e.connector || '')}</b> verified: ${esc(e.status || '')}`;
-      case 'connector-remove': return `Connector <b>${esc(e.connector || '')}</b> removed`;
-      case 'deploy-plan': return `Planned a deploy of <b>${esc(e.target || '')}</b>${e.ref ? ` (${esc(e.ref)})` : ''}`;
-      case 'deploy-ship-start': return `Started shipping <b>${esc(e.target || '')}</b>${e.trigger ? ` via ${esc(e.trigger)}` : ''}`;
-      case 'deploy-ship-success': return `Shipped <b>${esc(e.target || '')}</b> release ${esc(e.release || '')}${e.commit ? ` @ ${esc(String(e.commit).slice(0, 8))}` : ''}${e.ms ? ` in ${Math.round(e.ms / 1000)}s` : ''}`;
-      case 'deploy-ship-failed': return `Deploy of <b>${esc(e.target || '')}</b> failed at ${esc(e.stage || '?')}${e.error ? ` — ${esc(e.error)}` : ''}`;
-      case 'deploy-ship-rolled-back': return `Deploy of <b>${esc(e.target || '')}</b> failed at ${esc(e.stage || '?')} and was rolled back to ${esc(e.previousRelease || 'the previous release')}`;
-      case 'deploy-rollback-start': return `Started a rollback of <b>${esc(e.target || '')}</b>`;
-      case 'deploy-rollback': return `Rolled <b>${esc(e.target || '')}</b> back to ${esc(e.release || '')}`;
-      case 'deploy-cancel': return `Cancelled a deploy of <b>${esc(e.target || '')}</b>${e.stage ? ` during ${esc(e.stage)}` : ''}`;
-      case 'deploy-force-unlock': return `Force-unlocked <b>${esc(e.target || '')}</b>`;
-      case 'deploy-repo-add': return `Connected repo <b>${esc(e.repo || '')}</b> (${esc(e.kind || '')})`;
-      case 'deploy-repo-update': return `Updated repo <b>${esc(e.repo || '')}</b>`;
-      case 'deploy-repo-remove': return `Removed repo <b>${esc(e.repo || '')}</b>`;
-      case 'deploy-target-add': return `Added deploy target <b>${esc(e.target || '')}</b> (${esc(e.type || '')})`;
-      case 'deploy-target-update': return `Updated deploy target <b>${esc(e.target || '')}</b>`;
-      case 'deploy-target-remove': return `Removed deploy target <b>${esc(e.target || '')}</b>`;
-      case 'deploy-manifest-save': return `Saved the deploy manifest of <b>${esc(e.repo || '')}</b>${e.by === 'agent-proposal' ? ' (AI proposal approved)' : ''}`;
-      case 'deploy-secret-set': return `Stored secret <b>${esc(e.name || '')}</b> in the vault`;
-      case 'deploy-secret-remove': return `Removed secret <b>${esc(e.name || '')}</b> from the vault`;
-      case 'deploy-webhook': return `Webhook push started a ship of <b>${esc(e.target || '')}</b>${e.ref ? ` (${esc(e.ref)})` : ''}`;
-      case 'deploy-webhook-rejected': return `Rejected a webhook call for <b>${esc(e.target || '')}</b> — ${esc(e.reason || '')}${e.ip ? ` from ${esc(e.ip)}` : ''}`;
-      case 'deploy-cloud-provision': return `Provisioning <b>${esc(e.name || '')}</b> on ${esc(e.provider || '')} (${esc(e.region || '')} · ${esc(e.size || '')})`;
-      case 'deploy-cloud-ready': return `Cloud server <b>${esc(e.name || '')}</b> is ready at ${esc(e.ip || '')}`;
-      case 'deploy-cloud-failed': return `Provisioning of <b>${esc(e.name || '')}</b> failed: ${esc(e.error || '')}`;
-      case 'deploy-cloud-destroy': return `Destroyed cloud server <b>${esc(e.name || '')}</b> (${esc(e.provider || '')})`;
-      default: return `${esc(action || 'event')}${rule}${table}`;
+  const describePlain = (entry) => plain(entry);
+
+  /* ------------------------------------------------------------ one card */
+
+  function card({ entry, i, c }) {
+    const status = STATUS_TEXT[c.status] || '';
+    const facts = c.facts.slice(0, 4).map((f) => `<span class="ev-fact"><i>${esc(f.label)}</i>${esc(f.value)}</span>`).join('');
+    /* An action nobody described is titled after itself, and the badge already says that. Saying it
+       twice on one card is how the old view filled space. */
+    const title = c.title === c.type ? '' : `<span class="ev-title">${esc(c.title)}</span>`;
+    const subject = c.subject ? `<span class="${title ? 'ev-subject' : 'ev-title'}">${esc(c.subject)}</span>` : '';
+    /* The label is what a screen reader reads instead of the layout: the same few things, in the
+       order they are looked for. */
+    const label = esc([...new Set([c.type, ACTOR_TEXT[c.actor], status, c.title, c.subject, hhmm(c.ts)])].filter(Boolean).join(', '));
+    return `<button type="button" class="ev ev-${esc(c.cat)}${c.status === 'failed' ? ' ev-bad' : ''}" data-i="${i}" aria-label="${label}">
+      <span class="ev-top">
+        <span class="ev-type">${esc(c.type)}</span>
+        <span class="ev-actor ev-actor-${esc(c.actor)}">${esc(ACTOR_TEXT[c.actor])}</span>
+        ${status ? `<span class="ev-status ev-${esc(c.status)}">${esc(status)}</span>` : ''}
+        <span class="spacer"></span>
+        <time class="ev-time" datetime="${esc(c.ts)}">${esc(hhmm(c.ts))}</time>
+      </span>
+      ${title}
+      ${subject}
+      ${facts ? `<span class="ev-facts">${facts}</span>` : ''}
+      ${c.redacted ? `<span class="ev-redacted">${esc(c.redacted)}</span>` : ''}
+    </button>`;
+  }
+
+  /* ------------------------------------------------------------ drawing */
+
+  /** Draw the next CHUNK cards. Day headings are emitted as the day changes, across chunks. */
+  function appendChunk() {
+    const body = $('auditBody');
+    const sentinel = body.querySelector('.tl-sentinel');
+    const next = rows.slice(shown, shown + CHUNK);
+    if (!next.length) { finishFeed(); return; }
+    let html = '';
+    for (const row of next) {
+      const day = dayLabel(row.c.ts);
+      if (day && day !== lastDay) { html += `<h3 class="tl-day">${esc(day)}</h3>`; lastDay = day; }
+      html += card(row);
+    }
+    shown += next.length;
+    sentinel.insertAdjacentHTML('beforebegin', html);
+    if (shown >= rows.length) finishFeed();
+  }
+
+  /** What sits at the bottom once every filtered row is on screen. */
+  function finishFeed() {
+    stopWatchingSentinel();
+    const sentinel = $('auditBody').querySelector('.tl-sentinel');
+    if (!sentinel) return;
+    const deeper = DEPTHS[depth + 1];
+    if (deeper && !reachedEnd) {
+      sentinel.innerHTML = `<button type="button" class="tl-more" data-deeper>Load older events</button>
+        <span class="tl-note">${rows.length.toLocaleString()} shown from the last ${DEPTHS[depth].toLocaleString()} recorded</span>`;
+      sentinel.querySelector('[data-deeper]').addEventListener('click', () => { depth += 1; load(); });
+    } else {
+      sentinel.innerHTML = `<span class="tl-note">That is everything recorded${DEPTHS[depth] < 2000 ? '' : ' within the last 2,000 events'}.</span>`;
     }
   }
-  const describePlain = (entry) => (describe(entry) || `AI chat · ${String(entry.text || '').slice(0, 60)}`).replace(/<[^>]+>/g, '');
 
-  /* ---- filters ---- */
-  function outcome(e) {
-    const text = `${e.action || ''} ${e.status || ''} ${e.decision || ''} ${e.verdict || ''}`.toLowerCase();
-    if (/fail|reject|rolled|error|cancel|block/.test(text)) return 'failed';
-    if (/success|approv|succeeded|done|saved|added|ready/.test(text)) return 'succeeded';
-    return 'other';
+  function stopWatchingSentinel() {
+    if (sentinelObserver) sentinelObserver.disconnect();
   }
-  function passes(e) {
-    if (filters.time !== 'all') {
-      const age = Date.now() - Date.parse(e.ts || 0);
-      const max = filters.time === 'today' ? 86400e3 : filters.time === '7d' ? 7 * 86400e3 : 30 * 86400e3;
-      if (!(age <= max)) return false;
+
+  /** Draw more as the reader gets near the bottom, so the length of the feed costs nothing up front.
+      One observer for the life of the view: a new one per render would pile up in the host. */
+  function watchSentinel() {
+    stopWatchingSentinel();
+    const sentinel = $('auditBody').querySelector('.tl-sentinel');
+    if (!sentinel || shown >= rows.length) { finishFeed(); return; }
+    if (!sentinelObserver) {
+      sentinelObserver = new IntersectionObserver(
+        (hits) => { if (hits.some((h) => h.isIntersecting)) appendChunk(); },
+        { root: $('auditBody'), rootMargin: '600px' },
+      );
+      host.observe(sentinelObserver);
     }
-    if (filters.outcome !== 'all' && outcome(e) !== filters.outcome) return false;
-    if (filters.q && !JSON.stringify(e).toLowerCase().includes(filters.q.toLowerCase())) return false;
-    return true;
+    sentinelObserver.observe(sentinel);
   }
+
+  /* ------------------------------------------------------------ chips and counts */
+
+  function countCategories(filtered) {
+    const counts = { all: filtered.length };
+    for (const row of filtered) counts[row.c.cat] = (counts[row.c.cat] || 0) + 1;
+    return counts;
+  }
+
+  function renderChips(counts) {
+    const shownCats = ['all', ...CATEGORIES.map((c) => c.id).filter((id) => counts[id])];
+    $('auditChips').innerHTML = shownCats.map((id) => {
+      const on = category === id;
+      return `<button class="chip-btn${on ? ' on' : ''}" data-cat="${esc(id)}" aria-pressed="${on}">${esc(id === 'all' ? 'All' : CATEGORY[id].label)} <span class="chip-n">${counts[id] || 0}</span></button>`;
+    }).join('');
+    $('auditChips').querySelectorAll('[data-cat]').forEach((b) => b.addEventListener('click', () => {
+      /* Clicking the chip you are already on takes the narrowing off again. */
+      category = category === b.dataset.cat ? 'all' : b.dataset.cat;
+      render();
+    }));
+  }
+
+  /** The event-type list, built from what the host says is in the trail rather than from a hardcoded list. */
+  function syncActionOptions() {
+    const select = $('auditAction');
+    const counts = new Map();
+    for (const e of entries) counts.set(e.action, (counts.get(e.action) || 0) + 1);
+    const options = ['<option value="all">Every type</option>'].concat(
+      actions.map((a) => `<option value="${esc(a)}">${esc(typeLabel(a))} (${counts.get(a) || 0})</option>`),
+    );
+    select.innerHTML = options.join('');
+    /* A type that is no longer in the loaded window would otherwise filter everything away silently. */
+    if (filters.action !== 'all' && !actions.includes(filters.action)) filters.action = 'all';
+    select.value = filters.action;
+  }
+
+  /* ------------------------------------------------------------ the details view */
+
+  function related(entry) {
+    const c = classify(entry);
+    if (!c.relation) return [];
+    const { key, value } = c.relation;
+    return entries.filter((e) => e !== entry && String(e[key] || '') === value).slice(0, 12);
+  }
+
+  function openDetail(i) {
+    const entry = entries[i];
+    if (!entry) return;
+    const c = classify(entry);
+    const dialog = $('auditDetail');
+    const when = String(c.ts || '').replace('T', ' ').replace(/\.\d+Z?$/, '').replace(/Z$/, '');
+    $('auditDetailMeta').innerHTML = [
+      `<span class="ev-type">${esc(c.type)}</span>`,
+      `<span class="ev-actor ev-actor-${esc(c.actor)}">${esc(ACTOR_TEXT[c.actor])}</span>`,
+      STATUS_TEXT[c.status] ? `<span class="ev-status ev-${esc(c.status)}">${esc(STATUS_TEXT[c.status])}</span>` : '',
+      `<time datetime="${esc(c.ts)}">${esc(when)}</time>`,
+    ].filter(Boolean).join('');
+    $('auditDetailTitle').textContent = c.title;
+
+    const kin = related(entry);
+    const sections = [];
+    if (c.subject) sections.push(`<p class="ev-detail-subject">${esc(c.subject)}</p>`);
+    if (c.redacted) sections.push(`<p class="ev-redacted">${esc(c.redacted)}</p>`);
+    if (c.facts.length) {
+      sections.push(`<dl class="ev-detail-facts">${c.facts.map((f) => `<dt>${esc(f.label)}</dt><dd>${esc(f.value)}</dd>`).join('')}</dl>`);
+    }
+    if (kin.length) {
+      sections.push(`<section class="ev-detail-kin"><h4>Also part of ${esc(c.relation.label)}</h4>
+        ${kin.map((e) => {
+          const k = classify(e);
+          return `<button type="button" class="ev-kin" data-i="${entries.indexOf(e)}">
+            <span class="ev-time">${esc(hhmm(k.ts))}</span><span>${esc(k.title)}</span>
+            ${STATUS_TEXT[k.status] ? `<span class="ev-status ev-${esc(k.status)}">${esc(STATUS_TEXT[k.status])}</span>` : ''}</button>`;
+        }).join('')}</section>`);
+    }
+    sections.push(`<details class="tl-raw"><summary>The recorded line</summary><pre>${esc(rawJson(entry))}</pre></details>`);
+    $('auditDetailBody').innerHTML = sections.join('');
+    $('auditDetailBody').querySelectorAll('.ev-kin').forEach((b) => b.addEventListener('click', () => openDetail(Number(b.dataset.i))));
+
+    /* The one action an event can carry: a chat turn can be picked back up. */
+    $('btnAuditDetailChat').hidden = c.cat !== 'ai';
+    dialog.__entry = entry;
+    if (!dialog.open) dialog.showModal();
+  }
+
+  const rawJson = (entry) => JSON.stringify(entry, (k, v) => (k === '_n' ? undefined : v), 2);
+
+  /* ------------------------------------------------------------ filters */
+
   const persist = () => host.storage.set('filters', filters);
   function syncFilterUi() {
     $('auditSearch').value = filters.q;
     $('auditTime').value = filters.time;
     $('auditOutcome').value = filters.outcome;
+    $('auditActor').value = filters.actor;
+    if ($('auditAction').options.length) $('auditAction').value = filters.action;
   }
-  function clearFilters() { filters = { q: '', time: 'all', outcome: 'all' }; syncFilterUi(); persist(); render(); }
+  function clearFilters() {
+    filters = { ...EMPTY_FILTERS };
+    category = 'all';
+    syncFilterUi();
+    persist();
+    render();
+  }
+  /** The "More filters" button says how many of the filters behind it are doing something. */
+  function syncMoreButton() {
+    const extra = (filters.actor !== 'all' ? 1 : 0) + (filters.action !== 'all' ? 1 : 0);
+    const button = $('btnAuditMore');
+    button.textContent = extra ? `More filters (${extra})` : 'More filters';
+    button.classList.toggle('on', !!extra);
+  }
+  function toggleMore(open) {
+    const panel = $('auditMorePanel');
+    const next = open === undefined ? panel.hidden : open;
+    panel.hidden = !next;
+    $('btnAuditMore').setAttribute('aria-expanded', String(next));
+    if (next) $('auditActor').focus();
+  }
 
-  /* ---- loading ---- */
+  /* ------------------------------------------------------------ loading */
+
   async function load() {
-    $('auditBody').innerHTML = '<div class="empty" style="padding:1rem">Loading…</div>';
+    const body = $('auditBody');
+    body.innerHTML = '<div class="empty" style="padding:1rem">Loading…</div>';
     try {
-      const data = await host.get('list', { limit: 500 });
+      const data = await host.get('list', { limit: DEPTHS[depth] });
+      const before = entries.length;
       entries = data.entries || [];
+      actions = data.actions || [];
+      /* Asking for twice as much and getting the same amount means the trail ends here. */
+      if (depth > 0 && entries.length <= before) reachedEnd = true;
+      syncActionOptions();
       render();
     } catch (error) {
-      $('auditBody').innerHTML = `<div class="empty" style="padding:1rem;color:var(--red)">${esc(error.message)}</div>`;
+      body.innerHTML = `<div class="empty" style="padding:1rem;color:var(--red)">${esc(error.message)}</div>`;
     }
   }
   function loadSoon() {
@@ -140,73 +262,77 @@ export function createTimeline({ host, $, esc }) {
     pending = host.setTimeout(() => load().catch(() => {}), 600);
   }
 
-  /* ---- rendering ---- */
-  function renderChips(rows) {
-    const counts = { all: rows.length };
-    for (const entry of rows) { const c = auditCategory(entry.action); counts[c] = (counts[c] || 0) + 1; }
-    const cats = ['all', 'ai', 'approvals', 'rules', 'ssh', 'deploy'].filter((c) => c === 'all' || counts[c]);
-    $('auditChips').innerHTML = cats.map((c) =>
-      `<button class="chip-btn ${category === c ? 'on' : ''}" data-cat="${c}">${esc(c === 'all' ? 'All' : CAT_META[c].label)} <span class="chip-n">${counts[c] || 0}</span></button>`).join('');
-    $('auditChips').querySelectorAll('[data-cat]').forEach((b) => b.addEventListener('click', () => { category = b.dataset.cat; render(); }));
-  }
+  /* ------------------------------------------------------------ render */
 
   function render() {
-    const filtered = entries.filter(passes);
-    renderChips(filtered);
-    const rows = filtered.filter((e) => category === 'all' || auditCategory(e.action) === category);
-    $('auditCount').textContent = `— ${rows.length}${category !== 'all' ? ' ' + CAT_META[category].label.toLowerCase() : ''}`;
-    $('btnAuditResume').style.display = entries.some((e) => e.action === 'ai-chat') ? '' : 'none';
-    const filtering = filters.q || filters.time !== 'all' || filters.outcome !== 'all';
-    $('btnAuditClear').hidden = !filtering;
+    const filtered = [];
+    entries.forEach((entry, i) => { if (matches(entry, filters)) filtered.push({ entry, i, c: classify(entry) }); });
+    const counts = countCategories(filtered);
+    /* A category that nothing matches any more must not stay selected invisibly, showing an empty
+       feed with no visible reason for it. Decided before the chips are drawn, not after. */
+    if (category !== 'all' && !counts[category]) category = 'all';
+    renderChips(counts);
+    rows = filtered.filter((r) => category === 'all' || r.c.cat === category);
 
+    const filtering = isFiltering(filters) || category !== 'all';
+    $('btnAuditClear').hidden = !filtering;
+    syncMoreButton();
+    $('auditCount').textContent = filtering
+      ? `${rows.length.toLocaleString()} of ${entries.length.toLocaleString()} events`
+      : `${entries.length.toLocaleString()} events`;
+    $('btnAuditResume').hidden = !entries.some((e) => e.action === 'ai-chat');
+
+    stopWatchingSentinel();
+    shown = 0;
+    lastDay = null;
+    const body = $('auditBody');
     if (!rows.length) {
-      $('auditBody').innerHTML = filtering
+      body.innerHTML = filtering
         ? '<div class="empty" style="padding:1rem">No events match these filters. <button type="button" data-clear>Clear filters</button></div>'
-        : '<div class="empty" style="padding:1rem">Nothing here yet.</div>';
-      $('auditBody').querySelector('[data-clear]')?.addEventListener('click', clearFilters);
+        : '<div class="empty" style="padding:1rem">Nothing here yet. Everything this application does is recorded as it happens.</div>';
+      body.querySelector('[data-clear]')?.addEventListener('click', clearFilters);
       return;
     }
-
-    let html = '';
-    let lastDay = null;
-    for (const entry of rows) {
-      const day = dayLabel(entry.ts);
-      if (day !== lastDay) { html += `<div class="tl-day">${esc(day)}</div>`; lastDay = day; }
-      if (entry.action === 'ai-chat') {
-        const mine = entry.role === 'user';
-        const tools = entry.tools?.length ? `<div class="tl-tools">used: ${esc(entry.tools.join(', '))}</div>` : '';
-        html += `<div class="tl-chat ${mine ? 'me' : 'ai'}" data-resume="1">
-          <div class="tl-who">${mine ? 'You' : 'AI'} <span class="tl-time">${esc(hhmm(entry.ts))}</span></div>
-          <div class="tl-bubble">${esc(String(entry.text || ''))}</div>${tools}</div>`;
-        continue;
-      }
-      const meta = CAT_META[auditCategory(entry.action)] || CAT_META.other;
-      html += `<div class="tl-item">
-        <span class="tl-ic ${meta.cls}">${esc(meta.icon)}</span>
-        <div class="tl-body"><div class="tl-desc">${describe(entry)}</div>
-          <details class="tl-raw"><summary>details</summary><pre>${esc(JSON.stringify(entry, (k, v) => (k === '_n' ? undefined : v), 2))}</pre></details></div>
-        <span class="tl-time">${esc(hhmm(entry.ts))}</span>
-      </div>`;
-    }
-    $('auditBody').innerHTML = html;
-    $('auditBody').querySelectorAll('.tl-chat[data-resume]').forEach((el) => el.addEventListener('click', (event) => {
-      if (event.target.closest('summary')) return;
-      host.assistant.open(); // the history view stays open underneath
-    }));
+    body.innerHTML = '<div class="tl-sentinel"></div>';
+    appendChunk();
+    watchSentinel();
   }
 
-  /* ---- wiring, all of it disposable ---- */
+  /* ------------------------------------------------------------ wiring, all of it disposable */
+
   syncFilterUi();
-  let searchTimer = 0;
+  syncMoreButton();
+
+  host.on($('auditBody'), 'click', (event) => {
+    const button = event.target.closest('.ev');
+    if (button) openDetail(Number(button.dataset.i));
+  });
   host.on($('auditSearch'), 'input', () => {
     host.clearTimer(searchTimer);
     searchTimer = host.setTimeout(() => { filters.q = $('auditSearch').value.trim(); persist(); render(); }, 200);
   });
   host.on($('auditTime'), 'change', () => { filters.time = $('auditTime').value; persist(); render(); });
   host.on($('auditOutcome'), 'change', () => { filters.outcome = $('auditOutcome').value; persist(); render(); });
+  host.on($('auditActor'), 'change', () => { filters.actor = $('auditActor').value; persist(); render(); });
+  host.on($('auditAction'), 'change', () => { filters.action = $('auditAction').value; persist(); render(); });
+  host.on($('btnAuditMore'), 'click', () => toggleMore());
+  host.on(document, 'click', (event) => {
+    if (!$('auditMorePanel').hidden && !event.target.closest('.flt-more')) toggleMore(false);
+  });
   host.on($('btnAuditClear'), 'click', clearFilters);
   host.on($('btnAuditRefresh'), 'click', () => load());
   host.on($('btnAuditResume'), 'click', () => host.assistant.open());
+
+  host.on($('btnAuditDetailClose'), 'click', () => $('auditDetail').close());
+  host.on($('btnAuditDetailDone'), 'click', () => $('auditDetail').close());
+  host.on($('btnAuditDetailChat'), 'click', () => { $('auditDetail').close(); host.assistant.open(); });
+  host.on($('btnAuditDetailCopy'), 'click', async () => {
+    const entry = $('auditDetail').__entry;
+    if (!entry) return;
+    try { await navigator.clipboard.writeText(rawJson(entry)); host.ui.toast('The recorded line was copied', 'ok'); }
+    catch { host.ui.toast('The line could not be copied', 'error'); }
+  });
+
   host.on($('btnAuditDock'), 'click', () => host.ui.toggleDrawerOrientation());
   host.on($('btnAuditDownload'), 'click', async () => {
     try {
@@ -221,5 +347,11 @@ export function createTimeline({ host, $, esc }) {
     } catch (error) { host.ui.toast(error.message, 'error'); }
   });
 
-  return { load, loadSoon, render, describePlain, dispose() { entries = []; } };
+  return {
+    load,
+    loadSoon,
+    render,
+    describePlain,
+    dispose() { stopWatchingSentinel(); entries = []; actions = []; rows = []; },
+  };
 }
