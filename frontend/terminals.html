@@ -22,12 +22,21 @@
         <span class="ws-sep" aria-hidden="true">·</span>
         <label class="sr-only" for="wsSessionPick">Terminal session</label>
         <select id="wsSessionPick" class="ws-session-pick"></select>
-        <button type="button" id="btnWsClear">Clear</button>
-        <button type="button" id="btnWsNewSession">New session</button>
-        <button type="button" id="btnWsEndSession" class="danger">End session</button>
         <span class="ws-owner" id="wsOwner" data-owner="user"><span class="ws-owner-dot" aria-hidden="true"></span><span class="ws-owner-text"></span></span>
         <span class="spacer"></span>
+        <!-- Who is driving and the handover are the live decisions and stay on the bar.
+             Clear / New / End are session housekeeping: they sit in this menu so the bar
+             is one row on a laptop and still readable on a phone. The buttons keep their
+             ids, so their listeners are unchanged. -->
         <button type="button" id="btnWsControl" class="ws-control"></button>
+        <div class="ws-more">
+          <button type="button" id="btnWsMore" class="ws-more-btn" title="Session actions" aria-label="Session actions" aria-haspopup="menu" aria-expanded="false" aria-controls="wsMoreMenu"><svg viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><circle cx="5" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="19" cy="12" r="1.9"/></svg></button>
+          <div class="ws-more-menu" id="wsMoreMenu" role="menu" hidden>
+            <button type="button" role="menuitem" id="btnWsClear">Clear terminal</button>
+            <button type="button" role="menuitem" id="btnWsNewSession">New session</button>
+            <button type="button" role="menuitem" id="btnWsEndSession" class="danger">End session</button>
+          </div>
+        </div>
       </div>
       <div id="sshConsoleHost"></div>
       <!-- no console open: the view still explains itself and points at the servers page -->

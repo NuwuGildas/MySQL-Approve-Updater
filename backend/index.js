@@ -141,6 +141,24 @@ async function activate(host) {
     const saved = await host.call('connections.save', { ...req.body, sshOnly: true });
     res.json(saved);
   }));
+
+  /* Editing one. The host keeps the credentials and never hands them to the browser, so a field
+     left blank means "leave it alone" rather than "clear it" - the name, host, port and user are
+     replaced by what was submitted, and the password or key only when a new one is given.
+     A live connection is holding the OLD settings, so it is dropped: reconnecting picks up the new
+     ones. Terminals are left running, because a shell that is already open is the user's work. */
+  app.put('/profiles/:id', wrap(async (req, res) => {
+    const id = String(req.params.id);
+    const existing = await host.call('connections.get', { id });
+    if (!existing) throw fail(404, 'That server no longer exists.');
+    if (!existing.sshOnly) throw fail(409, 'That profile is a database connection; edit it under Connections.');
+    const saved = await host.call('connections.save', { ...req.body, id, sshOnly: true });
+    if (ssh.sessions.has(id)) { ssh.disconnect(id); }
+    profileCache.delete(id);
+    await host.audit({ action: 'ssh-server-edit', profileId: id, profile: saved.name });
+    res.json(saved);
+  }));
+
   app.delete('/profiles/:id', wrap(async (req, res) => {
     closeTerminalsFor(req.params.id);
     ssh.disconnect(req.params.id);
@@ -316,4 +334,4 @@ async function activate(host) {
   };
 }
 
-module.exports = { activate };
+module.exports = { activate, storageVersion: 1 };

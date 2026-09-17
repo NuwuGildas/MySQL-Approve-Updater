@@ -164,6 +164,12 @@ function createSshSessions({ host, SSHClient, log = () => {} }) {
       id: profile.id, name: profile.name,
       host: profile.ssh.host, port: profile.ssh.port, user: profile.ssh.user,
       active: !!profile.active, sshOnly: !!profile.sshOnly,
+      /* How we authenticate, and whether a credential is already stored - never the credential
+         itself. The edit form needs both: to open on the right choice, and to know that a blank
+         password field means "keep the one you have" rather than "there isn't one". */
+      authKind: profile.ssh.authKind || '',
+      passwordSet: !!profile.ssh.passwordSet || !!profile.ssh.password,
+      keySet: !!profile.ssh.privateKeyPath,
       connected: !!session, connectedAt: session?.connectedAt || null, meta: session?.meta || null,
     };
   };

@@ -9,6 +9,7 @@
   </div>
   <div class="hint" style="margin:.2rem 0 .5rem">Connect to any SSH-enabled connection profile independently of the active database, and see live VM stats.</div>
   <form id="addServerForm" hidden>
+    <p class="hint srv-form-note" id="asFormNote" hidden>Leave the password or key blank to keep the one already stored. The host never sends a stored credential back to the browser.</p>
     <input id="asName" required placeholder="Name (e.g. web-01)">
     <div class="row">
       <div style="flex:2"><label for="asHost">SSH host</label><input id="asHost" required placeholder="1.2.3.4 or host.example.com"></div>
@@ -39,6 +40,7 @@
     </div>
     <div class="auth-panel" id="asAuthPass" hidden>
       <label for="asPass">Password</label><input id="asPass" type="password" autocomplete="new-password">
+      <p class="hint" id="asPassKeep" hidden>A password is already stored for this server. Type a new one to replace it, or leave this blank to keep it.</p>
     </div>
     <label class="chk" style="margin-top:.6rem"><input type="checkbox" id="asBootstrapClaude"> Install a coding agent on this server</label>
     <select id="asBootstrapAgent" class="mono" style="margin:.3rem 0 0 1.5rem">
@@ -47,7 +49,7 @@
     </select>
     <p class="hint" style="margin:.1rem 0 0 1.5rem">It investigates the server for the assistant at full speed, and can change nothing: what it thinks should change comes back as approval cards. You sign in to it from the server's own terminal.</p>
     <div style="display:flex;gap:.5rem;margin-top:.6rem">
-      <button type="submit" class="primary">Save server</button>
+      <button type="submit" class="primary" id="btnAsSubmit">Save server</button>
       <button type="button" id="btnAddServerCancel">Cancel</button>
     </div>
   </form>

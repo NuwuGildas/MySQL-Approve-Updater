@@ -39,6 +39,20 @@ export function createServersUI({ host, mount, Terminal, FitAddon }) {
     } catch (e) { list.innerHTML = `<div class="empty" style="padding:1rem;color:var(--red)">${esc(e.message)}</div>`; }
   }
 
+  /* Managing the server itself - its name, where it is, how we authenticate to it - as opposed to
+     working on it. Both actions are on the card whether or not it is connected: a password that has
+     just been rotated has to be changeable without disconnecting first, and a server being removed
+     is usually one you can no longer reach. Only servers this module owns (sshOnly) are managed
+     here; a database profile that happens to have SSH belongs to Connections. */
+  const manageActions = (s) => (s.sshOnly
+    ? `<button data-act="edit" class="iconbtn" title="Edit ${esc(s.name)}: name, host, user and how we authenticate">${SRV_ICON.edit}</button>`
+      + `<button data-act="remove" class="iconbtn danger" title="Remove ${esc(s.name)}">${RULE_ICONS.trash}</button>`
+    : '');
+
+  const SRV_ICON = {
+    edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>',
+  };
+
   const meterClass = (pct) => (pct >= 90 ? 'bad' : pct >= 75 ? 'warn' : 'ok');
   function meter(label, pct, valueText) {
     const p = Math.max(0, Math.min(100, Math.round(pct)));
@@ -366,8 +380,8 @@ export function createServersUI({ host, mount, Terminal, FitAddon }) {
       ${body}
       <div class="srv-actions">
         ${s.connected
-          ? `<button data-act="refresh">Refresh</button><div class="term-dd"><button data-act="terminal-menu" class="primary">${live.length ? 'Resume' : 'Terminal'} <svg class="caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button><div class="term-dd-menu" hidden><button data-act="terminal">${live.length ? 'Resume terminal' : 'Terminal'}</button><button data-act="terminal-ai" class="aireview glossy" title="Open a terminal and work in it with the assistant">${AI_LOGO_REST}<span>${live.length ? 'Resume with AI' : 'Terminal + AI'}</span></button><button data-act="terminal-new">New terminal</button>${serverAgentMenu(s)}</div></div><span class="spacer"></span><button data-act="disconnect" class="warn">Disconnect</button>`
-          : `<button data-act="connect" class="primary">Connect</button><span class="spacer"></span>${s.sshOnly ? '<button data-act="remove" class="iconbtn danger" title="Remove this SSH server">' + RULE_ICONS.trash + '</button>' : ''}`}
+          ? `<button data-act="refresh">Refresh</button><div class="term-dd"><button data-act="terminal-menu" class="primary">${live.length ? 'Resume' : 'Terminal'} <svg class="caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button><div class="term-dd-menu" hidden><button data-act="terminal">${live.length ? 'Resume terminal' : 'Terminal'}</button><button data-act="terminal-ai" class="aireview glossy" title="Open a terminal and work in it with the assistant">${AI_LOGO_REST}<span>${live.length ? 'Resume with AI' : 'Terminal + AI'}</span></button><button data-act="terminal-new">New terminal</button>${serverAgentMenu(s)}</div></div><span class="spacer"></span><button data-act="disconnect" class="warn">Disconnect</button>${manageActions(s)}`
+          : `<button data-act="connect" class="primary">Connect</button><span class="spacer"></span>${manageActions(s)}`}
       </div>`;
     el.querySelector('[data-act="terminal-menu"]')?.setAttribute('aria-expanded', 'false');
     const closeTermMenu = () => { const m = el.querySelector('.term-dd-menu'); if (m) closeServerTermMenu(m); };
@@ -401,8 +415,17 @@ export function createServersUI({ host, mount, Terminal, FitAddon }) {
         return;
       }
       if (act === 'terminal-new') { closeTermMenu(); openSsh(s.id, { ai: true, newSession: true, label: s.name }); return; }
+      if (act === 'edit') { openServerForm(s); return; }
       if (act === 'remove') {
-        const ok = await confirm({ title: 'Remove SSH server', message: `Remove the SSH server <b>${esc(s.name)}</b>? Its stored credentials are deleted from connections.json.`, okLabel: 'Remove', okClass: 'reject' });
+        const live = liveTerminals.filter((t) => t.profileId === s.id).length;
+        const ok = await confirm({
+          title: 'Remove SSH server',
+          message: `Remove <b>${esc(s.name)}</b> (${esc(s.user)}@${esc(s.host)})? Its stored credentials are deleted from connections.json.`
+            + (s.connected ? ' The open connection is dropped.' : '')
+            + (live ? ` <b>${live} running terminal${live === 1 ? '' : 's'}</b> on it ${live === 1 ? 'is' : 'are'} ended.` : '')
+            + ' Nothing on the server itself is changed.',
+          okLabel: 'Remove', okClass: 'reject',
+        });
         if (!ok) return;
         try { await http(`/profiles/${s.id}`, { method: 'DELETE' }); await loadServers(); } catch (e) { toast(e.message); }
         return;
@@ -423,14 +446,54 @@ export function createServersUI({ host, mount, Terminal, FitAddon }) {
   }
 
   /* add SSH server (creates an ssh-only connection profile) */
-  host.on($('btnAddServer'), 'click', () => { $('addServerForm').hidden = false; $('asName').focus(); loadAppKey(); });
+  host.on($('btnAddServer'), 'click', () => openServerForm(null));
   /* authentication choice: app-managed key (default), pasted key, or password */
   let asAuth = 'app-key';
+  /* The same form adds and edits. Editing is not a different form: it is this one, filled in, with
+     the credential fields meaning "leave it alone" when they are left blank - the host never sends
+     a password or a key back to the browser, so they cannot be shown and must not be cleared. */
+  let editingServer = null;
+
+  /** Put the form into "add" or "edit" mode and show it. */
+  function openServerForm(server) {
+    editingServer = server || null;
+    const form = $('addServerForm');
+    form.hidden = false;
+    form.reset();
+    const heading = document.getElementById('serverFormHeading');
+    if (heading) heading.textContent = server ? `Edit ${server.name}` : 'Add server';
+    $('btnAsSubmit').textContent = server ? 'Save changes' : 'Save server';
+    $('asFormNote').hidden = !server;
+    $('asPassKeep').hidden = !(server && server.authKind === 'password');
+    // installing an agent is part of setting a server up, not of editing one
+    $('asBootstrapClaude').closest('label').hidden = !!server;
+    $('asBootstrapAgent').hidden = !!server;
+    $('asBootstrapAgent').nextElementSibling.hidden = !!server;
+    if (server) {
+      $('asName').value = server.name || '';
+      $('asHost').value = server.host || '';
+      $('asPort').value = server.port || 22;
+      $('asUser').value = server.user || '';
+      setAsAuth(server.authKind || 'app-key');
+    } else {
+      setAsAuth('app-key');
+    }
+    if (!server || (server.authKind || 'app-key') === 'app-key') loadAppKey();
+    $('asName').focus();
+  }
+  function closeServerForm() {
+    editingServer = null;
+    $('addServerForm').hidden = true;
+    $('addServerForm').reset();
+    setAsAuth('app-key');
+  }
+
   function setAsAuth(mode) {
     asAuth = mode;
     $('asAuthChoice').querySelectorAll('[data-auth]').forEach((b) => { const on = b.dataset.auth === mode; b.classList.toggle('on', on); b.setAttribute('aria-checked', String(on)); });
     $('asAuthApp').hidden = mode !== 'app-key'; $('asAuthOwn').hidden = mode !== 'own-key'; $('asAuthPass').hidden = mode !== 'password';
-    $('asPass').required = mode === 'password';
+    // on an edit the stored credential stands in for the field, so nothing here is required
+    $('asPass').required = mode === 'password' && !editingServer;
   }
   host.on($('asAuthChoice'), 'click', (e) => { const b = e.target.closest('[data-auth]'); if (b) setAsAuth(b.dataset.auth); });
   let appKeyInfo = null;
@@ -441,7 +504,7 @@ export function createServersUI({ host, mount, Terminal, FitAddon }) {
     return appKeyInfo;
   }
   host.on($('btnAsCopyKey'), 'click', async () => { if (!appKeyInfo) await loadAppKey(); try { await navigator.clipboard.writeText(appKeyInfo.installCmd); toast('Install command copied', 'success'); } catch { toast('Clipboard blocked: select the command and copy it', 'warning'); } });
-  host.on($('btnAddServerCancel'), 'click', () => { $('addServerForm').hidden = true; $('addServerForm').reset(); setAsAuth('app-key'); });
+  host.on($('btnAddServerCancel'), 'click', closeServerForm);
   host.on($('addServerForm'), 'submit', async (e) => {
     e.preventDefault();
     const body = {
@@ -456,13 +519,23 @@ export function createServersUI({ host, mount, Terminal, FitAddon }) {
         privateKeyPath: asAuth === 'own-key' ? $('asKey').value.trim() : '', passphrase: asAuth === 'own-key' ? $('asPhrase').value : '',
       },
     };
-    if (asAuth === 'own-key' && !body.ssh.privateKeyInline.trim() && !body.ssh.privateKeyPath) { toast('Paste a private key or give a key file path', 'warning'); $('asKeyInline').focus(); return; }
-    const bootstrap = $('asBootstrapClaude').checked;
+    const editing = editingServer;
+    /* On a new server a key has to come from somewhere. On an edit the stored one counts, unless
+       the user is switching to their own key from something else. */
+    const needsKey = asAuth === 'own-key' && !body.ssh.privateKeyInline.trim() && !body.ssh.privateKeyPath
+      && !(editing && editing.authKind === 'own-key');
+    if (needsKey) { toast('Paste a private key or give a key file path', 'warning'); $('asKeyInline').focus(); return; }
+    if (asAuth === 'password' && !$('asPass').value && !(editing && editing.authKind === 'password')) {
+      toast('Enter the SSH password', 'warning'); $('asPass').focus(); return;
+    }
+    const bootstrap = !editing && $('asBootstrapClaude').checked;
     try {
-      const saved = await http('/profiles', { method: 'POST', body: JSON.stringify(body) });
-      $('addServerForm').hidden = true; $('addServerForm').reset(); setAsAuth('app-key');
+      const saved = editing
+        ? await http(`/profiles/${encodeURIComponent(editing.id)}`, { method: 'PUT', body: JSON.stringify(body) })
+        : await http('/profiles', { method: 'POST', body: JSON.stringify(body) });
+      closeServerForm();
       await loadServers();
-      toast(`SSH server "${body.name}" added`, 'success');
+      toast(editing ? `"${saved.name}" saved${editing.connected ? '; reconnect to use the new settings' : ''}` : `SSH server "${body.name}" added`, 'success');
       if (bootstrap) await installServerAgent(saved.id, $('asBootstrapAgent')?.value || 'claude', body.name);
     } catch (err) { toast(err.message, 'error'); }
   });
@@ -492,6 +565,10 @@ export function createServersUI({ host, mount, Terminal, FitAddon }) {
     const r = c.termHost.getBoundingClientRect();
     if (r.width < 24 || r.height < 24) return;
     try { c.fit.fit(); } catch {}
+    /* The size the PTY is actually running at, on the element. It is what the
+       remote shell wraps to, so it is worth being able to read off the page
+       when output looks wrong - by eye, from the console, or from a check. */
+    if (c.el) { c.el.dataset.cols = c.term.cols; c.el.dataset.rows = c.term.rows; }
   };
   const refitConsoles = () => consoles.forEach(refitConsole);
   const dockedConsoles = () => [...consoles.values()]; // every console is in the view now
@@ -537,7 +614,9 @@ export function createServersUI({ host, mount, Terminal, FitAddon }) {
 
   function buildConsoleEl(c) {
     const el = document.createElement('div');
-    el.className = 'ssh-console'; el.dataset.id = c.id;
+    // the console's own id, and the terminal session it is a view of: two different things,
+    // and telling them apart matters whenever more than one view is open
+    el.className = 'ssh-console'; el.dataset.id = c.id; el.dataset.sessionId = c.sessionId || '';
     // the view's session bar owns identity, the session picker, new/end and ownership; this bar is
     // only the console's own chrome, so nothing here is a second copy of any of that
     el.innerHTML = `
@@ -571,6 +650,11 @@ export function createServersUI({ host, mount, Terminal, FitAddon }) {
       activeConsoleId = null;
       const next = dockedConsoles()[0];
       if (next) activateConsole(next.id);
+      /* Nothing left to show. The address must stop naming a session we are no longer in: the
+         Terminals route reopens whatever session it names, so leaving it there brings the view
+         straight back - on the next route entry, and on a reload. The SESSION is untouched; it
+         stays on the sidebar. */
+      else if (location.hash.startsWith('#/terminals/')) host.shell.replaceRoute('#/terminals');
     }
     renderSshTabs();
     renderWorkspaceIdentity();  // the empty state takes over when the last view closes
@@ -618,9 +702,17 @@ export function createServersUI({ host, mount, Terminal, FitAddon }) {
     .ssh-opening-notice progress { width: 48px; flex-shrink: 0; }
   `);
 
+  /* What is being opened, not just where. Keying the in-flight map by the profile alone meant a
+     request for a DIFFERENT session on the same server, while one was still coming up, was handed
+     the pending open instead: click Terminal and then New session quickly and the second click
+     silently gave you the first session back. Two different requests get two entries; a double
+     click on the same one still gets a single open, which is what the guard is for. */
+  const openKey = (profileId, opts) => `${profileId}::${opts.newSession ? 'new' : opts.sessionId || 'resume'}`;
+
   function openSsh(profileId, opts = {}) {
     if (!profileId) return openSshSession(profileId, opts);
-    if (openingTerminals.has(profileId)) return openingTerminals.get(profileId);
+    const key = openKey(profileId, opts);
+    if (openingTerminals.has(key)) return openingTerminals.get(key);
     const notice = document.createElement('div');
     notice.className = 'ssh-opening-notice';
     notice.setAttribute('role', 'status');
@@ -628,16 +720,16 @@ export function createServersUI({ host, mount, Terminal, FitAddon }) {
     const progress = document.createElement('progress');
     progress.setAttribute('aria-label', 'Opening terminal');
     const label = document.createElement('span');
-    label.textContent = opts.label ? `Opening terminal for ${opts.label}?` : 'Opening terminal?';
+    label.textContent = opts.label ? `Opening terminal for ${opts.label}…` : 'Opening terminal…';
     notice.append(progress, label);
     openingNotices.appendChild(notice);
     const pending = openSshSession(profileId, opts).catch((error) => {
       toast(error.message, 'error');
     }).finally(() => {
       notice.remove();
-      openingTerminals.delete(profileId);
+      openingTerminals.delete(key);
     });
-    openingTerminals.set(profileId, pending);
+    openingTerminals.set(key, pending);
     return pending;
   }
 
@@ -745,8 +837,8 @@ export function createServersUI({ host, mount, Terminal, FitAddon }) {
   let liveTerminals = [];      // newest activity first
   let livePollTimer = 0;
 
-  const rememberTerminal = (sessionId) => { try { if (sessionId) localStorage.setItem(LAST_TERMINAL_KEY, sessionId); } catch {} };
-  const rememberedTerminal = () => { try { return localStorage.getItem(LAST_TERMINAL_KEY) || null; } catch { return null; } };
+  const rememberTerminal = (sessionId) => { try { if (sessionId) AppPreferences.setItem(LAST_TERMINAL_KEY, sessionId); } catch {} };
+  const rememberedTerminal = () => { try { return AppPreferences.getItem(LAST_TERMINAL_KEY) || null; } catch { return null; } };
   const terminalTime = (t) => Date.parse(t?.lastActivityAt || t?.createdAt || 0) || 0;
   /** The session to reopen when the user just asks for "terminals": their last one if it is still
       live, otherwise the most recently used one on the box. */
@@ -790,10 +882,23 @@ export function createServersUI({ host, mount, Terminal, FitAddon }) {
     } else if (location.hash !== r) host.shell.replaceRoute(r);
   }
 
+  /** Is the address still asking for the session this route entry was made for? */
+  const routeStillWants = (sessionId) => {
+    const route = host.shell.parseRoute(location.hash);
+    if (route?.id !== 'terminals') return false;                    // left the workspace entirely
+    const now = location.hash.startsWith('#/terminals/') ? location.hash.slice('#/terminals/'.length) : null;
+    return (now || null) === (sessionId || null);
+  };
+
   /** The Terminals route: reopen a named session, else the most recently used live one. */
   async function openTerminals(sessionId) {
     showSshDrawer();
     const live = await refreshLiveTerminals();
+    /* The live list is a round trip, and in that time the workspace can have moved on - another
+       console activated, or a newer session opened, each of which rewrites the address. Carrying
+       on here would activate the older console and drag the conversation back to a session the
+       user has already left, which is how "New session" could leave you in the previous one. */
+    if (!routeStillWants(sessionId)) return;
     const existing = sessionId ? [...consoles.values()].find((c) => c.sessionId === sessionId) : null;
     if (existing) { activateConsole(existing.id); return; }
     const want = sessionId ? live.find((t) => t.sessionId === sessionId) : mostRecentTerminal();
@@ -874,6 +979,17 @@ export function createServersUI({ host, mount, Terminal, FitAddon }) {
       await refreshLiveTerminals();
     });
     host.on($('btnWsGoServers'), 'click', () => host.navigate('#/servers'));
+
+    /* The session-actions menu. Each item is one of the buttons wired above, so
+       there is nothing to forward: opening and closing is all this adds. */
+    const more = $('btnWsMore'), menu = $('wsMoreMenu');
+    if (more && menu) {
+      const setOpen = (open) => { menu.hidden = !open; more.setAttribute('aria-expanded', String(open)); };
+      host.on(more, 'click', (e) => { e.stopPropagation(); setOpen(menu.hidden); });
+      host.on(menu, 'click', (e) => { if (e.target.closest('button')) setOpen(false); });
+      host.on(document, 'click', (e) => { if (!menu.hidden && !e.target.closest('.ws-more')) setOpen(false); });
+      host.on(document, 'keydown', (e) => { if (e.key === 'Escape' && !menu.hidden) { setOpen(false); more.focus(); } });
+    }
   })();
 
   /* ---------- Terminal workspace: the shared shell and its session's chat ----------

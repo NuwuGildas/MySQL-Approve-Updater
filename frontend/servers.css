@@ -90,7 +90,25 @@ body.drawers-h #serversDrawer.open { transform: translateY(0); }
 .ws-control { padding: .22rem .6rem; font-size: .73rem; white-space: nowrap; min-height: 30px; }
 .ws-control:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .ws-session-pick { max-width: 16rem; font-size: .72rem; padding: .12rem .3rem; font-family: ui-monospace, Consolas, monospace; }
-.ws-ident button:not(.ws-control) { padding: .18rem .5rem; font-size: .72rem; }
+.ws-ident button:not(.ws-control):not(.ws-more-btn) { padding: .18rem .5rem; font-size: .72rem; }
+/* Session housekeeping (clear / new / end) behind one trigger, so the bar keeps a single row. */
+.ws-more { position: relative; flex: none; display: inline-flex; }
+.ws-more-btn { display: inline-grid; place-items: center; width: 30px; min-height: 30px; padding: 0; border-radius: 8px; }
+.ws-more-btn svg { width: 16px; height: 16px; }
+.ws-more-menu {
+  position: absolute; z-index: 80; top: calc(100% + .4rem); right: 0; min-width: 12rem;
+  display: flex; flex-direction: column; gap: .1rem; padding: .35rem;
+  border: 1px solid var(--border); border-radius: 12px; background: var(--panel);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .18), 0 16px 40px rgba(0, 0, 0, .34);
+}
+.ws-more-menu[hidden] { display: none; }
+.ws-ident .ws-more-menu button {
+  display: flex; align-items: center; width: 100%; padding: .5rem .6rem; min-height: 36px;
+  border: 0; border-radius: 8px; background: transparent; color: var(--text);
+  font: inherit; font-size: .8rem; text-align: left;
+}
+.ws-ident .ws-more-menu button:hover, .ws-ident .ws-more-menu button:focus-visible { background: var(--panel2); outline: none; }
+.ws-ident .ws-more-menu button.danger { color: var(--red, #f87171); }
 .ws-empty { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: flex-start; justify-content: flex-start; gap: .6rem; padding: 1rem; text-align: left; }
 .ws-empty[hidden] { display: none; }
 .ws-empty h3 { margin: 0; font-size: 1rem; }
@@ -176,7 +194,11 @@ body.ws-page #agentDrawer.ag-docked, body.shell.agent-dock-pref.agent-open #agen
 .srv-nameRow { flex-wrap: wrap; row-gap: .25rem; }
 .srv-sub, .srv-metaline, .srv-os { overflow-wrap: anywhere; }
 .srv-actions > button, .srv-actions .term-dd > button { min-height: 34px; }
-body.ws-wide .ws-chat-bar { display: none; }
+/* The chat pane's own identity row. As TABS the chat is alone on screen, so it has to say
+   which server and session it belongs to and offer the handover; side by side the terminal
+   pane's session bar is already visible and this would be a second copy of both. */
+body.ws-page .ws-chat-bar { display: flex; }
+body.ws-page.ws-wide .ws-chat-bar { display: none; }
 body.ws-page .ssh-console .ssh-console-bar { display: none; }
 body.ws-page .ssh-console.view-detached .ssh-console-bar { display: flex; }
 body.ws-page #sshDrawer .view-head h2 { flex: none; }
@@ -201,3 +223,7 @@ body.ws-page .ws-server { max-width: 100%; }
 #serverFormModal { width: min(640px, 94vw); }
 #serverFormModal #addServerForm[hidden] { display: none; }
 
+
+/* The edit form is the add form, filled in. The note explaining that a blank credential is kept
+   belongs under the heading rather than beside it, where it ran into the server's name. */
+.srv-form-note { margin: 0 0 .5rem; }

@@ -10,8 +10,8 @@ publisher signature and activates it in place.
 | | |
 |---|---|
 | Module id | `servers` |
-| Version | 1.2.2 |
-| Host SDK | `^1.0.0` |
+| Version | 1.4.0 |
+| Host SDK | `^1.1.0` |
 | Branch | `modules/servers` |
 
 ## What it may do
