@@ -1,0 +1,20 @@
+'use strict';
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs/promises');
+const os = require('node:os');
+const path = require('node:path');
+const { createBrowserState } = require('../../lib/persistence/browser-state');
+test('browser migration preserves server preferences, tombstones, and independent tab changes', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'preferences-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const state = createBrowserState(root);
+  state.update({ 'st-theme': 'dark', 'mau-sql-history': '["SELECT 1"]' }, true);
+  state.update({ 'st-theme': 'light' });
+  state.update({ 'st-nav-collapsed': '1' });
+  state.update({ 'mau-sql-history': null });
+  state.update({ 'st-theme': 'stale', 'mau-sql-history': '["old"]' }, true);
+  assert.deepEqual(createBrowserState(root).read(), { 'st-theme': 'light', 'mau-sql-history': null, 'st-nav-collapsed': '1' });
+  assert.throws(() => state.update({ 'unrelated-token': 'private' }), { status: 400 });
+  assert.throws(() => state.update({ 'st-theme': {} }), { status: 400 });
+});

@@ -16,7 +16,7 @@ const DEFAULT_PROJECT_ID = 'general';
    switcher is not shown, and everything is scoped to the default one. */
 const projectManager = () => { try { return HostSDK.core.projectManager || null; } catch { return null; } };
 let projects = [];
-let currentProjectId = (() => { try { return localStorage.getItem(PROJECT_KEY) || DEFAULT_PROJECT_ID; } catch { return DEFAULT_PROJECT_ID; } })();
+let currentProjectId = (() => { try { return AppPreferences.getItem(PROJECT_KEY) || DEFAULT_PROJECT_ID; } catch { return DEFAULT_PROJECT_ID; } })();
 const currentProject = () => projects.find((p) => p.id === currentProjectId) || null;
 const currentProjectName = () => currentProject()?.name || (currentProjectId === DEFAULT_PROJECT_ID ? 'General' : currentProjectId);
 /** URL with the active project (and any extra query params) appended, for GET assistant calls. */
@@ -71,7 +71,7 @@ async function loadProjects() {
   // a stored id whose project is gone falls back to General (or the first project) without losing the list
   if (projects.length && !projects.some((p) => p.id === currentProjectId)) {
     currentProjectId = projects.some((p) => p.id === DEFAULT_PROJECT_ID) ? DEFAULT_PROJECT_ID : projects[0].id;
-    try { localStorage.setItem(PROJECT_KEY, currentProjectId); } catch {}
+    try { AppPreferences.setItem(PROJECT_KEY, currentProjectId); } catch {}
   }
   renderProjectContext();
   return projects;
@@ -80,7 +80,7 @@ async function loadProjects() {
 function setProject(id) {
   if (!id || id === currentProjectId) return;
   currentProjectId = id;
-  try { localStorage.setItem(PROJECT_KEY, id); } catch {}
+  try { AppPreferences.setItem(PROJECT_KEY, id); } catch {}
   renderProjectContext();
   document.dispatchEvent(new CustomEvent('st:project', { detail: { id, project: currentProject() } }));
   toast(`Project: ${currentProjectName()}`);

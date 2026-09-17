@@ -118,13 +118,13 @@ function cmdkParse(value) {
 }
 
 /* ---------- recents ---------- */
-function cmdkRecents() { try { const r = JSON.parse(localStorage.getItem(CMDK_RECENTS_KEY) || '[]'); return Array.isArray(r) ? r.slice(0, 6) : []; } catch { return []; } }
+function cmdkRecents() { try { const r = JSON.parse(AppPreferences.getItem(CMDK_RECENTS_KEY) || '[]'); return Array.isArray(r) ? r.slice(0, 6) : []; } catch { return []; } }
 function cmdkRemember(item) {
   if (!item?.action) return;
   const rec = { title: item.title, sub: item.sub || '', group: item.group || '', icon: item.icon || 'page', action: item.action };
   const key = JSON.stringify(rec.action);
   const list = [rec, ...cmdkRecents().filter((r) => JSON.stringify(r.action) !== key)].slice(0, 6);
-  try { localStorage.setItem(CMDK_RECENTS_KEY, JSON.stringify(list)); } catch {}
+  try { AppPreferences.setItem(CMDK_RECENTS_KEY, JSON.stringify(list)); } catch {}
 }
 
 /* ---------- build the visible rows ---------- */

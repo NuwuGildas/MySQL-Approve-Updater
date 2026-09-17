@@ -49,7 +49,7 @@ test('but a rename that keeps failing is still a failure, and leaves no litter b
   const { writeFileAtomic: write } = createAtomicWriter({ ...flaky, sleep: async () => {}, pid: 4242 });
   await assert.rejects(() => write('/data/chats.json', '{}'), /EPERM/);
   assert.equal(flaky.calls.renames, 6, 'the first try plus five retries');
-  assert.deepEqual(flaky.calls.unlinks, ['/data/chats.json.4242.tmp'], 'the temp file is cleaned up');
+  assert.deepEqual(flaky.calls.unlinks, ['/data/chats.json.4242.1.tmp'], 'the temp file is cleaned up');
 });
 
 test('a failure that is not about a held handle is reported at once', async () => {
@@ -72,7 +72,7 @@ test('two processes sharing a data directory do not write over each other', asyn
   }).writeFileAtomic;
   await capture(111)('/data/chats.json', '{}');
   await capture(222)('/data/chats.json', '{}');
-  assert.deepEqual(seen, ['/data/chats.json.111.tmp', '/data/chats.json.222.tmp']);
+  assert.deepEqual(seen, ['/data/chats.json.111.1.tmp', '/data/chats.json.222.1.tmp']);
 });
 
 test('on a real filesystem it replaces the file whole, and a reader never sees a partial one', async () => {

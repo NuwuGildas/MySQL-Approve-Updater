@@ -3,7 +3,7 @@
  * MySQL batch updater with mandatory human approval.
  *
  * Safety model (read this before changing anything):
- *  - The ONLY code path that issues a write statement to the database is
+ *  - The approved batch updater's ONLY write path to the TARGET database is
  *    executeApprovedChange(), and it is reachable ONLY from
  *    POST /api/session/decision with action === 'approve'.
  *  - Previews are SELECT-only and computed in memory.
@@ -15,8 +15,8 @@
  *    LIMIT and multipleStatements disabled.
  */
 
-const fs = require('fs');
-const fsp = require('fs/promises');
+const fs = require('./lib/persistence/runtime').fs;
+const fsp = require('./lib/persistence/runtime').promises;
 const net = require('net');
 const path = require('path');
 const crypto = require('crypto');
@@ -35,6 +35,7 @@ const DATA_DIR = process.env.SERVER_TOOLS_DATA_DIR
   ? path.resolve(process.env.SERVER_TOOLS_DATA_DIR)
   : (IS_PACKAGED ? path.dirname(process.execPath) : __dirname);
 require('dotenv').config({ path: path.join(DATA_DIR, '.env') });
+const applicationStorage = require('./lib/persistence/runtime').configure({ root: DATA_DIR });
 // `node server.js ship <target> …` runs the deploy CLI instead of the HTTP server (see the bottom of this file)
 
 const express = require('express');
@@ -86,7 +87,7 @@ try {
   Object.assign(settings, loaded, { aiAssist });
 } catch {}
 function saveSettings() {
-  try { fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2), 'utf8'); } catch (e) { console.error('Could not write settings.json:', e.message); }
+  fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2), 'utf8');
 }
 function clampInt(v, min, max, fallback) { const n = Math.round(Number(v)); return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback; }
 
@@ -564,6 +565,10 @@ function broadcastChange(change) {
 let auditChain = Promise.resolve();
 function audit(entry) {
   const line = JSON.stringify({ ts: new Date().toISOString(), ...entry }) + '\n';
+  if (applicationStorage.mode === 'mysql') {
+    fs.appendFileSync(AUDIT_FILE, line, 'utf8');
+    return Promise.resolve();
+  }
   auditChain = auditChain.then(() => fsp.appendFile(AUDIT_FILE, line, 'utf8')).catch((e) => {
     console.error('AUDIT WRITE FAILED:', e.message);
   });
@@ -822,6 +827,7 @@ function maybeFinishSession() {
 /* ------------------------------------------------------------------ */
 
 const app = express();
+app.use(applicationStorage.middleware);
 app.use(express.json({ limit: '1mb' }));
 app.use(express.static(path.join(ROOT, 'public')));
 app.use('/vendor/introjs', express.static(path.join(ROOT, 'node_modules', 'intro.js', 'minified')));
@@ -831,11 +837,16 @@ app.use('/vendor/xterm', express.static(path.join(ROOT, 'node_modules', '@xterm'
 app.use('/vendor/xterm-addon-fit', express.static(path.join(ROOT, 'node_modules', '@xterm', 'addon-fit')));
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+const browserState = require('./lib/persistence/browser-state').createBrowserState(DATA_DIR);
+app.get('/api/browser-state', (req, res) => res.json({ values: browserState.read() }));
+app.post('/api/browser-state', (req, res) => res.json({ values: browserState.update(req.body?.changes, true) }));
+app.put('/api/browser-state', (req, res) => res.json({ values: browserState.update(req.body?.changes) }));
 
 app.get('/api/state', (req, res) => {
   res.json({
     session: sessionSnapshot(),
     recentLog,
+    storage: applicationStorage.status,
     config: { database: currentDb().database, sshTunnel: !!currentSsh(), profile: activeProfile().name, maxPreviewRows: settings.maxPreviewRows, sqlConsoleMaxRows: settings.sqlConsoleMaxRows, requireBackupBeforeApprove: settings.requireBackupBeforeApprove, allowWrites: settings.allowWrites },
     transformTypes: Object.fromEntries(Object.entries(TRANSFORMS).map(([k, v]) => [k, v.label])),
   });
@@ -2717,11 +2728,12 @@ app.use((err, req, res, next) => {
 });
 
 function startHttp() {
+  applicationStorage.assertHealthy();
   const server = app.listen(PORT, '127.0.0.1', () => {
-    console.log(`server-tools listening on http://localhost:${PORT} (localhost only)`);
+    console.log(`server-tools listening on http://localhost:${server.address().port} (localhost only)`);
     const db = currentDb(), ssh = currentSsh();
     console.log(`Connection profile: "${activeProfile().name}"${db.database} @ ${db.host}:${db.port}${ssh ? ` via SSH tunnel ${ssh.host}` : ' (direct)'}`);
-    console.log('No database connection is opened until you load the schema or run a preview.');
+    console.log(`Application storage: ${applicationStorage.mode}. Target database connections open only when needed.`);
     if (IS_PACKAGED && process.platform === 'win32' && !process.env.MAU_NO_OPEN) {
       // double-click convenience: open the UI in the default browser
       require('child_process').exec(`start http://localhost:${PORT}`, () => {});
@@ -2742,7 +2754,7 @@ function startHttp() {
   return server;
 }
 
-const shutdown = async () => { try { await moduleHost.shutdown(); } catch {} process.exit(0); };
+const shutdown = async () => { try { await moduleHost.shutdown(); await auditChain; await chatStore.flush(); await conversations.flush(); await applicationStorage.close(); } catch {} process.exit(0); };
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 

@@ -97,7 +97,7 @@ function closeAllDrawers() {
 function setView(v) { // 'compass' | 'mysql' | 'settings'
   document.body.classList.remove('view-compass', 'view-mysql', 'view-settings');
   document.body.classList.add('view-' + v);
-  try { if (v !== 'settings') localStorage.setItem('st-last-view', v); } catch {}
+  try { if (v !== 'settings') AppPreferences.setItem('st-last-view', v); } catch {}
 }
 function showCompass() {
   closeAllDrawers();
@@ -108,7 +108,7 @@ function showCompass() {
   const s = $('compassSearch'); if (s) s.value = ''; // focus is handled by the router (page heading / opener)
 }
 let tourOffered = false;
-function offerTourOnce() { if (tourOffered) return; tourOffered = true; if (!localStorage.getItem('mau-tour-seen')) setTimeout(startTour, 600); }
+function offerTourOnce() { if (tourOffered) return; tourOffered = true; if (!AppPreferences.getItem('mau-tour-seen')) setTimeout(startTour, 600); }
 function revealWorkspace(crumb) { // leave the hub, show the MySQL workspace
   setView('mysql');
   $('toolCrumb').textContent = crumb || '';
@@ -124,9 +124,9 @@ $('btnSettings').addEventListener('click', showSettings);
 $('compassSearch').addEventListener('input', renderCompass);
 
 /* ---------- Settings (modal) ---------- */
-const prefStartup = () => { try { return localStorage.getItem('st-startup') || 'compass'; } catch { return 'compass'; } };
-const prefAiSchema = () => { try { return localStorage.getItem('st-ai-schema') || 'ask'; } catch { return 'ask'; } };
-const prefConfirmDestructive = () => { try { return localStorage.getItem('st-confirm-destructive') !== '0'; } catch { return true; } }; // default ON
+const prefStartup = () => { try { return AppPreferences.getItem('st-startup') || 'compass'; } catch { return 'compass'; } };
+const prefAiSchema = () => { try { return AppPreferences.getItem('st-ai-schema') || 'ask'; } catch { return 'ask'; } };
+const prefConfirmDestructive = () => { try { return AppPreferences.getItem('st-confirm-destructive') !== '0'; } catch { return true; } }; // default ON
 // persist one server setting and reflect it locally
 async function putSetting(patch) {
   try {
@@ -208,7 +208,7 @@ function renderModuleSettings() {
 HostSDK.settingsSections.onChange(() => { if ($('settingsModal')?.open) renderModuleSettings(); });
 HostSDK.settingsGroups.onChange(() => { if ($('settingsModal')?.open) renderModuleSettings(); });
 /* ---------- theme (dark / light / system) ---------- */
-const prefTheme = () => { try { return localStorage.getItem('st-theme') || 'dark'; } catch { return 'dark'; } };
+const prefTheme = () => { try { return AppPreferences.getItem('st-theme') || 'dark'; } catch { return 'dark'; } };
 /* terminal colours follow the app theme (light: paper background, dark: console black) */
 function termTheme() {
   return document.documentElement.dataset.theme === 'light'
@@ -219,7 +219,7 @@ function applyTheme(pref) {
   const t = pref === 'system' ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : pref;
   document.documentElement.dataset.theme = t;
   HostSDK.bus.emit('theme:change', { theme: t, preference: pref, terminal: termTheme() }); // modules restyle their own views
-  try { localStorage.setItem('st-theme', pref); } catch {}
+  try { AppPreferences.setItem('st-theme', pref); } catch {}
   document.querySelectorAll('#setTheme [data-theme]').forEach((b) => b.classList.toggle('on', b.dataset.theme === pref));
 }
 applyTheme(prefTheme());
@@ -230,9 +230,9 @@ $('setTheme').addEventListener('click', (e) => { const b = e.target.closest('[da
 
 // client preferences (auto-save)
 $('setOrient').addEventListener('click', (e) => { const b = e.target.closest('[data-orient]'); if (!b) return; applyDrawerOrient(b.dataset.orient); renderSettings(); });
-$('setStartup').addEventListener('change', () => { try { localStorage.setItem('st-startup', $('setStartup').value); } catch {} });
-$('setAiSchema').addEventListener('change', () => { try { localStorage.setItem('st-ai-schema', $('setAiSchema').value); } catch {} });
-$('setConfirmDestructive').addEventListener('change', () => { try { localStorage.setItem('st-confirm-destructive', $('setConfirmDestructive').checked ? '1' : '0'); } catch {} });
+$('setStartup').addEventListener('change', () => { try { AppPreferences.setItem('st-startup', $('setStartup').value); } catch {} });
+$('setAiSchema').addEventListener('change', () => { try { AppPreferences.setItem('st-ai-schema', $('setAiSchema').value); } catch {} });
+$('setConfirmDestructive').addEventListener('change', () => { try { AppPreferences.setItem('st-confirm-destructive', $('setConfirmDestructive').checked ? '1' : '0'); } catch {} });
 // server settings (auto-save on change)
 $('setAllowWrites').addEventListener('change', async () => {
   const on = $('setAllowWrites').checked;
@@ -281,12 +281,12 @@ function applyDrawerOrient(o) {
     b.innerHTML = horizontal ? DOCK_ICON.horizontal : DOCK_ICON.vertical;
     b.title = horizontal ? 'Docked at the bottom (horizontal): click to dock right' : 'Docked at the right (vertical): click to dock at the bottom';
   });
-  try { localStorage.setItem(DRAWER_ORIENT_KEY, horizontal ? 'horizontal' : 'vertical'); } catch {}
+  try { AppPreferences.setItem(DRAWER_ORIENT_KEY, horizontal ? 'horizontal' : 'vertical'); } catch {}
   HostSDK.bus.emit('layout:change', { orientation: horizontal ? 'horizontal' : 'vertical' }); // views that measure themselves refit
 }
 function toggleDrawerOrient() { applyDrawerOrient(document.body.classList.contains('drawers-h') ? 'vertical' : 'horizontal'); }
 document.querySelectorAll('.btn-dock').forEach((b) => b.addEventListener('click', toggleDrawerOrient));
-applyDrawerOrient(localStorage.getItem(DRAWER_ORIENT_KEY) || 'vertical'); // restore saved choice (no animation yet)
+applyDrawerOrient(AppPreferences.getItem(DRAWER_ORIENT_KEY) || 'vertical'); // restore saved choice (no animation yet)
 // enable slide transitions only after the initial orientation is painted
 requestAnimationFrame(() => requestAnimationFrame(() => document.body.classList.add('drawers-ready')));
 
@@ -342,13 +342,13 @@ function saveAgentGeom() {
   if (agentIsSheet()) return;                                                  // and a sheet has none either
   const r = el.getBoundingClientRect();
   const h = agentUserResized || el.style.height ? r.height : null;
-  try { localStorage.setItem(AI_GEOM_KEY, JSON.stringify({ left: r.left, top: r.top, w: r.width, h })); } catch {}
+  try { AppPreferences.setItem(AI_GEOM_KEY, JSON.stringify({ left: r.left, top: r.top, w: r.width, h })); } catch {}
 }
 function restoreAgentGeom() { // called when the window opens
   const el = $('agentDrawer');
   if (el.classList.contains('ag-docked')) return; // sized by the workspace pane, not by the saved window
   if (agentIsSheet()) { clearAgentGeom(); return; } // a sheet is placed by the stylesheet, edge to edge
-  let g = null; try { g = JSON.parse(localStorage.getItem(AI_GEOM_KEY)); } catch {}
+  let g = null; try { g = JSON.parse(AppPreferences.getItem(AI_GEOM_KEY)); } catch {}
   if (!g) return;
   el.style.width = Math.min(g.w, window.innerWidth * 0.96) + 'px';
   if (g.h) el.style.height = Math.min(g.h, window.innerHeight * 0.8) + 'px';
@@ -433,7 +433,7 @@ async function startApplication() {
   if (typeof navStartup === 'function') navStartup();
   else {
     const startup = prefStartup();
-    const last = (() => { try { return localStorage.getItem('st-last-view'); } catch { return null; } })();
+    const last = (() => { try { return AppPreferences.getItem('st-last-view'); } catch { return null; } })();
     if (startup === 'mysql' || (startup === 'last' && last === 'mysql')) revealWorkspace('MySQL Update Tool');
     else showCompass();
   }

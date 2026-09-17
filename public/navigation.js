@@ -73,7 +73,7 @@ function applyRoute(resolved, path, options = {}) {
   const prev = currentRoute;
   if (prev && !['settings', 'connections'].includes(parseRoute('#' + prev)?.id)) previousPageRoute = '#' + prev;
   currentRoute = path;
-  try { localStorage.setItem('st-last-route', '#' + path); } catch {}
+  try { AppPreferences.setItem('st-last-route', '#' + path); } catch {}
   document.body.classList.remove(...[...document.body.classList].filter((c) => c.startsWith('page-')));
   document.body.classList.add('page-' + resolved.id);
   // Leave the page that was showing. Every page declares its own leave().
@@ -96,7 +96,7 @@ function replaceRoute(route) {
   history.replaceState(null, '', route);
   resolving = false;
   currentRoute = route.slice(1);
-  try { localStorage.setItem('st-last-route', route); } catch {}
+  try { AppPreferences.setItem('st-last-route', route); } catch {}
 }
 /** A module page that opened itself outside the router (a terminal, say) syncs the shell. */
 function adoptPage(id, route) {
@@ -215,7 +215,7 @@ function renderNavActive(id) {
 function setNavCollapsed(on) {
   document.body.classList.toggle('nav-collapsed', on);
   const b = $('btnNavCollapse'); if (b) { b.setAttribute('aria-pressed', String(on)); b.title = on ? 'Expand navigation' : 'Collapse navigation'; }
-  try { localStorage.setItem('st-nav-collapsed', on ? '1' : '0'); } catch {}
+  try { AppPreferences.setItem('st-nav-collapsed', on ? '1' : '0'); } catch {}
 }
 /* compact screens: the sidebar is an off-canvas drawer behind the header menu button */
 function openMobileNav() { document.body.classList.add('nav-open'); $('btnNav').setAttribute('aria-expanded', 'true'); $('appNav').removeAttribute('inert'); const first = $('appNav').querySelector('[aria-current], .nav-link'); first?.focus(); }
@@ -267,9 +267,9 @@ function updateAgentContext(item) {
   // the assistant is scoped to this page, so the chip that says so is redrawn with the page name
   if (typeof renderAgentScopeChip === 'function') renderAgentScopeChip();
 }
-const prefAgentDock = () => { try { return localStorage.getItem('st-agent-dock') === '1'; } catch { return false; } };
+const prefAgentDock = () => { try { return AppPreferences.getItem('st-agent-dock') === '1'; } catch { return false; } };
 function setAgentDock(on) {
-  try { localStorage.setItem('st-agent-dock', on ? '1' : '0'); } catch {}
+  try { AppPreferences.setItem('st-agent-dock', on ? '1' : '0'); } catch {}
   document.body.classList.toggle('agent-dock-pref', on);
   const b = $('btnAgentDock'); if (b) { b.querySelector('b').textContent = on ? 'Float the window' : 'Dock beside the workspace'; b.querySelector('span').textContent = on ? 'Back to a free-floating window' : 'Wide screens only: the page makes room for the assistant'; }
 }
@@ -345,7 +345,7 @@ function navStartup() {
   renderNav();
   // the session controls belong to the Updates page, not the global header
   $('sessionBar').append($('sessStatus'), $('btnPause'), $('btnResume'), $('btnAbort'));
-  try { if (localStorage.getItem('st-nav-collapsed') === '1') setNavCollapsed(true); } catch {}
+  try { if (AppPreferences.getItem('st-nav-collapsed') === '1') setNavCollapsed(true); } catch {}
   setAgentDock(prefAgentDock());
   formAsModal('connForm', 'connFormModal', 'connFormHost', 'btnConnFormClose');
   syncNavInert();
@@ -354,7 +354,7 @@ function navStartup() {
     // Keep it only if it looks like a route; "#" and "#section" are not addresses to restore.
     if (/^#\/.+/.test(location.hash)) deferredRoute = location.hash;
     const startup = prefStartup();
-    let last = null; try { last = localStorage.getItem('st-last-route'); } catch {}
+    let last = null; try { last = AppPreferences.getItem('st-last-route'); } catch {}
     route = startup === 'mysql' ? '#/database/updates' : startup === 'last' && last && parseRoute(last) ? last : ROUTE_HOME;
   }
   navigate(route, { replace: true, focus: false });

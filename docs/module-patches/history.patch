@@ -1,0 +1,26 @@
+diff --git a/module.json b/module.json
+index 99cbe5f..4f7a602 100644
+--- a/module.json
++++ b/module.json
+@@ -3,9 +3,9 @@
+   "id": "history",
+   "name": "Activity History",
+   "description": "A searchable timeline of every decision, edit, session, deployment and assistant action recorded by this application.",
+-  "version": "1.1.0",
++  "version": "1.2.0",
+   "publisher": "Server Tools",
+-  "hostSdk": "^1.0.0",
++  "hostSdk": "^1.1.0",
+   "frontend": "frontend/index.js",
+   "backend": "backend/index.js",
+   "dependencies": {},
+diff --git a/backend/index.js b/backend/index.js
+index a1519e9..7d692ae 100644
+--- a/backend/index.js
++++ b/backend/index.js
+@@ -56,4 +56,4 @@ async function activate(host) {
+   };
+ }
+ 
+-module.exports = { activate };
++module.exports = { activate, storageVersion: 1 };

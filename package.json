@@ -9,6 +9,8 @@
   },
   "bin": "server.js",
   "scripts": {
+    "storage": "node scripts/app-storage.js",
+    "test:storage": "node --test test/persistence/*.test.js",
     "start": "node server.js",
     "dev": "node scripts/dev.js",
     "export:game-translations": "node scripts/export-game-translations.js",

@@ -1,0 +1,26 @@
+diff --git a/module.json b/module.json
+index 3790f16..704c668 100644
+--- a/module.json
++++ b/module.json
+@@ -3,9 +3,9 @@
+   "id": "projects",
+   "name": "Projects",
+   "description": "Group connections, servers, connectors, repositories and deployments into projects, and give each one its own assistant conversation.",
+-  "version": "1.1.0",
++  "version": "1.2.0",
+   "publisher": "Server Tools",
+-  "hostSdk": "^1.0.0",
++  "hostSdk": "^1.1.0",
+   "frontend": "frontend/index.js",
+   "backend": "backend/index.js",
+   "dependencies": {},
+diff --git a/backend/index.js b/backend/index.js
+index a7af19f..caecba0 100644
+--- a/backend/index.js
++++ b/backend/index.js
+@@ -224,4 +224,4 @@ async function activate(host) {
+   };
+ }
+ 
+-module.exports = { activate };
++module.exports = { activate, storageVersion: 1 };

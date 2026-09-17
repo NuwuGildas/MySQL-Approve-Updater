@@ -1,0 +1,41 @@
+diff --git a/module.json b/module.json
+index 400bfc1..df5380d 100644
+--- a/module.json
++++ b/module.json
+@@ -3,9 +3,9 @@
+   "id": "servers",
+   "name": "Servers & Terminals",
+   "description": "SSH server profiles with live VM stats, shared terminals you and the assistant work in together, and approval-gated assistant commands.",
+-  "version": "1.3.0",
++  "version": "1.4.0",
+   "publisher": "Server Tools",
+-  "hostSdk": "^1.0.0",
++  "hostSdk": "^1.1.0",
+   "frontend": "frontend/index.js",
+   "backend": "backend/index.js",
+   "dependencies": {},
+diff --git a/backend/index.js b/backend/index.js
+index a81166f..aaa2ca1 100644
+--- a/backend/index.js
++++ b/backend/index.js
+@@ -334,4 +334,4 @@ async function activate(host) {
+   };
+ }
+ 
+-module.exports = { activate };
++module.exports = { activate, storageVersion: 1 };
+diff --git a/frontend/servers-ui.js b/frontend/servers-ui.js
+index b5208bc..96ef091 100644
+--- a/frontend/servers-ui.js
++++ b/frontend/servers-ui.js
+@@ -837,8 +837,8 @@ export function createServersUI({ host, mount, Terminal, FitAddon }) {
+   let liveTerminals = [];      // newest activity first
+   let livePollTimer = 0;
+ 
+-  const rememberTerminal = (sessionId) => { try { if (sessionId) localStorage.setItem(LAST_TERMINAL_KEY, sessionId); } catch {} };
+-  const rememberedTerminal = () => { try { return localStorage.getItem(LAST_TERMINAL_KEY) || null; } catch { return null; } };
++  const rememberTerminal = (sessionId) => { try { if (sessionId) AppPreferences.setItem(LAST_TERMINAL_KEY, sessionId); } catch {} };
++  const rememberedTerminal = () => { try { return AppPreferences.getItem(LAST_TERMINAL_KEY) || null; } catch { return null; } };
+   const terminalTime = (t) => Date.parse(t?.lastActivityAt || t?.createdAt || 0) || 0;
+   /** The session to reopen when the user just asks for "terminals": their last one if it is still
+       live, otherwise the most recently used one on the box. */

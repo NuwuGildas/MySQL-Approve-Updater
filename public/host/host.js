@@ -263,9 +263,9 @@ window.HostSDK = (() => {
       /* ---- scoped browser storage: view preferences only ---- */
       storage: {
         key: (key) => `st-mod-${id}-${key}`,
-        get(key, fallback = null) { try { const raw = localStorage.getItem(scope.storage.key(key)); return raw === null ? fallback : JSON.parse(raw); } catch { return fallback; } },
-        set(key, value) { try { localStorage.setItem(scope.storage.key(key), JSON.stringify(value)); } catch {} },
-        remove(key) { try { localStorage.removeItem(scope.storage.key(key)); } catch {} },
+        get(key, fallback = null) { try { const raw = AppPreferences.getItem(scope.storage.key(key)); return raw === null ? fallback : JSON.parse(raw); } catch { return fallback; } },
+        set(key, value) { try { AppPreferences.setItem(scope.storage.key(key), JSON.stringify(value)); } catch {} },
+        remove(key) { try { AppPreferences.removeItem(scope.storage.key(key)); } catch {} },
       },
       /* ---- scoped server-side settings, shared across tabs ---- */
       settings: {

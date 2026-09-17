@@ -1,0 +1,35 @@
+name: MySQL application storage
+on: [push, pull_request]
+jobs:
+  mysql:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: integration-only
+          MYSQL_DATABASE: server_tools_test
+          MYSQL_USER: server_tools_test
+          MYSQL_PASSWORD: integration-only
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -pintegration-only"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+    env:
+      APP_DB_TEST: '1'
+      APP_DB_HOST: 127.0.0.1
+      APP_DB_PORT: '3306'
+      APP_DB_NAME: server_tools_test
+      APP_DB_USER: server_tools_test
+      APP_DB_PASSWORD: integration-only
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run test:storage

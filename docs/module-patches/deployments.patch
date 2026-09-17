@@ -1,0 +1,200 @@
+diff --git a/module.json b/module.json
+index deb2de4..f75826d 100644
+--- a/module.json
++++ b/module.json
+@@ -3,9 +3,9 @@
+   "id": "deployments",
+   "name": "Deployments · The Ascension",
+   "description": "Connect a repository, detect its stack, review the plan and ship to a VPS, shared host or platform, with rollback, health checks and run history. Scaffolds a WordPress project from scratch, or lays your own code over a clean core.",
+-  "version": "1.2.0",
++  "version": "1.3.0",
+   "publisher": "Server Tools",
+-  "hostSdk": "^1.0.0",
++  "hostSdk": "^1.1.0",
+   "frontend": "frontend/index.js",
+   "backend": "backend/index.js",
+   "dependencies": {},
+diff --git a/backend/index.js b/backend/index.js
+index 68c0293..832809e 100644
+--- a/backend/index.js
++++ b/backend/index.js
+@@ -41,6 +41,7 @@ async function activate(host) {
+   const { Client: SSHClient } = host.shared('ssh2');
+ 
+   const app = express();
++  if (host.storage) app.use(host.storage.middleware);
+   app.use(express.json({ limit: '2mb' }));
+ 
+   /* ---- what the engine calls a connection store ----
+@@ -105,6 +106,7 @@ async function activate(host) {
+   });
+ 
+   const ctx = {
++    storage: host.storage,
+     app, DATA_DIR: host.appDataDir, ROOT: host.codeDir, IS_PACKAGED: !!process.env.MODULE_IS_PACKAGED,
+     httpError, wrap,
+     audit: (entry) => { host.audit(entry).catch(() => {}); },
+@@ -178,4 +180,4 @@ async function activate(host) {
+   };
+ }
+ 
+-module.exports = { activate };
++module.exports = { activate, storageVersion: 1 };
+diff --git a/backend/deploy/index.js b/backend/deploy/index.js
+index 9b24ab0..e659919 100644
+--- a/backend/deploy/index.js
++++ b/backend/deploy/index.js
+@@ -18,8 +18,8 @@ const cli = require('./cli');
+ 
+ function mount(rawCtx) {
+   const ctx = validateCtx(rawCtx);
+-  const stores = createStores(ctx.DATA_DIR, { log: ctx.logEvent, projects: ctx.projects });
+-  const vault = createVault(ctx.DATA_DIR);
++  const stores = createStores(ctx.DATA_DIR, { log: ctx.logEvent, projects: ctx.projects, storage: ctx.storage });
++  const vault = createVault(ctx.DATA_DIR, process.env, ctx.storage);
+   const redact = createRedactor(() => {
+     const vals = vault.values();
+     for (const p of ctx.connStore.profiles || []) { if (p.ssh?.password) vals.push(p.ssh.password); if (p.ssh?.passphrase) vals.push(p.ssh.passphrase); if (p.db?.password) vals.push(p.db.password); }
+diff --git a/backend/deploy/store.js b/backend/deploy/store.js
+index 9eeda72..0f40609 100644
+--- a/backend/deploy/store.js
++++ b/backend/deploy/store.js
+@@ -9,19 +9,26 @@ const path = require('path');
+ const { createProjectView } = require('./project-view');
+ const { migrateDeploymentProjects } = require('./projects');
+ 
+-function createStore(file, initial) {
++function createStore(file, initial, storage) {
++  const fs = storage?.fs || require('fs');
++  const fsp = storage?.promises || require('fs/promises');
+   let data;
+   try { data = JSON.parse(fs.readFileSync(file, 'utf8')); }
+   catch { data = typeof initial === 'function' ? initial() : JSON.parse(JSON.stringify(initial)); }
+   let chain = Promise.resolve();
+   const save = () => {
+     const snapshot = JSON.stringify(data, null, 2);
+-    chain = chain.then(async () => {
++    if (storage?.mode === 'mysql') {
++      fs.writeFileSync(file, snapshot, 'utf8');
++      return Promise.resolve();
++    }
++    const work = chain.then(async () => {
+       const tmp = file + '.tmp';
+       await fsp.writeFile(tmp, snapshot, 'utf8');
+       await fsp.rename(tmp, file);
+-    }).catch((e) => { console.error(`deploy: failed to save ${path.basename(file)}: ${e.message}`); });
+-    return chain;
++    });
++    chain = work.catch((e) => { console.error(`deploy: failed to save ${path.basename(file)}: ${e.message}`); });
++    return work;
+   };
+   const setSync = (next) => {
+     fs.writeFileSync(file + '.tmp', JSON.stringify(next, null, 2), 'utf8');
+@@ -31,7 +38,8 @@ function createStore(file, initial) {
+   return { get: () => data, set: (d) => { data = d; return save(); }, setSync, save, file };
+ }
+ 
+-function createStores(DATA_DIR, { projects = createProjectView(), log = () => {} } = {}) {
++function createStores(DATA_DIR, { projects = createProjectView(), log = () => {}, storage } = {}) {
++  const createStore = (file, initial) => module.exports.createStore(file, initial, storage);
+   const repos = createStore(path.join(DATA_DIR, 'deploy-repos.json'), { repos: [] });
+   const targets = createStore(path.join(DATA_DIR, 'deploy-targets.json'), { targets: [] });
+   const runs = createStore(path.join(DATA_DIR, 'deploy-runs.json'), { runs: [] });
+@@ -40,6 +48,7 @@ function createStores(DATA_DIR, { projects = createProjectView(), log = () => {}
+   const connectors = createStore(path.join(DATA_DIR, 'connectors.json'), { connectors: [] });
+   const pendingProjects = new Map();
+   const stores = {
++    storage,
+     repos, targets, runs, servers, templates, connectors, projects, pendingProjects,
+     workDir: path.join(DATA_DIR, 'deploy-work'),
+     runsDir: path.join(DATA_DIR, 'deploy-runs'),
+diff --git a/backend/deploy/vault.js b/backend/deploy/vault.js
+index bdb4a04..b5403aa 100644
+--- a/backend/deploy/vault.js
++++ b/backend/deploy/vault.js
+@@ -23,7 +23,8 @@ function parseKey(s) {
+   throw new VaultError('DEPLOY_MASTER_KEY must be 32 bytes as 64 hex chars or base64', 500);
+ }
+ 
+-function createVault(DATA_DIR, env = process.env) {
++function createVault(DATA_DIR, env = process.env, storage) {
++  const fs = storage?.fs || require('fs');
+   const file = path.join(DATA_DIR, 'deploy-secrets.enc');
+   const keyFile = path.join(DATA_DIR, 'deploy-master.key');
+   let key, keySource;
+diff --git a/backend/deploy/projects.js b/backend/deploy/projects.js
+index ffac8c2..166acf4 100644
+--- a/backend/deploy/projects.js
++++ b/backend/deploy/projects.js
+@@ -18,6 +18,7 @@ function requireProject(stores, id) {
+  * Back up each changed file once; never rewrite an unreadable project store.
+  */
+ function migrateDeploymentProjects(stores, log = () => {}) {
++  const fs = stores.storage?.fs || require('fs');
+   const projects = stores.projects;
+   const fallback = projects.get('general') || projects.list()[0];
+   if (projects.readOnly || !fallback) return;
+diff --git a/backend/deploy/engine.js b/backend/deploy/engine.js
+index 73f0f77..daa3087 100644
+--- a/backend/deploy/engine.js
++++ b/backend/deploy/engine.js
+@@ -80,6 +80,8 @@ class Run extends EventEmitter {
+ }
+ 
+ function createEngine(ctx, deps) {
++  const fs = ctx.storage?.fs || require('fs');
++  const fsp = ctx.storage?.promises || require('fs/promises');
+   const { stores, vault, redact } = deps;
+   const runs = new Map();          // id → Run (live + recently finished)
+   const targetLocks = new Map();   // targetId → runId
+@@ -102,7 +104,9 @@ function createEngine(ctx, deps) {
+ 
+   function attachRun(run) {
+     const logFile = path.join(stores.runsDir, `${run.id}.log`);
+-    const ws = fs.createWriteStream(logFile, { flags: 'a' });
++    const ws = ctx.storage?.mode === 'mysql'
++      ? { write: (chunk) => fs.appendFileSync(logFile, chunk), end() {} }
++      : fs.createWriteStream(logFile, { flags: 'a' });
+     let batch = [], timer = null;
+     const flush = () => { if (batch.length) { emit('log', { runId: run.id, lines: batch }); batch = []; } timer = null; };
+     run.on('log', (e) => {
+diff --git a/frontend/deployments-ui.js b/frontend/deployments-ui.js
+index 3cbe3b1..e26d082 100644
+--- a/frontend/deployments-ui.js
++++ b/frontend/deployments-ui.js
+@@ -25,7 +25,7 @@ export function createDeploymentsUI({ host, mount }) {
+     det: null, detRepo: null, plan: null, probe: null, releases: null, setup: null, editingRepo: null, editingTarget: null, loaded: false,
+     servers: [], cloudJob: null, cloudMeta: null, templates: [],
+   };
+-  const dpPrefAi = () => { try { return localStorage.getItem('st-deploy-ai') !== '0'; } catch { return true; } };
++  const dpPrefAi = () => { try { return AppPreferences.getItem('st-deploy-ai') !== '0'; } catch { return true; } };
+   const dpFmtAgo = (iso) => { if (!iso) return ''; const s = Math.round((Date.now() - Date.parse(iso)) / 1000); return s < 60 ? `${s}s ago` : s < 3600 ? `${Math.round(s / 60)}m ago` : s < 86400 ? `${Math.round(s / 3600)}h ago` : `${Math.round(s / 86400)}d ago`; };
+   const dpFmtMs = (ms) => (ms == null ? '' : ms < 1000 ? `${ms} ms` : ms < 60000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`);
+   const dpBadge = (status) => `<span class="badge ${esc(status)}">${esc(String(status).replace('_', ' '))}</span>`;
+@@ -66,7 +66,7 @@ export function createDeploymentsUI({ host, mount }) {
+   /* ---------- open / close / load ---------- */
+   async function openDeploy(targetId) {
+     $('deployDrawer').classList.add('open');
+-    try { if (localStorage.getItem('st-deploy-compact') === '1') { $('deployDrawer').classList.add('compact'); $('btnDpCompact').textContent = '»'; } } catch {}
++    try { if (AppPreferences.getItem('st-deploy-compact') === '1') { $('deployDrawer').classList.add('compact'); $('btnDpCompact').textContent = '»'; } } catch {}
+     await loadDeploy();
+     if (targetId) dpSelect(targetId);
+   }
+@@ -165,7 +165,7 @@ export function createDeploymentsUI({ host, mount }) {
+     const r = e.target.closest('[data-repo]');
+     if (r) { const first = dp.targets.find((x) => x.repoId === r.dataset.repo); if (first) dpSelect(first.id); else { dp.sel = null; dpRenderNav(); dpRenderMain(r.dataset.repo); } }
+   });
+-  host.on($('btnDpCompact'), 'click', () => { const c = $('deployDrawer').classList.toggle('compact'); $('btnDpCompact').textContent = c ? '»' : '«'; try { localStorage.setItem('st-deploy-compact', c ? '1' : '0'); } catch {} });
++  host.on($('btnDpCompact'), 'click', () => { const c = $('deployDrawer').classList.toggle('compact'); $('btnDpCompact').textContent = c ? '»' : '«'; try { AppPreferences.setItem('st-deploy-compact', c ? '1' : '0'); } catch {} });
+ 
+   /* ---------- main pane ---------- */
+   function dpSelect(id) {
+@@ -1747,7 +1747,7 @@ export function createDeploymentsUI({ host, mount }) {
+     if (e.key === 'Escape' && dpOpen() && !document.querySelector('dialog[open]')) { if (!$('dpAddMenu').hidden) $('dpAddMenu').hidden = true; else closeDeploy(); }
+   });
+   hostOn($('btnManageDeploy'), 'click', () => { $('settingsModal').close(); openDeploy(); });
+-  hostOn($('setDpAi'), 'change', () => { try { localStorage.setItem('st-deploy-ai', $('setDpAi').checked ? '1' : '0'); } catch {} });
++  hostOn($('setDpAi'), 'change', () => { try { AppPreferences.setItem('st-deploy-ai', $('setDpAi').checked ? '1' : '0'); } catch {} });
+   async function renderDeploySettings() {
+     try {
+       const st = await http('/deploy/status');

@@ -1807,9 +1807,9 @@ function connectSSE() {
 
 /* ---------- SQL console drawer ---------- */
 const SQL_HIST_KEY = 'mau-sql-history';
-const sqlHistLoad = () => { try { return JSON.parse(localStorage.getItem(SQL_HIST_KEY)) || []; } catch { return []; } };
+const sqlHistLoad = () => { try { return JSON.parse(AppPreferences.getItem(SQL_HIST_KEY)) || []; } catch { return []; } };
 function sqlHistSave(q) {
-  localStorage.setItem(SQL_HIST_KEY, JSON.stringify([q, ...sqlHistLoad().filter((x) => x !== q)].slice(0, 20)));
+  AppPreferences.setItem(SQL_HIST_KEY, JSON.stringify([q, ...sqlHistLoad().filter((x) => x !== q)].slice(0, 20)));
   renderSqlHistory();
 }
 function renderSqlHistory() {
@@ -1891,8 +1891,8 @@ const aiSql = {
   preContent: '', inserted: false, baseAsk: '',
 };
 const AI_HIST_KEY = 'servertools-aisql-hist';
-const aiHistLoad = () => { try { return JSON.parse(localStorage.getItem(AI_HIST_KEY)) || []; } catch { return []; } };
-function aiHistSave(q) { if (!q) return; aiSql.history = [q, ...aiHistLoad().filter((x) => x !== q)].slice(0, 50); try { localStorage.setItem(AI_HIST_KEY, JSON.stringify(aiSql.history)); } catch {} }
+const aiHistLoad = () => { try { return JSON.parse(AppPreferences.getItem(AI_HIST_KEY)) || []; } catch { return []; } };
+function aiHistSave(q) { if (!q) return; aiSql.history = [q, ...aiHistLoad().filter((x) => x !== q)].slice(0, 50); try { AppPreferences.setItem(AI_HIST_KEY, JSON.stringify(aiSql.history)); } catch {} }
 const aiSqlPutSql = (v) => { if (sqlEditor) sqlEditor.setValue(v); else $('sqlInput').value = v; }; // set editor WITHOUT stealing focus
 function aiSetPhase(p) { aiSql.phase = p; $('aiSqlRowPrompt').hidden = p !== 'prompt'; $('aiSqlRowFollow').hidden = p !== 'followup'; }
 function aiBusy(on) { aiSql.busy = on; $('aiSqlSpin').hidden = !(on && aiSql.phase === 'prompt'); $('aiSqlSpin2').hidden = !(on && aiSql.phase === 'followup'); }
@@ -1914,7 +1914,7 @@ function aiHistNav(dir) { // dir<0 older (ArrowUp), dir>0 newer (ArrowDown)
   requestAnimationFrame(() => inp.setSelectionRange(inp.value.length, inp.value.length));
 }
 function aiAskAttach() { // honors the Settings default: always / never / ask each time
-  let pref = 'ask'; try { pref = localStorage.getItem('st-ai-schema') || 'ask'; } catch {}
+  let pref = 'ask'; try { pref = AppPreferences.getItem('st-ai-schema') || 'ask'; } catch {}
   if (pref === 'always') return Promise.resolve(true);
   if (pref === 'never') return Promise.resolve(false);
   return confirmDialog({
@@ -2285,14 +2285,14 @@ function sqlTableRedraw() {
         window.removeEventListener('pointerup', up);
         if (rafId) cancelAnimationFrame(rafId);
         flush();
-        localStorage.setItem(storeKey, consoleEl.style.getPropertyValue(cssVar));
+        AppPreferences.setItem(storeKey, consoleEl.style.getPropertyValue(cssVar));
         sqlTableRedraw(); // pay the table re-layout exactly once, at release
         if (sqlEditor) sqlEditor.refresh(); // editor box changed too
       };
       window.addEventListener('pointermove', move);
       window.addEventListener('pointerup', up);
     });
-    const saved = localStorage.getItem(storeKey);
+    const saved = AppPreferences.getItem(storeKey);
     if (saved) consoleEl.style.setProperty(cssVar, saved);
   };
   dragVar($('sqlResize'), (ev) => {
@@ -2313,7 +2313,7 @@ function sqlTableRedraw() {
 /* ---------- guided tour (intro.js) ---------- */
 function startTour() {
   if (typeof introJs === 'undefined') { toast('Tour library not loaded: run npm install and restart the server', 'error'); return; }
-  localStorage.setItem('mau-tour-seen', '1');
+  AppPreferences.setItem('mau-tour-seen', '1');
   // the tour walks the shell page by page: each step names the route it belongs to and the element it highlights
   const go = (r) => { if (typeof navigate === 'function') navigate(r, { focus: false }); };
   const origin = location.hash || '#/home';

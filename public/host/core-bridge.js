@@ -110,7 +110,7 @@ HostSDK.provide({
        to switch between. */
     setManager: (implementation) => {
       HostSDK.provide({ projectManager: implementation });
-      if (implementation) { try { currentProjectId = localStorage.getItem(PROJECT_KEY) || currentProjectId; } catch {} }
+      if (implementation) { try { currentProjectId = AppPreferences.getItem(PROJECT_KEY) || currentProjectId; } catch {} }
       loadProjects();
     },
   },

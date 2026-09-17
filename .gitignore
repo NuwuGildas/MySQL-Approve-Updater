@@ -9,6 +9,7 @@ rules.json
 agent.json
 agent-chat.json
 settings.json
+browser-state.json*
 
 # deploy module runtime data
 deploy-repos.json*

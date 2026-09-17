@@ -24,7 +24,9 @@ const FINGERPRINTS = [
   ['servers', ['createTerminalSessions', 'ssh_terminal_read', 'sshConsoleConnect', 'xterm.js', 'Hand terminal control']],
   // The vault FILE is host infrastructure (the host reads it to redact secrets);
   // what must not be here is the engine that writes and uses it.
-  ['deployments', ['createAutoShip', 'dpOpenTargetModal', 'ascension-config', 'createEngine', 'deploy-runs.json']],
+  // Data filenames now belong to the host's persistence manifest as well.
+  // Identify engine implementation, not the names of data it must preserve.
+  ['deployments', ['createAutoShip', 'dpOpenTargetModal', 'ascension-config', 'createEngine', 'function persistIndex(run)']],
   ['connectors', ['x-github-api-version', 'path_with_namespace', 'cnShowRepos']],
   ['projects', ['openProjectResources', 'pjOpenModal', 'PR_KINDS']],
   ['history', ['auditDescribe', 'renderAuditChips', 'tl-chat']],

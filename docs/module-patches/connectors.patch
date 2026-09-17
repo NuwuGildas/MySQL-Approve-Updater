@@ -1,0 +1,52 @@
+diff --git a/module.json b/module.json
+index a8acfe4..cfc34b4 100644
+--- a/module.json
++++ b/module.json
+@@ -3,9 +3,9 @@
+   "id": "connectors",
+   "name": "Git Connectors",
+   "description": "Connect GitHub and GitLab accounts once with a personal access token, verify them, and browse the repositories they can see.",
+-  "version": "1.0.0",
++  "version": "1.1.0",
+   "publisher": "Server Tools",
+-  "hostSdk": "^1.0.0",
++  "hostSdk": "^1.1.0",
+   "frontend": "frontend/index.js",
+   "backend": "backend/index.js",
+   "dependencies": {},
+diff --git a/backend/index.js b/backend/index.js
+index 54d94db..15ece3b 100644
+--- a/backend/index.js
++++ b/backend/index.js
+@@ -57,6 +57,8 @@ const friendly = (status, kind) => status === 401 ? `${PROVIDERS[kind].label} re
+   : status === 404 ? 'The API endpoint was not found: check the base URL.' : `HTTP ${status} from ${PROVIDERS[kind].label}.`;
+ 
+ async function activate(host) {
++  const fs = host.storage?.fs || require('node:fs');
++  const fsp = host.storage?.promises || require('node:fs/promises');
+   /* The file users already have keeps its place; a fresh install creates it there too. */
+   const file = path.join(host.appDataDir || host.dataDir, 'connectors.json');
+   let data = { connectors: [] };
+@@ -67,12 +69,13 @@ async function activate(host) {
+   let chain = Promise.resolve();
+   function save() {
+     const snapshot = JSON.stringify(data, null, 2);
+-    chain = chain.then(async () => {
++    const work = chain.then(async () => {
+       const tmp = `${file}.tmp`;
+       await fsp.writeFile(tmp, snapshot, 'utf8');
+       await fsp.rename(tmp, file);
+-    }).catch((error) => host.log('error', `connectors.json could not be saved: ${error.message}`));
+-    return chain;
++    });
++    chain = work.catch((error) => host.log('error', `connectors.json could not be saved: ${error.message}`));
++    return work;
+   }
+ 
+   const list = () => data.connectors;
+@@ -198,4 +201,4 @@ async function activate(host) {
+   };
+ }
+ 
+-module.exports = { activate, PROVIDERS, normBase, slug };
++module.exports = { activate, PROVIDERS, normBase, slug, storageVersion: 1 };

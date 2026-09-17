@@ -28,6 +28,7 @@
   ];
 
   try {
+    await AppPreferences.initialize();
     for (const src of CORE) await load(src);
     await startApplication();
   } catch (error) {

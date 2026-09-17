@@ -475,3 +475,6 @@ redeploying the previous commit). Cloudflare Pages has no rollback command.
 - `connections.json` — saved connection profiles (seeded from `.env` on first run).
 - `audit.log` — JSON-lines audit trail (created on first preview/decision).
 - `backups/` — auto-saved restore scripts, one per preview (created on first preview).
+## MySQL application storage
+
+Set `APP_STORAGE=mysql` after importing and verifying existing data to store application state in a dedicated MySQL database. Files remain the default. See [the port and cutover guide](docs/mysql-port.md) for setup, compatible module updates, recovery, and operational limits. Start with `npm run storage -- plan` for a read-only inventory.
