@@ -3,20 +3,25 @@
   "id": "projects",
   "name": "Projects",
   "description": "Group connections, servers, connectors, repositories and deployments into projects, and give each one its own assistant conversation.",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "publisher": "Server Tools",
-  "hostSdk": "^1.0.0",
+  "hostSdk": "^1.1.0",
   "frontend": "frontend/index.js",
   "backend": "backend/index.js",
   "dependencies": {},
   "capabilities": [
     "ui:pages",
     "ui:commands",
+    "assistant:tools",
+    "assistant:proposals",
     "projects:read",
     "projects:write",
     "connections:read",
     "events:subscribe",
+    "audit:write",
     "storage:module"
   ],
-  "pages": ["projects"]
+  "pages": [
+    "projects"
+  ]
 }

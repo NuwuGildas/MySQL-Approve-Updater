@@ -82,6 +82,36 @@ export async function activate(host) {
 
   host.observe(host.shell.watchPage(drawer, 'projects'));
 
+  /* The card the user judges an assistant's proposed project change on. The generic fallback prints
+     the payload as JSON, which is no way to decide whether to delete a project. */
+  host.assistant.registerProposalCard('project-change', (element, proposal, { wire, esc }) => {
+    const p = proposal;
+    const label = { create: 'Create project', rename: 'Rename project', delete: 'Delete project', attach: 'Move into project', detach: 'Return to every project' }[p.change] || 'Project change';
+    const destructive = p.change === 'delete';
+    const detail = {
+      create: () => `<b>${esc(p.name)}</b>${p.description ? ' · ' + esc(p.description) : ''}`,
+      rename: () => `<b>${esc(p.projectName)}</b> → <b>${esc(p.name)}</b>`,
+      delete: () => `<b>${esc(p.projectName)}</b>`,
+      attach: () => `${esc(p.kind)} <code>${esc(p.resourceId)}</code> → <b>${esc(p.projectName)}</b>`,
+      detach: () => `${esc(p.kind)} <code>${esc(p.resourceId)}</code> ← <b>${esc(p.projectName)}</b>`,
+    }[p.change];
+    const holds = (p.holds || []).map((h) => `${h.count} ${esc(h.kind)}`).join(', ');
+    const consequence = p.change === 'delete'
+      ? `The ${holds ? holds + ' it groups are' : 'resources it groups are'} not deleted: they go back to being visible to every project.${p.holds?.length ? '' : ' It groups nothing.'}`
+      : p.change === 'attach' ? `It stops being visible to other projects.${p.alsoIn?.length ? ` Also in: ${p.alsoIn.map(esc).join(', ')}.` : ''}`
+      : p.change === 'detach' ? 'It becomes visible to every project again.'
+      : '';
+    element.innerHTML = `
+      <div class="ap-head">${esc(label)} ${destructive ? '<span class="badge failed">destructive</span>' : ''}</div>
+      <div class="ap-meta">${detail ? detail() : ''}${p.reason ? ' · ' + esc(p.reason) : ''}</div>
+      ${consequence ? `<div class="hint">${consequence}</div>` : ''}
+      <div class="actions">
+        <button class="approve" data-dec="approve">${destructive ? 'Delete it' : 'Approve'}</button>
+        <button class="reject" data-dec="reject">Reject</button>
+      </div>`;
+    wire(() => page?.load?.());
+  });
+
   host.provide({
     open: (id) => (id ? resources.open(id) : host.navigate('#/projects')),
     list: () => page.state.list.slice(),

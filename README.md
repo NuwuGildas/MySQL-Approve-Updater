@@ -10,18 +10,21 @@ publisher signature and activates it in place.
 | | |
 |---|---|
 | Module id | `projects` |
-| Version | 1.0.0 |
-| Host SDK | `^1.0.0` |
+| Version | 1.2.0 |
+| Host SDK | `^1.1.0` |
 | Branch | `modules/projects` |
 
 ## What it may do
 
 - `ui:pages`
 - `ui:commands`
+- `assistant:tools`
+- `assistant:proposals`
 - `projects:read`
 - `projects:write`
 - `connections:read`
 - `events:subscribe`
+- `audit:write`
 - `storage:module`
 
 Capabilities are declared here and shown to the user before installing. The host
