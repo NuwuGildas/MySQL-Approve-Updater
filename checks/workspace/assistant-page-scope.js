@@ -18,7 +18,7 @@ const { launch, openApp, recorder, shot, until, sleep } = require('./browser');
 const PORT = Number(process.env.PORT || 3124);
 
 const toolsIn = (prompt) => {
-  const block = /Available tools:\n([\s\S]*?)\nAfter a tool result/.exec(prompt || '');
+  const block = /Tools you can call right now:\n([\s\S]*?)\nAfter a tool result/.exec(prompt || '');
   return block ? block[1].split('\n').filter((l) => l.startsWith('- ')).map((l) => l.slice(2).split(':')[0].trim()) : [];
 };
 

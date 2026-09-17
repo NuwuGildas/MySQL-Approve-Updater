@@ -20,7 +20,7 @@ const PORT = Number(process.env.PORT || 3120);
 
 /** The tool names listed in a system prompt. */
 const toolsIn = (prompt) => {
-  const block = /Available tools:\n([\s\S]*?)\nAfter a tool result/.exec(prompt || '');
+  const block = /Tools you can call right now:\n([\s\S]*?)\nAfter a tool result/.exec(prompt || '');
   return block ? block[1].split('\n').filter((l) => l.startsWith('- ')).map((l) => l.slice(2).split(':')[0].trim()) : [];
 };
 
@@ -44,12 +44,32 @@ async function main() {
     await page.evaluate(installPageHelpers);
 
     /* ---- the workspace conversation ---- */
-    await page.evaluate(() => { location.hash = '#/home'; });
-    await sleep(600);
+    /* Navigate by CLICKING, and wait until the app says it is there. Setting the hash and sleeping
+       races the startup route the app replays once the modules have registered, and the turn is
+       then scoped to whatever page won - which shows up here as the workspace tools all missing. */
+    await until(page, () => !!document.querySelector('[data-nav="home"]'), null, 25000);
+    await page.evaluate(() => document.querySelector('[data-nav="home"]').click());
+    if (!await until(page, () => location.hash === '#/' || location.hash === '#/home', null, 15000)) {
+      throw new Error('the workspace page never came up: ' + await page.evaluate(() => location.hash));
+    }
+    await sleep(400);
     await page.evaluate(() => document.getElementById('btnAiAgent').click());
     await until(page, () => !document.getElementById('agentChatWrap')?.hidden, null, 20000);
 
-    const workspace = toolsIn(await ask(page, s, 'what rules do I have?'));
+    const workspacePrompt = await ask(page, s, 'what rules do I have?');
+    const workspace = toolsIn(workspacePrompt);
+
+    /* These tools are not registered with the provider's CLI - they are listed here and called back
+       by replying with JSON - and a model running inside a harness that HAS a tool registry goes
+       looking for them there, finds nothing, and tells the user they are not callable. The prompt
+       has to close that door itself. */
+    r.ok('calling', 'the prompt says these are not the harness tools and not to go looking',
+      /not registered with it/.test(workspacePrompt) && /will not appear in any tool registry/.test(workspacePrompt));
+    r.ok('calling', 'and spells out the only way to call one',
+      workspacePrompt.includes('{"tool":"<name>","input":{...}}') && /reply with ONLY this one JSON object/.test(workspacePrompt));
+    r.ok('calling', 'and forbids telling the user a listed tool is unavailable',
+      /never tell the user that a tool listed below is unavailable/.test(workspacePrompt));
+
     console.log(`  workspace tools (${workspace.length}): ${workspace.join(', ')}`);
     r.ok('workspace', 'the assistant is given any tools at all', workspace.length > 0, `${workspace.length} tool(s)`);
     /* The one the user asked for: it exists in server.js and has since the beginning, but the tool

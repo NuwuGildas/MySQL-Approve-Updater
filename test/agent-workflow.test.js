@@ -17,7 +17,7 @@ const path = require('path');
 const http = require('http');
 const { WebSocketServer, WebSocket } = require('ws');
 const { createSessionConversations } = require('../lib/shared/session-conversations');
-const { createAgentWorkflow, agentEventForViewer, auditEntryForViewer, redactAuditEntry } = require('../lib/agent-workflow');
+const { createAgentWorkflow, agentEventForViewer, auditEntryForViewer, redactAuditEntry, deniesAvailableTool } = require('../lib/agent-workflow');
 
 const httpError = (status, message) => Object.assign(new Error(message), { status });
 
@@ -153,8 +153,13 @@ function createSessionModule({ host, terminals, agent }) {
 function fakeModel(script) {
   let i = 0;
   const prompts = [];
+  /* What the real model object reports: the tools THIS conversation was handed. The turn needs it
+     to tell a refusal about a tool it has from one about a tool it was never given. */
+  let names = ['ssh_status', 'ssh_exec', 'ssh_terminal_read'];
   return {
     prompts,
+    setToolNames: (next) => { names = next; },
+    toolNames: () => names,
     get used() { return i; },
     push: (...more) => script.push(...more),
     connected: () => true,
@@ -829,4 +834,82 @@ test('a rule proposal makes the "you described it but did not propose it" correc
   assert.equal(turn.proposals.length, 1);
   assert.doesNotMatch(turn.reply, /Nothing was actually proposed/, 'it WAS proposed: do not tell the user otherwise');
   assert.equal(ctx.model.used, 2, 'and the model is not asked to do it again');
+});
+
+/* ---------- a reply that refuses a tool it was handed ---------- */
+
+/* This application does not register its tools with the provider's CLI. It lists them in the system
+   prompt and reads back a {"tool":...} object; the CLI is run with every one of ITS own tools
+   denied. A model running inside a harness that has its own tool registry goes looking for
+   ssh_status there, does not find it - it was never going to be there - and tells the user the
+   tools "are only described in prose" and "aren't callable". They are callable. */
+
+test('a refusal is only wrong when it names a tool the conversation actually has', () => {
+  const held = ['ssh_status', 'ssh_exec'];
+  const real = `No — I checked, and none of those SSH tools are actually callable in this environment.
+My session prompt describes ssh_status, ssh_exec, ssh_terminal_read, but those are only described in
+prose — they aren't registered as tools I can invoke. I searched the deferred-tool registry:
+select:ssh_status → "No matching deferred tools found".`;
+  assert.equal(deniesAvailableTool(real, held), 'ssh_status', 'the reported wording is caught');
+
+  for (const text of [
+    'ssh_exec is not registered as a tool I can invoke.',
+    "ssh_exec isn't callable from here.",
+    'I do not have access to ssh_exec in this session.',
+    'ssh_exec is not in my tool registry.',
+  ]) assert.equal(deniesAvailableTool(text, held), 'ssh_exec', text);
+
+  /* And the other half, which matters more: these must NOT fire. Page scoping means refusing a tool
+     it was not given is the CORRECT answer, and saying so must not be second-guessed. */
+  assert.equal(deniesAvailableTool('deploy_ship is not available to me here; it lives on the Deployments page.', held), null,
+    'a refusal about a tool it was never given is right');
+  assert.equal(deniesAvailableTool('I have no tool for that on this page.', held), null, 'a refusal naming no tool is right');
+  assert.equal(deniesAvailableTool('ssh_exec returned exit 1, so nothing is registered in the service list.', held), null,
+    'talking about a tool is not refusing it');
+  assert.equal(deniesAvailableTool('', held), null);
+  assert.equal(deniesAvailableTool('ssh_exec is not callable', []), null, 'with no tools at all there is nothing to be wrong about');
+});
+
+test('being told a tool it holds is uncallable, the turn corrects it instead of passing it on', async (t) => {
+  const ctx = setup(t);
+  const attached = await ctx.api.attach('p1');
+  const sessionId = attached.sessionId;
+  await ctx.terminals.setControl(sessionId, 'assistant');
+
+  ctx.model.push("I checked and ssh_status isn't registered as a tool I can invoke — it's only described in prose.");
+  ctx.model.push(JSON.stringify({ tool: 'ssh_status', input: {} }));
+  ctx.model.push('The session is attached and the terminal is open.');
+
+  const turn = await ctx.workflow.runTurn(sessionId, { message: 'are you attached?' });
+  assert.equal(turn.reply, 'The session is attached and the terminal is open.');
+  assert.doesNotMatch(turn.reply, /not registered|only described in prose/i, 'the user never sees the false refusal');
+  assert.equal(turn.actions.length, 1, 'and the correction did not cost one of the tool calls');
+
+  const told = ctx.model.prompts.at(-2);
+  assert.match(told, /ssh_status IS available to you right now/);
+  assert.match(told, /\{"tool":"ssh_status","input":\{\.\.\.\}\}/, 'it is told how to call one, not just that it can');
+  assert.ok(ctx.logs.some((l) => /said ssh_status was not callable/.test(l.msg)), 'and it is recorded');
+});
+
+test('the correction is offered once; a model that insists is not argued with forever', async (t) => {
+  const ctx = setup(t);
+  const attached = await ctx.api.attach('p1');
+  const denial = "ssh_status isn't callable — it's only described in prose.";
+  for (let i = 0; i < MAX_STEPS + 2; i++) ctx.model.push(denial);
+
+  const turn = await ctx.workflow.runTurn(attached.sessionId, { message: 'are you attached?' });
+  assert.equal(turn.reply, denial, 'the second refusal is taken at face value rather than looped on');
+  assert.equal(ctx.model.used, 2, 'one retry, not a fight');
+});
+
+test('a correct refusal about a tool it was never given is left alone', async (t) => {
+  const ctx = setup(t);
+  const attached = await ctx.api.attach('p1');
+  ctx.model.setToolNames(['ssh_status']);
+  const right = 'deploy_ship is not available to me here — it belongs to the Deployments page.';
+  ctx.model.push(right);
+
+  const turn = await ctx.workflow.runTurn(attached.sessionId, { message: 'ship it' });
+  assert.equal(turn.reply, right, 'page scoping means this answer is correct and must reach the user');
+  assert.equal(ctx.model.used, 1, 'and it costs no extra pass');
 });
